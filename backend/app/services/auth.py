@@ -1,0 +1,120 @@
+import hashlib
+from datetime import datetime, timedelta, timezone
+
+from fastapi import Depends, HTTPException, Request, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from jose import JWTError, jwt
+from passlib.context import CryptContext
+
+from app.config import settings
+from app.models import Admin, APIKey
+
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+bearer_scheme = HTTPBearer()
+
+
+def verify_password(plain: str, hashed: str) -> bool:
+    return pwd_context.verify(plain, hashed)
+
+
+def hash_password(plain: str) -> str:
+    return pwd_context.hash(plain)
+
+
+def create_access_token(data: dict) -> str:
+    to_encode = data.copy()
+    expire = datetime.now(timezone.utc) + timedelta(minutes=settings.JWT_EXPIRE_MINUTES)
+    to_encode["exp"] = expire
+    return jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
+
+
+async def get_current_admin(
+    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+) -> Admin:
+    try:
+        payload = jwt.decode(
+            credentials.credentials,
+            settings.SECRET_KEY,
+            algorithms=[settings.JWT_ALGORITHM],
+        )
+        raw_id = payload.get("sub")
+        if raw_id is None:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+        admin_id = int(raw_id)
+    except JWTError:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+    admin = await Admin.get_or_none(id=admin_id, is_active=True)
+    if admin is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Admin not found")
+    return admin
+
+
+def hash_api_key(raw_key: str) -> str:
+    return hashlib.sha256(raw_key.encode()).hexdigest()
+
+
+async def verify_api_key(
+    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+) -> APIKey:
+    raw_key = credentials.credentials
+    key_hash = hash_api_key(raw_key)
+    api_key = await APIKey.get_or_none(key_hash=key_hash)
+
+    if api_key is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"error": {"message": "Invalid API key", "type": "authentication_error", "code": "invalid_api_key"}},
+        )
+    if not api_key.is_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"error": {"message": "API key is disabled", "type": "authentication_error", "code": "key_disabled"}},
+        )
+    if api_key.expires_at:
+        exp = api_key.expires_at
+        if exp.tzinfo is None:
+            exp = exp.replace(tzinfo=timezone.utc)
+        if exp < datetime.now(timezone.utc):
+            raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"error": {"message": "API key has expired", "type": "authentication_error", "code": "key_expired"}},
+        )
+    return api_key
+
+
+async def verify_api_key_anthropic(request: Request) -> APIKey:
+    raw_key = request.headers.get("x-api-key")
+    if not raw_key:
+        auth_header = request.headers.get("authorization", "")
+        if auth_header.lower().startswith("bearer "):
+            raw_key = auth_header[7:].strip()
+
+    if not raw_key:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"type": "error", "error": {"type": "authentication_error", "message": "Missing API key"}},
+        )
+
+    key_hash = hash_api_key(raw_key)
+    api_key = await APIKey.get_or_none(key_hash=key_hash)
+
+    if api_key is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"type": "error", "error": {"type": "authentication_error", "message": "Invalid API key"}},
+        )
+    if not api_key.is_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"type": "error", "error": {"type": "authentication_error", "message": "API key is disabled"}},
+        )
+    if api_key.expires_at:
+        exp = api_key.expires_at
+        if exp.tzinfo is None:
+            exp = exp.replace(tzinfo=timezone.utc)
+        if exp < datetime.now(timezone.utc):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail={"type": "error", "error": {"type": "authentication_error", "message": "API key has expired"}},
+            )
+    return api_key

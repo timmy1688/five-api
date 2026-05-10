@@ -1,0 +1,58 @@
+# ── Python ──
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+*.whl
+
+# ── Node.js ──
+node_modules/
+frontend/dist/
+
+# ── Environment & Secrets ──
+.env
+.env.*
+!.env.example
+backend/.env
+backend/.env.*
+!backend/.env.example
+
+# ── Local runtime data ──
+data/
+.pids/
+logs/
+*.db
+*.sqlite3
+
+# ── IDE / Editor ──
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# ── Claude Code / Cursor ──
+.claude/
+.cursor/
+
+# ── Docker persistent volumes (if mounted locally) ──
+mysql_data/
+redis_data/
+
+# ── Aerich migrations (auto-generated, keep in repo) ──
+# !backend/migrations/
+
+# ── OS / misc ──
+*.log
+*.pid
+*.sock
+.cache/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
