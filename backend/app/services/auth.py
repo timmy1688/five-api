@@ -8,6 +8,7 @@ from passlib.context import CryptContext
 
 from app.config import settings
 from app.models import Admin, APIKey
+from app.utils.ip_check import check_ip_allowed, get_client_ip
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 bearer_scheme = HTTPBearer()
@@ -49,11 +50,19 @@ async def get_current_admin(
     return admin
 
 
+def require_admin_role(admin: Admin = Depends(get_current_admin)) -> Admin:
+    """要求当前管理员角色为 admin，viewer 角色不允许执行写操作。"""
+    if admin.role != "admin":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin role required")
+    return admin
+
+
 def hash_api_key(raw_key: str) -> str:
     return hashlib.sha256(raw_key.encode()).hexdigest()
 
 
 async def verify_api_key(
+    request: Request,
     credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
 ) -> APIKey:
     raw_key = credentials.credentials
@@ -78,6 +87,11 @@ async def verify_api_key(
             raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail={"error": {"message": "API key has expired", "type": "authentication_error", "code": "key_expired"}},
+        )
+    if not check_ip_allowed(api_key.allowed_ips, get_client_ip(request)):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"error": {"message": "IP address not allowed", "type": "authentication_error", "code": "ip_not_allowed"}},
         )
     return api_key
 
@@ -117,4 +131,9 @@ async def verify_api_key_anthropic(request: Request) -> APIKey:
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail={"type": "error", "error": {"type": "authentication_error", "message": "API key has expired"}},
             )
+    if not check_ip_allowed(api_key.allowed_ips, get_client_ip(request)):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"type": "error", "error": {"type": "authentication_error", "message": "IP address not allowed"}},
+        )
     return api_key

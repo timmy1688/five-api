@@ -8,7 +8,8 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from app.models import APIKey
 from app.providers.anthropic_provider import AnthropicProvider
-from app.providers.registry import resolve_channel
+from app.providers.base import BaseProvider
+from app.providers.registry import resolve_candidates
 from app.schemas.anthropic import AnthropicMessagesRequest
 from app.services.anthropic_compat import (
     anthropic_to_openai_request,
@@ -16,27 +17,16 @@ from app.services.anthropic_compat import (
     openai_to_anthropic_response,
 )
 from app.services.auth import verify_api_key_anthropic
+from app.services.channel_health import record_failure, record_success
 from app.services.concurrency import ConcurrencyExceeded, concurrency_limiter
+from app.services.failover import is_retryable_error
 from app.services.logging_service import save_request_log
+from app.services.pre_checks import anthropic_error, run_pre_checks
 from app.services.pricing import calculate_cost
-from app.services.proxy import stream_proxy
-from app.services.quota import check_quota, deduct_quota
+from app.services.quota import deduct_quota
+from app.utils.ip_check import get_client_ip
 
 router = APIRouter(tags=["anthropic-proxy"])
-
-
-def _get_client_ip(request: Request) -> str:
-    forwarded = request.headers.get("X-Forwarded-For")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-    return request.client.host if request.client else ""
-
-
-def _anthropic_error(status_code: int, error_type: str, message: str):
-    raise HTTPException(
-        status_code=status_code,
-        detail={"type": "error", "error": {"type": error_type, "message": message}},
-    )
 
 
 def _extract_anthropic_usage(resp: dict) -> tuple[int, int, int]:
@@ -89,193 +79,195 @@ async def messages(
     body: AnthropicMessagesRequest,
     api_key: APIKey = Depends(verify_api_key_anthropic),
 ):
-    if not await check_quota(api_key):
-        _anthropic_error(429, "rate_limit_error", "Spending quota exceeded")
+    await run_pre_checks(api_key, body.model, anthropic_error)
 
-    if api_key.allowed_models and body.model not in api_key.allowed_models:
-        _anthropic_error(403, "invalid_request_error", f"Model {body.model} not allowed for this key")
-
-    channel, provider = await resolve_channel(body.model)
+    candidates = await resolve_candidates(body.model, api_key.channel_group)
     request_id = getattr(request.state, "request_id", "")
-    ip = _get_client_ip(request)
+    ip = get_client_ip(request)
     start_time = time.monotonic()
 
     try:
         await concurrency_limiter.acquire(api_key.id, api_key.concurrent_limit)
     except ConcurrencyExceeded:
-        await provider.close()
-        _anthropic_error(429, "rate_limit_error", "Too many concurrent requests")
+        anthropic_error(429, "rate_limit_error", "concurrent_limit", "Too many concurrent requests")
 
-    if channel.provider == "anthropic" and isinstance(provider, AnthropicProvider):
-        raw_body = json.loads(await request.body())
-        extra_headers = {
-            k: v for k, v in request.headers.items()
-            if k.startswith("anthropic-")
-        }
-        return await _handle_anthropic_passthrough(
-            provider, raw_body, extra_headers, body, channel, api_key,
-            request_id, start_time, ip,
-        )
-
-    # ── Fallback: convert Anthropic → OpenAI and route through normal pipeline ──
-    openai_body = anthropic_to_openai_request(body.model_dump())
-
-    if body.stream:
-        openai_sse = stream_proxy(
-            provider, openai_body, "/v1/chat/completions",
-            channel, api_key, request_id, start_time, ip,
-        )
-        anthropic_sse = openai_stream_to_anthropic_stream(openai_sse, body.model)
-        return StreamingResponse(
-            anthropic_sse,
-            media_type="text/event-stream",
-            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-        )
-
-    try:
-        result = await provider.send_request(openai_body, "/v1/chat/completions")
-        latency_ms = int((time.monotonic() - start_time) * 1000)
-        usage = result.get("usage", {})
-        prompt_tokens = usage.get("prompt_tokens", 0)
-        completion_tokens = usage.get("completion_tokens", 0)
-        cached_tokens = (usage.get("prompt_tokens_details") or {}).get("cached_tokens", 0)
-        model_actual = provider.apply_model_mapping(body.model)
-
-        cost = await calculate_cost(model_actual, prompt_tokens, completion_tokens, channel, cached_tokens=cached_tokens)
-        if cost > 0:
-            await deduct_quota(api_key.id, cost)
-
-        await save_request_log(
-            request_id=request_id,
-            api_key_id=api_key.id, api_key_name=api_key.name,
-            channel_id=channel.id, channel_name=channel.name,
-            model_requested=body.model, model_actual=model_actual,
-            provider=channel.provider, endpoint="/v1/messages",
-            prompt_tokens=prompt_tokens, completion_tokens=completion_tokens,
-            cached_tokens=cached_tokens,
-            cost=cost, is_stream=False, status_code=200,
-            latency_ms=latency_ms, ip_address=ip,
-        )
-        return openai_to_anthropic_response(result, body.model)
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        latency_ms = int((time.monotonic() - start_time) * 1000)
-        await save_request_log(
-            request_id=request_id,
-            api_key_id=api_key.id, api_key_name=api_key.name,
-            channel_id=channel.id, channel_name=channel.name,
-            model_requested=body.model,
-            model_actual=provider.apply_model_mapping(body.model),
-            provider=channel.provider, endpoint="/v1/messages",
-            prompt_tokens=0, completion_tokens=0, cost=Decimal(0),
-            is_stream=False, status_code=500, latency_ms=latency_ms,
-            error_message=str(e), ip_address=ip,
-        )
-        _anthropic_error(502, "api_error", f"Upstream error: {e}")
-    finally:
-        await concurrency_limiter.release(api_key.id)
-        await provider.close()
-
-
-# ── Anthropic native pass-through handlers ──────────────────────────────────
-
-
-async def _handle_anthropic_passthrough(
-    provider: AnthropicProvider,
-    raw_body: dict,
-    extra_headers: dict[str, str],
-    body: AnthropicMessagesRequest,
-    channel,
-    api_key: APIKey,
-    request_id: str,
-    start_time: float,
-    ip: str,
-):
-    """Route Anthropic requests directly to an Anthropic-compatible upstream."""
-    model_actual = provider.apply_model_mapping(body.model)
+    raw_body = json.loads(await request.body())
+    extra_headers = {
+        k: v for k, v in request.headers.items()
+        if k.startswith("anthropic-")
+    }
 
     if body.stream:
         return StreamingResponse(
-            _passthrough_stream_generator(
-                provider, raw_body, extra_headers, body, channel,
-                api_key, request_id, start_time, ip, model_actual,
+            _stream_with_failover(
+                candidates, raw_body, extra_headers, body, api_key,
+                request_id, start_time, ip,
             ),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
-    try:
-        result = await provider.send_anthropic_passthrough(raw_body, extra_headers)
-        latency_ms = int((time.monotonic() - start_time) * 1000)
-        prompt_tokens, completion_tokens, cached_tokens = _extract_anthropic_usage(result)
-
-        cost = await calculate_cost(
-            model_actual, prompt_tokens, completion_tokens, channel,
-            cached_tokens=cached_tokens,
-        )
-        if cost > 0:
-            await deduct_quota(api_key.id, cost)
-
-        await save_request_log(
-            request_id=request_id,
-            api_key_id=api_key.id, api_key_name=api_key.name,
-            channel_id=channel.id, channel_name=channel.name,
-            model_requested=body.model, model_actual=model_actual,
-            provider=channel.provider, endpoint="/v1/messages",
-            prompt_tokens=prompt_tokens, completion_tokens=completion_tokens,
-            cached_tokens=cached_tokens,
-            cost=cost, is_stream=False, status_code=200,
-            latency_ms=latency_ms, ip_address=ip,
-        )
-        return JSONResponse(content=result)
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        latency_ms = int((time.monotonic() - start_time) * 1000)
-        await save_request_log(
-            request_id=request_id,
-            api_key_id=api_key.id, api_key_name=api_key.name,
-            channel_id=channel.id, channel_name=channel.name,
-            model_requested=body.model, model_actual=model_actual,
-            provider=channel.provider, endpoint="/v1/messages",
-            prompt_tokens=0, completion_tokens=0, cost=Decimal(0),
-            is_stream=False, status_code=500, latency_ms=latency_ms,
-            error_message=str(e), ip_address=ip,
-        )
-        _anthropic_error(502, "api_error", f"Upstream error: {e}")
-    finally:
-        await concurrency_limiter.release(api_key.id)
-        await provider.close()
+    return await _non_stream_with_failover(
+        candidates, raw_body, extra_headers, body, api_key,
+        request_id, start_time, ip,
+    )
 
 
-async def _passthrough_stream_generator(
-    provider: AnthropicProvider,
+# ── Non-stream with failover ─────────────────────────────────────────────────
+
+async def _non_stream_with_failover(
+    candidates: list[tuple],
     raw_body: dict,
     extra_headers: dict[str, str],
     body: AnthropicMessagesRequest,
-    channel,
     api_key: APIKey,
     request_id: str,
     start_time: float,
     ip: str,
-    model_actual: str,
+):
+    try:
+        for i, (channel, provider_cls) in enumerate(candidates):
+            provider = provider_cls(channel)
+            is_passthrough = channel.provider == "anthropic" and isinstance(provider, AnthropicProvider)
+
+            try:
+                if is_passthrough:
+                    result = await provider.send_anthropic_passthrough(raw_body, extra_headers)
+                    prompt_tokens, completion_tokens, cached_tokens = _extract_anthropic_usage(result)
+                    model_actual = provider.apply_model_mapping(body.model)
+                    response = JSONResponse(content=result)
+                else:
+                    openai_body = anthropic_to_openai_request(body.model_dump())
+                    result = await provider.send_request(openai_body, "/v1/chat/completions")
+                    usage = result.get("usage", {})
+                    prompt_tokens = usage.get("prompt_tokens", 0)
+                    completion_tokens = usage.get("completion_tokens", 0)
+                    cached_tokens = (usage.get("prompt_tokens_details") or {}).get("cached_tokens", 0)
+                    model_actual = provider.apply_model_mapping(body.model)
+                    response = openai_to_anthropic_response(result, body.model)
+
+                latency_ms = int((time.monotonic() - start_time) * 1000)
+
+                cost = await calculate_cost(
+                    model_actual, prompt_tokens, completion_tokens, channel,
+                    cached_tokens=cached_tokens,
+                )
+                if cost > 0:
+                    await deduct_quota(api_key.id, cost)
+
+                await save_request_log(
+                    request_id=request_id,
+                    api_key_id=api_key.id, api_key_name=api_key.name,
+                    channel_id=channel.id, channel_name=channel.name,
+                    model_requested=body.model, model_actual=model_actual,
+                    provider=channel.provider, endpoint="/v1/messages",
+                    prompt_tokens=prompt_tokens, completion_tokens=completion_tokens,
+                    cached_tokens=cached_tokens,
+                    cost=cost, is_stream=False, status_code=200,
+                    latency_ms=latency_ms, ip_address=ip,
+                )
+                await record_success(channel.id)
+                return response
+
+            except HTTPException:
+                raise
+            except Exception as e:
+                if is_retryable_error(e) and i < len(candidates) - 1:
+                    await record_failure(channel.id)
+                    continue
+                latency_ms = int((time.monotonic() - start_time) * 1000)
+                await save_request_log(
+                    request_id=request_id,
+                    api_key_id=api_key.id, api_key_name=api_key.name,
+                    channel_id=channel.id, channel_name=channel.name,
+                    model_requested=body.model,
+                    model_actual=provider.apply_model_mapping(body.model),
+                    provider=channel.provider, endpoint="/v1/messages",
+                    prompt_tokens=0, completion_tokens=0, cost=Decimal(0),
+                    is_stream=False, status_code=500, latency_ms=latency_ms,
+                    error_message=str(e), ip_address=ip,
+                )
+                anthropic_error(502, "api_error", "upstream_error", f"Upstream error: {e}")
+            finally:
+                await provider.close()
+    finally:
+        await concurrency_limiter.release(api_key.id)
+
+
+# ── Stream with failover ─────────────────────────────────────────────────────
+
+async def _stream_with_failover(
+    candidates: list[tuple],
+    raw_body: dict,
+    extra_headers: dict[str, str],
+    body: AnthropicMessagesRequest,
+    api_key: APIKey,
+    request_id: str,
+    start_time: float,
+    ip: str,
 ) -> AsyncIterator[str]:
-    """Stream Anthropic SSE pass-through, extract usage for billing in finally."""
+    """Unified stream generator with failover for both passthrough and conversion paths."""
     prompt_tokens = 0
     completion_tokens = 0
     cached_tokens = 0
     status_code = 200
     error_msg = ""
+    channel = None
+    provider: BaseProvider | None = None
+    model_actual = body.model
+    data_yielded = False
 
     try:
-        async for line, pt, ct, cct in _passthrough_stream_with_usage(
-            provider, raw_body, extra_headers,
-        ):
-            prompt_tokens, completion_tokens, cached_tokens = pt, ct, cct
-            yield line
+        last_error: Exception | None = None
+        for i, (ch, provider_cls) in enumerate(candidates):
+            prov = provider_cls(ch)
+            is_passthrough = ch.provider == "anthropic" and isinstance(prov, AnthropicProvider)
+
+            try:
+                if is_passthrough:
+                    async for line, pt, ct, cct in _passthrough_stream_with_usage(
+                        prov, raw_body, extra_headers,
+                    ):
+                        if not data_yielded:
+                            channel = ch
+                            provider = prov
+                            model_actual = prov.apply_model_mapping(body.model)
+                            data_yielded = True
+                        prompt_tokens, completion_tokens, cached_tokens = pt, ct, cct
+                        yield line
+                else:
+                    openai_body = anthropic_to_openai_request(body.model_dump())
+                    openai_sse = _raw_openai_stream(prov, openai_body, "/v1/chat/completions")
+                    async for line in openai_stream_to_anthropic_stream(openai_sse, body.model):
+                        if not data_yielded:
+                            channel = ch
+                            provider = prov
+                            model_actual = prov.apply_model_mapping(body.model)
+                            data_yielded = True
+                        yield line
+
+                if not data_yielded:
+                    channel = ch
+                    provider = prov
+                    model_actual = prov.apply_model_mapping(body.model)
+                last_error = None
+                await record_success(ch.id)
+                break
+
+            except Exception as e:
+                if not data_yielded and is_retryable_error(e) and i < len(candidates) - 1:
+                    await record_failure(ch.id)
+                    await prov.close()
+                    last_error = e
+                    continue
+                channel = ch
+                provider = prov
+                model_actual = prov.apply_model_mapping(body.model)
+                raise
+
+        if last_error is not None:
+            raise last_error
+
     except Exception as e:
         status_code = 500
         error_msg = str(e)
@@ -300,13 +292,24 @@ async def _passthrough_stream_generator(
         await save_request_log(
             request_id=request_id,
             api_key_id=api_key.id, api_key_name=api_key.name,
-            channel_id=channel.id, channel_name=channel.name,
+            channel_id=channel.id if channel else 0,
+            channel_name=channel.name if channel else "",
             model_requested=body.model, model_actual=model_actual,
-            provider=channel.provider, endpoint="/v1/messages",
+            provider=channel.provider if channel else "",
+            endpoint="/v1/messages",
             prompt_tokens=prompt_tokens, completion_tokens=completion_tokens,
             cached_tokens=cached_tokens,
             cost=cost, is_stream=True, status_code=status_code,
             latency_ms=latency_ms, error_message=error_msg,
             ip_address=ip,
         )
-        await provider.close()
+        if provider:
+            await provider.close()
+
+
+async def _raw_openai_stream(
+    provider: BaseProvider, openai_request: dict, endpoint: str,
+) -> AsyncIterator[str]:
+    """Yield raw SSE lines from an OpenAI-format provider stream."""
+    async for line in provider.send_stream(openai_request, endpoint):
+        yield line

@@ -47,6 +47,7 @@ redis_data/
 
 # ── Aerich migrations (auto-generated, keep in repo) ──
 # !backend/migrations/
+backend/migrations/
 
 # ── OS / misc ──
 *.log

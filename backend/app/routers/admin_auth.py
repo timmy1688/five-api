@@ -26,6 +26,7 @@ async def me(admin: Admin = Depends(get_current_admin)):
     return AdminInfo(
         id=admin.id,
         username=admin.username,
+        role=admin.role,
         is_active=admin.is_active,
         created_at=admin.created_at,
     )

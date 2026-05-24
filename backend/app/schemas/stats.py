@@ -36,3 +36,40 @@ class KeyUsage(BaseModel):
     total_tokens: int
     request_count: int
     cost: float
+
+
+class ChannelUsage(BaseModel):
+    channel_id: int | None
+    channel_name: str
+    total_tokens: int
+    request_count: int
+    cost: float
+
+
+class ErrorRatePoint(BaseModel):
+    date: str
+    total: int
+    errors: int
+    rate: float
+
+
+class LatencyStats(BaseModel):
+    p50: int
+    p95: int
+    p99: int
+    trend: list["LatencyTrendPoint"] = []
+
+
+class LatencyTrendPoint(BaseModel):
+    date: str
+    p50: int
+    p95: int
+    p99: int
+
+
+class ThroughputStats(BaseModel):
+    current_qps: float
+    current_rpm: int
+    current_tpm: int
+    peak_qps: float
+    peak_rpm: int

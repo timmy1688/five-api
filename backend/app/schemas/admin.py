@@ -16,6 +16,7 @@ class TokenResponse(BaseModel):
 class AdminInfo(BaseModel):
     id: int
     username: str
+    role: str
     is_active: bool
     created_at: datetime
 
@@ -23,3 +24,16 @@ class AdminInfo(BaseModel):
 class ChangePasswordRequest(BaseModel):
     old_password: str
     new_password: str
+
+
+class AdminCreate(BaseModel):
+    username: str
+    password: str
+    role: str = "viewer"
+
+
+class AdminUpdate(BaseModel):
+    username: str | None = None
+    password: str | None = None
+    role: str | None = None
+    is_active: bool | None = None

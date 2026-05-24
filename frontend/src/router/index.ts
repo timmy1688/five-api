@@ -15,9 +15,11 @@ const router = createRouter({
       children: [
         { path: '', name: 'Dashboard', component: () => import('@/views/Dashboard.vue') },
         { path: 'channels', name: 'Channels', component: () => import('@/views/Channels.vue') },
+        { path: 'models', name: 'Models', component: () => import('@/views/Models.vue') },
         { path: 'keys', name: 'ApiKeys', component: () => import('@/views/ApiKeys.vue') },
         { path: 'model-prices', name: 'ModelPrices', component: () => import('@/views/ModelPrices.vue') },
         { path: 'logs', name: 'Logs', component: () => import('@/views/Logs.vue') },
+        { path: 'admins', name: 'Admins', component: () => import('@/views/Admins.vue') },
       ],
     },
   ],

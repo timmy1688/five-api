@@ -18,6 +18,10 @@
           <el-icon><Connection /></el-icon>
           <span>Channels</span>
         </el-menu-item>
+        <el-menu-item index="/models">
+          <el-icon><Menu /></el-icon>
+          <span>Models</span>
+        </el-menu-item>
         <el-menu-item index="/keys">
           <el-icon><Key /></el-icon>
           <span>API Keys</span>
@@ -30,6 +34,10 @@
           <el-icon><Document /></el-icon>
           <span>Logs</span>
         </el-menu-item>
+        <el-menu-item v-if="auth.isAdmin()" index="/admins">
+          <el-icon><User /></el-icon>
+          <span>Admins</span>
+        </el-menu-item>
       </el-menu>
     </el-aside>
     <el-container>
@@ -40,6 +48,7 @@
             <div class="user-info">
               <div class="user-avatar">{{ (auth.username || 'A')[0].toUpperCase() }}</div>
               <span class="user-name">{{ auth.username }}</span>
+              <el-tag v-if="auth.role" :type="auth.role === 'admin' ? 'danger' : 'info'" size="small" round style="margin-left: 6px">{{ auth.role }}</el-tag>
             </div>
             <template #dropdown>
               <el-dropdown-menu>
@@ -60,7 +69,7 @@
 import { onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
-import { DataBoard, Connection, Key, Document, PriceTag } from '@element-plus/icons-vue'
+import { DataBoard, Connection, Key, Document, PriceTag, User, Menu } from '@element-plus/icons-vue'
 
 const route = useRoute()
 const router = useRouter()

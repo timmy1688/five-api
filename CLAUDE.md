@@ -77,9 +77,9 @@ npx vite --port 5001          # 启动开发服务器
 │   │   ├── config.py                # pydantic-settings 配置 + Tortoise ORM 配置
 │   │   ├── dependencies.py          # Redis 连接管理
 │   │   ├── models/                  # Tortoise ORM 数据模型
-│   │   │   ├── admin.py             #   管理员
-│   │   │   ├── channel.py           #   上游渠道（含 model_pricing）
-│   │   │   ├── api_key.py           #   API Key（SHA-256 哈希，USD 配额）
+│   │   │   ├── admin.py             #   管理员（含 role: admin/viewer）
+│   │   │   ├── channel.py           #   上游渠道（含 model_pricing, group）
+│   │   │   ├── api_key.py           #   API Key（SHA-256 哈希，USD 配额，channel_group）
 │   │   │   ├── model_price.py       #   全局模型定价（含 cached_price）
 │   │   │   └── request_log.py       #   请求日志（含 cost、cached_tokens）
 │   │   ├── schemas/                 # Pydantic 请求/响应模型
@@ -96,26 +96,33 @@ npx vite --port 5001          # 启动开发服务器
 │   │   │   ├── anthropic_provider.py#   Anthropic Claude（完整转换 + 原生直通，含缓存 token 映射）
 │   │   │   ├── gemini_provider.py   #   Google Gemini（透传）
 │   │   │   ├── qwen_provider.py     #   Alibaba Qwen（透传）
-│   │   │   └── registry.py          #   渠道选择 & 模型路由
+│   │   │   ├── azure_provider.py    #   Azure OpenAI（不同 URL 模式 + api-key 头认证）
+│   │   │   └── registry.py          #   渠道选择 & 模型路由（含渠道分组过滤）
 │   │   ├── services/                # 业务逻辑层
-│   │   │   ├── auth.py              #   JWT + API Key 认证
+│   │   │   ├── auth.py              #   JWT + API Key 认证 + require_admin_role
 │   │   │   ├── quota.py             #   USD 配额检查与扣减
 │   │   │   ├── pricing.py           #   费用计算 + 内置主流模型价格表
 │   │   │   ├── concurrency.py       #   Redis Lua 脚本并发限制
-│   │   │   ├── logging_service.py   #   请求日志持久化
+│   │   │   ├── rate_limit.py        #   Redis Lua 脚本 RPM 速率限制
+│   │   │   ├── failover.py          #   渠道故障转移判定（可重试错误识别）
+│   │   │   ├── channel_health.py    #   渠道健康监测 & 自动熔断（Redis）
+│   │   │   ├── logging_service.py   #   请求日志持久化 + 自动清理
+│   │   │   ├── metrics.py           #   Prometheus 指标定义与记录
 │   │   │   ├── anthropic_compat.py  #   Anthropic↔OpenAI 格式转换
-│   │   │   └── proxy.py             #   流式代理编排
+│   │   │   └── proxy.py             #   流式代理编排（含故障转移）
 │   │   ├── middleware/
 │   │   │   └── request_id.py        #   ASGI 中间件，注入 X-Request-ID
 │   │   ├── routers/                 # API 路由
 │   │   │   ├── openai_proxy.py      #   /v1/* OpenAI 兼容代理路由
 │   │   │   ├── anthropic_proxy.py   #   /v1/messages Anthropic 兼容代理路由
 │   │   │   ├── admin_auth.py        #   管理员登录
-│   │   │   ├── admin_channels.py    #   渠道 CRUD
+│   │   │   ├── admin_channels.py    #   渠道 CRUD + 模型拉取 + 健康管理
 │   │   │   ├── admin_keys.py        #   Key CRUD
-│   │   │   ├── admin_logs.py        #   日志查询
+│   │   │   ├── admin_logs.py        #   日志查询 + 清理
 │   │   │   ├── admin_model_prices.py#   模型定价 CRUD + 同步内置价格 + 未定价模型查询
-│   │   │   └── admin_stats.py       #   统计聚合
+│   │   │   ├── admin_stats.py       #   统计聚合（含 by-channel/error-rate/latency）
+│   │   │   ├── admin_users.py       #   管理员 CRUD（需 admin 角色）
+│   │   │   └── metrics.py           #   Prometheus /metrics 端点
 │   │   └── utils/
 │   │       └── key_generator.py     #   sk-xxx 格式 Key 生成
 │   ├── migrations/                  # Aerich 迁移文件
@@ -131,20 +138,22 @@ npx vite --port 5001          # 启动开发服务器
 │   │   ├── api/                     # Axios API 模块
 │   │   │   ├── client.ts            #   Axios 实例 + 拦截器
 │   │   │   ├── auth.ts              #   登录/个人信息
-│   │   │   ├── channels.ts          #   渠道 CRUD
+│   │   │   ├── channels.ts          #   渠道 CRUD + 健康状态 + 模型拉取
 │   │   │   ├── keys.ts              #   Key CRUD
-│   │   │   ├── logs.ts              #   日志查询
+│   │   │   ├── logs.ts              #   日志查询 + 清理
 │   │   │   ├── model_prices.ts      #   模型定价 CRUD + 同步 + 未定价查询
-│   │   │   └── stats.ts             #   统计数据
+│   │   │   ├── stats.ts             #   统计数据（含 by-channel/error-rate/latency）
+│   │   │   └── users.ts             #   管理员 CRUD
 │   │   ├── layouts/AdminLayout.vue  # 管理后台布局（侧边栏+顶栏）
 │   │   ├── styles/global.css        # 全局样式（表格对齐等）
 │   │   └── views/                   # 页面组件
 │   │       ├── Login.vue            #   登录页
-│   │       ├── Dashboard.vue        #   统计仪表盘（Cost + Tokens）
-│   │       ├── Channels.vue         #   渠道管理（含自定义定价 prompt/completion/cached）
-│   │       ├── ApiKeys.vue          #   Key 管理（USD 配额）
+│   │       ├── Dashboard.vue        #   统计仪表盘（Cost + Tokens + 错误率 + 渠道分布 + 延迟）
+│   │       ├── Channels.vue         #   渠道管理（含自定义定价、健康状态、模型拉取、分组）
+│   │       ├── ApiKeys.vue          #   Key 管理（USD 配额、渠道分组）
 │   │       ├── ModelPrices.vue      #   模型定价管理（含缓存价格、同步内置、未定价提示）
-│   │       └── Logs.vue             #   请求日志（Input/Output/Cache 分列显示）
+│   │       ├── Logs.vue             #   请求日志（Input/Output/Cache 分列显示 + 清理）
+│   │       └── Admins.vue           #   管理员管理（仅 admin 角色可见）
 │   ├── package.json
 │   ├── vite.config.ts
 │   ├── tsconfig.json
@@ -208,7 +217,7 @@ check_quota(api_key):
   └─ quota_used >= quota_total → 429 quota_exceeded "Spending quota exceeded"
 ```
 
-> **注意**: 这是前置粗检查，非原子扣减。扣减在请求完成后执行（第 7 步）。并发请求可能都通过检查后各自扣减，导致微小超额（一两次请求的费用），这是可接受的。
+> **注意**: 这是前置粗检查，非原子扣减。扣减在请求完成后执行（第 8 步）。并发请求可能都通过检查后各自扣减，导致微小超额（一两次请求的费用），这是可接受的。
 
 #### 第 4 步：模型权限检查
 
@@ -221,34 +230,54 @@ _check_model_access(api_key, "gpt-4o"):
   └─ "gpt-4o" not in allowed_models → 403 model_not_allowed
 ```
 
-#### 第 5 步：渠道选择 + Provider 实例化
+#### 第 5 步：RPM 速率限制
 
-**文件**: `providers/registry.py` → `resolve_channel()`
+**文件**: `services/rate_limit.py` → Redis Lua 脚本
 
 ```
-resolve_channel("gpt-4o"):
+_check_rate_limits(api_key):
+  │
+  └─ RPM 检查（rpm_limit == -1 跳过）:
+      ├─ Redis Lua INCR five:rpm:{key_id}
+      │   首次 INCR → EXPIRE 60s（滑动窗口）
+      │   current > limit → DECR 回退，返回 0
+      ├─ 返回 1 → 通过
+      └─ 返回 0 → 429 rpm_limit "Requests per minute limit exceeded"
+```
+
+> **设计**: RPM 通过 `INCR` 在检查时直接计数，每个成功通过检查的请求自动 +1。60 秒后 key 自动过期，计数归零。`rpm_limit = -1` 表示不限制。
+
+#### 第 6 步：渠道选择 + Provider 实例化
+
+**文件**: `providers/registry.py` → `resolve_candidates()`
+
+```
+resolve_candidates("gpt-4o"):
   │
   ├─ SELECT * FROM channels WHERE is_enabled=True
   ├─ 过滤: "gpt-4o" in channel.models
   │   └─ 无候选渠道 → 404 model_not_found
   │
-  ├─ 按 priority 降序排列
-  ├─ 取最高优先级组（如所有 priority=10 的渠道）
-  ├─ 按 weight 加权随机选一个
-  │   例: 渠道A(weight=3) 渠道B(weight=1) → A 有 75% 概率被选中
+  ├─ 按 priority 分层（降序）
+  ├─ 各层内按 weight 加权随机排序（Fisher-Yates 加权洗牌）
+  │   例: priority=10 组: 渠道A(w=3) 渠道B(w=1) → A 排在前面概率 75%
+  │       priority=5  组: 渠道C(w=1)
+  │   → 结果: [A, B, C] 或 [B, A, C]
   │
   ├─ 查 PROVIDER_MAP[channel.provider]
   │   "openai"    → OpenAIProvider（透传）
   │   "anthropic" → AnthropicProvider（/v1/messages 直通 或 /v1/chat/completions 格式转换）
   │   "gemini"    → GeminiProvider（透传）
   │   "qwen"      → QwenProvider（透传）
-  │   未知        → 500 unsupported_provider
+  │   未知        → 跳过该渠道
   │
-  └─ 返回 (channel, provider_instance)
-      provider 内部创建 httpx.AsyncClient(base_url=channel.base_url)
+  └─ 返回有序候选列表 [(channel, provider_cls), ...]
+      首个候选为主渠道，后续为故障转移备选
 ```
 
-#### 第 6 步：并发限制
+> **故障转移**: 请求优先发送到列表首个渠道。若上游返回 5xx、超时或网络错误（`is_retryable_error()`），自动尝试下一个候选渠道。流式请求仅在尚未向客户端发送数据时才可故障转移。
+
+#### 第 7 步：并发限制
 
 **文件**: `services/concurrency.py` → Redis Lua 脚本
 
@@ -266,13 +295,13 @@ concurrency_limiter.acquire(api_key.id, concurrent_limit):
 
 > **安全机制**: Redis key 设置 120 秒 TTL。即使代码崩溃未释放，120 秒后 key 自动过期，并发计数归零。
 
-#### 第 7 步：发送请求到上游（分三条路径）
+#### 第 8 步：发送请求到上游（分三条路径，含故障转移）
 
 ##### 路径 A：OpenAI 格式（`/v1/chat/completions`）
 
 **文件**: `routers/openai_proxy.py`，`services/proxy.py`
 
-无论上游 provider 类型是什么，请求体经过 provider 的 `transform_request()` 转为上游格式，响应经过 `transform_response()` 转回 OpenAI 格式。
+无论上游 provider 类型是什么，请求体经过 provider 的 `transform_request()` 转为上游格式，响应经过 `transform_response()` 转回 OpenAI 格式。若上游返回可重试错误，自动尝试下一个候选渠道。
 
 ```
 非流式: provider.send_request() → transform → httpx POST → transform_response → JSON
@@ -281,22 +310,23 @@ concurrency_limiter.acquire(api_key.id, concurrent_limit):
 
 ##### 路径 B：Anthropic 直通（`/v1/messages` + `provider=anthropic`）
 
-**文件**: `routers/anthropic_proxy.py` → `_handle_anthropic_passthrough()`
+**文件**: `routers/anthropic_proxy.py` → `_non_stream_with_failover()` / `_stream_with_failover()`
 
-当请求通过 `/v1/messages` 进入且渠道 provider 为 `anthropic` 时，跳过格式转换，原样透传：
+当请求通过 `/v1/messages` 进入且渠道 provider 为 `anthropic` 时，跳过格式转换，原样透传（支持跨渠道故障转移）：
 
 ```
 request.body() → 获取原始 JSON（保留 tools/tool_use 等全部字段）
   │
   ├─ 仅替换 body["model"]（通过 model_mapping）
-  ├─ 设置上游 headers: x-api-key + anthropic-version + 透传 anthropic-beta
+  ├─ 设置上游 headers: x-api-key + anthropic-version + 透传 anthropic-beta（白名单过滤）
   │
   ├─ 非流式: provider.send_anthropic_passthrough()
   │   ├─ httpx POST → 上游 /v1/messages
   │   ├─ 从响应提取 usage.input_tokens / output_tokens / cache_read_input_tokens
   │   └─ 返回原始 Anthropic JSON（含 tool_use、thinking 等）
   │
-  └─ 流式: StreamingResponse(_passthrough_stream_generator())
+  └─ 流式: StreamingResponse(_stream_with_failover())
+      ├─ 按候选列表顺序尝试，可重试错误时自动切换下一个渠道
       ├─ provider.stream_anthropic_passthrough() → 逐行 yield 原始 Anthropic SSE
       ├─ 从 message_start 提取 input_tokens，从 message_delta 提取 output_tokens
       └─ finally: 计费 + 扣费 + 写日志 + 释放并发 + 关闭连接
@@ -343,7 +373,7 @@ finally:
 
 > **关键设计**: 流式路径所有 cleanup 在 generator 的 `finally` 里，而非路由 handler 的 `finally`。原因是 `StreamingResponse` 异步消费 generator，路由 handler 的 `finally` 在 stream 开始消费前就执行了。
 
-#### 第 8 步：响应返回客户端
+#### 第 9 步：响应返回客户端
 
 ```
 /v1/chat/completions:
@@ -375,9 +405,11 @@ finally:
 当请求通过 `/v1/messages` 进入且渠道 provider 为 `anthropic` 时，使用 **pass-through 直通模式**：
 - 从 `request.body()` 获取原始 JSON（保留所有字段，包括 `tools`、`tool_choice`、`tool_use`/`tool_result` content blocks 等）
 - 仅替换 `model`（通过 `model_mapping`）和认证 header（`x-api-key`）
+- `anthropic-beta` 头部经白名单过滤（仅透传已知的 beta 功能标识）
 - 请求体和响应体原样透传，不做任何格式转换
 - 从 Anthropic 响应中提取 `usage.input_tokens`/`output_tokens`/`cache_read_input_tokens` 用于计费
 - 完整支持 `tool_use`、`thinking`、`streaming` 等所有 Anthropic 原生特性
+- 支持自动故障转移：若上游返回可重试错误，自动切换到下一个候选渠道
 
 适用于：Anthropic 官方 API、DeepSeek Anthropic 端点（`/anthropic`）等所有 Anthropic 兼容上游。
 
@@ -426,11 +458,12 @@ finally:
 | 401 | `key_disabled` | 第2步 | Key 被管理员禁用 | 后台检查 Key 的启用状态 |
 | 401 | `key_expired` | 第2步 | Key 已过期 | 后台检查 expires_at |
 | 429 | `quota_exceeded` | 第3步 | USD 余额用完 | 后台查看 quota_used vs quota_total |
-| 429 | `concurrent_limit` | 第6步 | 同 Key 并发请求超限 | 降低并发或提高 concurrent_limit |
+| 429 | `rpm_limit` | 第5步 | 每分钟请求数超限 | 降低请求频率或提高 rpm_limit |
+| 429 | `concurrent_limit` | 第7步 | 同 Key 并发请求超限 | 降低并发或提高 concurrent_limit |
 | 403 | `model_not_allowed` | 第4步 | Key 的 allowed_models 不含该模型 | 后台编辑 Key 添加模型 |
-| 404 | `model_not_found` | 第5步 | 没有启用的渠道支持该模型 | 后台检查渠道 models 列表和 is_enabled |
-| 500 | `unsupported_provider` | 第5步 | 渠道 provider 字段无效 | 后台检查渠道 provider 拼写 |
-| 502 | `upstream_error` | 第7步 | 上游 API 返回错误或超时 | Logs 页面查看 error_message 字段 |
+| 404 | `model_not_found` | 第6步 | 没有启用的渠道支持该模型 | 后台检查渠道 models 列表和 is_enabled |
+| 500 | `unsupported_provider` | 第6步 | 渠道 provider 字段无效 | 后台检查渠道 provider 拼写 |
+| 502 | `upstream_error` | 第8步 | 上游 API 返回错误或超时（所有候选渠道均失败） | Logs 页面查看 error_message 字段 |
 
 ### 日志追踪方法
 
@@ -438,15 +471,35 @@ finally:
 2. 管理后台 → Logs → 搜索该 request_id
 3. 日志记录字段：请求模型 / 实际模型 / 渠道 / Provider / Input Tokens / Output Tokens / Cached Tokens / 费用 / 延迟 / 状态码 / 错误信息 / IP / 是否流式
 
-### 渠道选择策略（`registry.py`）
+### 渠道选择与故障转移（`registry.py`、`failover.py`）
+
+**渠道选择**（`resolve_candidates()`）:
 
 1. 查询所有 `is_enabled=True` 的渠道
 2. 过滤 `models` JSON 数组中包含请求模型的渠道
-3. 按 `priority` 降序排序
-4. 最高优先级组内按 `weight` 加权随机选择
-5. 通过 `model_mapping` 将客户端模型名映射为实际模型名
+3. 按 `priority` 降序分层
+4. 各层内按 `weight` 加权随机排序（Fisher-Yates 加权洗牌）
+5. 返回有序候选列表 `[(channel, provider_cls), ...]`
+6. 通过 `model_mapping` 将客户端模型名映射为实际模型名
 
 示例: 客户端请求 `gpt-4`，渠道 `model_mapping` 配置 `{"gpt-4": "gpt-4o"}`，实际发送 `gpt-4o` 到上游。
+
+**故障转移**（`is_retryable_error()`）:
+
+请求发送到候选列表首个渠道，若遇到以下错误则自动尝试下一个候选：
+
+| 错误类型 | 说明 |
+|----------|------|
+| `httpx.TimeoutException` | 上游请求超时 |
+| `httpx.NetworkError` | TCP 连接失败、DNS 解析失败等 |
+| `httpx.HTTPStatusError` (5xx) | 上游返回 500/502/503 等服务端错误 |
+| `httpx.RemoteProtocolError` | 上游协议异常（如连接意外断开） |
+
+**转移限制**:
+- 非流式请求: 可在任何候选渠道间自由切换
+- 流式请求: **仅在尚未向客户端发送任何数据时**才可故障转移；一旦开始输出数据，则绑定到当前渠道
+- 4xx 错误（如 401 认证失败、429 上游限流）不触发故障转移
+- 所有候选渠道均失败时返回最后一个渠道的错误（502 upstream_error）
 
 ### 并发限制（`services/concurrency.py`）
 
@@ -454,6 +507,15 @@ finally:
 - **acquire**: `INCR` key，超限则 `DECR` 回退 + 拒绝。首次 `INCR` 设置 TTL=120s 防止泄漏
 - **release**: `DECR` key，负数则重置为 0
 - Key 格式: `five:concurrency:{api_key_id}`
+
+### RPM 速率限制（`services/rate_limit.py`）
+
+基于 Redis Lua 脚本实现每分钟请求数限制：
+
+- **检查 + 计数**（请求前）: `INCR five:rpm:{key_id}`，首次设置 60s TTL，超限则 `DECR` 回退
+- 每个成功通过检查的请求自动计数 +1
+- 60 秒后 key 自动过期，计数归零
+- `rpm_limit = -1` 表示不限制
 
 ### API Key 安全模型
 
@@ -473,6 +535,7 @@ finally:
 | id | int PK | |
 | username | varchar(64) UNIQUE | |
 | hashed_password | varchar(255) | bcrypt |
+| role | varchar(16) | `admin` / `viewer`，默认 `admin` |
 | is_active | bool | 默认 true |
 | created_at / updated_at | datetime | 自动管理 |
 
@@ -488,6 +551,7 @@ finally:
 | models | JSON | 支持的模型列表 `["gpt-4o", "gpt-4o-mini"]` |
 | model_mapping | JSON | 别名映射 `{"gpt-4": "gpt-4o"}` |
 | model_pricing | JSON | 渠道级定价覆盖 `{"gpt-4o": {"prompt": 2.5, "completion": 10.0, "cached": 1.25}}`（$/1M tokens）|
+| group | varchar(64) | 渠道分组标签，空 = 所有 Key 可访问 |
 | priority | int | 高优先。同模型多渠道时，先选高优先级 |
 | weight | int | 同优先级加权随机 |
 | is_enabled | bool | |
@@ -504,7 +568,10 @@ finally:
 | quota_total | decimal(16,6) | -1 = 无限，USD 金额 |
 | quota_used | decimal(16,6) | 已消耗金额（USD） |
 | concurrent_limit | int | 最大并发请求数，默认 5 |
+| rpm_limit | int | 每分钟最大请求数，-1 = 不限制 |
 | allowed_models | JSON | 空列表 = 允许所有模型 |
+| allowed_ips | JSON | IP 白名单，空 = 不限制 |
+| channel_group | varchar(64) | 渠道分组，空 = 可访问所有渠道 |
 | is_enabled | bool | |
 | quota_reset_day | smallint | 每月重置日（1~31），null = 不自动重置 |
 | quota_last_reset_at | datetime | 上次自动重置时间 |
@@ -666,7 +733,7 @@ curl -N http://localhost:8000/v1/messages \
 - 当上游渠道 provider 为 `anthropic` 时，使用 **pass-through 直通模式**：请求体原样透传到上游 Anthropic 兼容端点，仅替换认证信息和模型名。完整支持 `tool_use`、`thinking`、`streaming` 等所有 Anthropic 原生特性。
 - 当上游渠道 provider 为 `openai`/`gemini`/`qwen` 时，在 HTTP 边界做 Anthropic↔OpenAI 格式双向转换（仅支持纯文本对话）。
 
-两种路径均复用全部现有管线（渠道路由、配额、并发、计费、日志），不需要额外配置。
+两种路径均复用全部现有管线（渠道路由、故障转移、配额、RPM、并发、计费、日志），不需要额外配置。
 
 #### Claude Code 直连配置
 
@@ -696,6 +763,10 @@ export ANTHROPIC_API_KEY=sk-your-five-api-key
 | GET/POST | `/api/admin/channels` | 渠道列表(分页) / 创建 |
 | GET/PUT/DELETE | `/api/admin/channels/{id}` | 渠道详情 / 更新 / 删除 |
 | POST | `/api/admin/channels/{id}/test` | 测试渠道连通性 |
+| POST | `/api/admin/channels/{id}/fetch-models` | 从上游拉取可用模型列表 |
+| POST | `/api/admin/channels/fetch-models-preview` | 无需保存渠道，直接传参拉取模型 |
+| GET | `/api/admin/channels/health/status` | 所有渠道健康状态 |
+| POST | `/api/admin/channels/{id}/recover` | 强制恢复被熔断的渠道 |
 | GET/POST | `/api/admin/keys` | Key列表(分页) / 创建(返回一次明文) |
 | GET/PUT/DELETE | `/api/admin/keys/{id}` | Key详情 / 更新 / 删除 |
 | POST | `/api/admin/keys/{id}/reset-quota` | 重置已用配额 |
@@ -706,10 +777,17 @@ export ANTHROPIC_API_KEY=sk-your-five-api-key
 | GET | `/api/admin/model-prices/unpriced` | 查询渠道中未设置价格的模型列表 |
 | GET | `/api/admin/logs` | 日志列表(分页+过滤) |
 | GET | `/api/admin/logs/{request_id}` | 单条日志详情 |
+| POST | `/api/admin/logs/cleanup` | 清理过期日志（可选 days 参数） |
 | GET | `/api/admin/stats/overview` | 总览统计 |
 | GET | `/api/admin/stats/usage?days=7` | 时序用量 |
 | GET | `/api/admin/stats/by-model?days=7` | 按模型统计 |
 | GET | `/api/admin/stats/by-key?days=7` | 按 Key 统计 |
+| GET | `/api/admin/stats/by-channel?days=7` | 按渠道统计 |
+| GET | `/api/admin/stats/error-rate?days=7` | 每日错误率趋势 |
+| GET | `/api/admin/stats/latency?days=7` | 延迟 P50/P95/P99 |
+| GET/POST | `/api/admin/users` | 管理员列表 / 创建（需 admin 角色） |
+| PUT/DELETE | `/api/admin/users/{id}` | 管理员更新 / 删除（需 admin 角色） |
+| GET | `/metrics` | Prometheus 指标端点（无需认证） |
 
 分页参数: `?page=1&size=20`
 日志过滤参数: `?api_key_id=1&model=gpt-4o&status_code=200&start_date=...&end_date=...`
@@ -790,6 +868,7 @@ Docker Compose 额外变量（仅根目录 `.env`）：
 
 Channels → API Keys → Create Key：
 - 设置名称、USD 配额（-1 = 无限，如 10 表示 $10）、最大并发数
+- RPM Limit: 每分钟最大请求数（-1 = 不限制，如 60 表示每分钟 60 次）
 - 创建后弹窗显示完整 Key（`sk-xxx`），**仅此一次**，请立即复制保存
 
 ### 3. 配置模型定价
@@ -885,6 +964,98 @@ for chunk in stream:
 - 认证: 代理路由用 API Key（`verify_api_key`），管理路由用 JWT（`get_current_admin`）
 - 异步操作: 所有数据库和 Redis 操作使用 `await`
 - Provider cleanup: 非流式在路由 `finally` 中释放并发+关闭 provider；流式在 `stream_proxy` 的 `finally` 中处理
+
+---
+
+## 开发规范
+
+### 1. 代码简洁性
+
+- **拒绝冗余代码**：不写无用的变量、多余的 if-else、重复的逻辑。能一行表达的不写三行。
+- **函数职责单一**：每个函数只做一件事，函数体控制在 30 行以内。超过的拆分为子函数。
+- **命名即文档**：变量名、函数名、类名要准确表达意图，避免缩写歧义（`calc_cost` → `calculate_cost`，`ch` 仅在局部循环中使用）。
+- **早返回模式**：用 guard clause 提前返回，减少嵌套层级。
+
+```python
+# ✗ 不要这样
+def check(key):
+    if key is not None:
+        if key.is_enabled:
+            if not key.is_expired():
+                return True
+    return False
+
+# ✓ 应该这样
+def check(key):
+    if key is None:
+        return False
+    if not key.is_enabled:
+        return False
+    if key.is_expired():
+        return False
+    return True
+```
+
+### 2. 架构可复用性
+
+- **跨路由的通用逻辑必须提取到 `services/` 层**：认证检查放 `auth.py`，前置策略检查放 `pre_checks.py`，IP 工具放 `utils/ip_check.py`。路由文件（`routers/`）只负责解析请求 → 调用服务 → 返回响应。
+- **新增策略（限流、黑名单等）只改一处**：所有前置检查统一走 `run_pre_checks(api_key, model, raise_error)`（`services/pre_checks.py`），新增策略只需在此函数中追加，不需要改每个 proxy 路由。
+- **错误格式通过回调解耦**：使用 `openai_error()` / `anthropic_error()` 错误格式化器，业务逻辑不关心最终的响应格式。
+- **共享工具函数放 `utils/`**：如 `get_client_ip()`、`check_ip_allowed()` 等，避免在多个文件中重复定义相同逻辑。
+- **新增字段遵循现有模式**：参考 `allowed_models` 的实现路径（model → schema → router → frontend），保持一致性。
+
+```
+services/           # 业务逻辑层（可复用）
+├── auth.py         #   认证 + IP 白名单检查
+├── pre_checks.py   #   前置策略管线（quota / model / rpm）
+├── quota.py        #   配额检查与扣减
+└── ...
+
+routers/            # 路由层（薄，只做编排）
+├── openai_proxy.py #   await run_pre_checks() → 调用 provider → 返回
+└── anthropic_proxy.py
+
+utils/              # 无状态工具函数
+├── ip_check.py     #   IP 解析与匹配
+└── key_generator.py
+```
+
+### 3. 注释规范
+
+- **每个函数/方法必须写注释**：用简短的中文或英文说明函数的用途、参数含义、返回值。
+- **复杂业务逻辑加行内注释**：解释"为什么"而不是"做了什么"。代码本身说明做了什么，注释说明为什么这样做。
+- **不写废话注释**：`# 设置变量 x = 1` 这种注释没有价值，不要写。
+
+```python
+# ✓ 好的注释：解释为什么
+async def run_pre_checks(api_key: APIKey, model: str, raise_error=openai_error) -> None:
+    """统一前置检查管线：quota → model_access → RPM。
+    
+    所有代理路由共享此函数，新增策略只需在此追加。
+    raise_error 回调决定错误响应格式（OpenAI / Anthropic）。
+    """
+    # 先检查配额，避免无额度的请求消耗下游资源
+    if not await check_quota(api_key):
+        raise_error(429, "rate_limit_error", "quota_exceeded", "Spending quota exceeded")
+
+# ✗ 坏的注释：重复代码逻辑
+# 检查配额是否足够
+if not await check_quota(api_key):
+    # 抛出 429 错误
+    raise_error(429, ...)
+```
+
+### 4. 数据库变更
+
+- **每次 model 变更必须附带迁移文件**：放在 `backend/migrations/` 下，按序号命名（`001_xxx.sql`、`002_xxx.sql`）。
+- **MySQL 8.0 不支持 `ADD COLUMN IF NOT EXISTS`**：使用标准 `ALTER TABLE ... ADD COLUMN` 语法。
+- **迁移文件头部加注释**：说明用途和执行方式。
+
+### 5. 测试要求
+
+- **功能开发完成后必须实际测试**：启动服务，用 `curl` 或前端验证完整链路（创建 → 调用 → 拦截 → 放行）。
+- **覆盖正向和反向场景**：不仅测试"应该通过"的情况，也测试"应该被拒绝"的情况。
+- **流式和非流式都要测**：流式路径和非流式路径的代码分支不同，都需要验证。
 
 ---
 

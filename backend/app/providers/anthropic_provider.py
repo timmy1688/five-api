@@ -15,6 +15,16 @@ class AnthropicProvider(BaseProvider):
 
     # ── Anthropic native pass-through (used by /v1/messages when upstream is anthropic) ──
 
+    SUPPORTED_BETAS = {
+        "messages-2023-12-15",
+        "max-tokens-3-5-sonnet-2024-07-15",
+        "prompt-caching-2024-07-31",
+        "token-counting-2024-11-01",
+        "extended-cache-ttl-2024-12-19",
+        "output-128k-2025-02-19",
+        "interleaved-thinking-2025-05-14",
+    }
+
     def _anthropic_headers(self, extra_headers: dict[str, str] | None = None) -> dict[str, str]:
         headers = {
             "x-api-key": self.channel.api_key,
@@ -22,9 +32,15 @@ class AnthropicProvider(BaseProvider):
             "Content-Type": "application/json",
         }
         if extra_headers:
-            for key in ("anthropic-beta", "anthropic-dangerous-direct-browser-access"):
-                if key in extra_headers:
-                    headers[key] = extra_headers[key]
+            if "anthropic-beta" in extra_headers:
+                betas = [
+                    b.strip() for b in extra_headers["anthropic-beta"].split(",")
+                    if b.strip() in self.SUPPORTED_BETAS
+                ]
+                if betas:
+                    headers["anthropic-beta"] = ", ".join(betas)
+            if "anthropic-dangerous-direct-browser-access" in extra_headers:
+                headers["anthropic-dangerous-direct-browser-access"] = extra_headers["anthropic-dangerous-direct-browser-access"]
         return headers
 
     async def send_anthropic_passthrough(

@@ -21,7 +21,7 @@ echo "==> Starting backend (port 5002)..."
 fuser -k 5002/tcp 2>/dev/null || true
 sleep 0.5
 cd backend
-nohup uvicorn app.main:app --reload --port 5002 > ../logs/backend.log 2>&1 &
+nohup uvicorn app.main:app --reload --host 0.0.0.0 --port 5002 > ../logs/backend.log 2>&1 &
 echo $! > ../.pids/backend.pid
 cd ..
 
@@ -30,7 +30,7 @@ echo "==> Starting frontend (port 5001)..."
 fuser -k 5001/tcp 2>/dev/null || true
 sleep 0.5
 cd frontend
-nohup npx vite --port 5001 --strictPort > ../logs/frontend.log 2>&1 &
+nohup npx vite --port 5001 --host 0.0.0.0 --strictPort > ../logs/frontend.log 2>&1 &
 echo $! > ../.pids/frontend.pid
 cd ..
 

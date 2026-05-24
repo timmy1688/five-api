@@ -5,7 +5,7 @@
         <h3>Channels</h3>
         <p>Manage upstream LLM provider connections</p>
       </div>
-      <el-button type="primary" @click="openCreate">Add Channel</el-button>
+      <el-button v-if="auth.isAdmin()" type="primary" @click="openCreate">Add Channel</el-button>
     </div>
 
     <el-card shadow="never">
@@ -17,6 +17,20 @@
             <el-tag size="small" round>{{ row.provider }}</el-tag>
           </template>
         </el-table-column>
+        <el-table-column prop="group" label="Group" width="90" show-overflow-tooltip>
+          <template #default="{ row }">
+            <el-tag v-if="row.group" size="small" type="info" round>{{ row.group }}</el-tag>
+            <span v-else style="color: #c0c4cc; font-size: 12px">-</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="Health" width="72" align="center">
+          <template #default="{ row }">
+            <el-tooltip v-if="healthMap[row.id]" :content="healthMap[row.id].healthy ? 'Healthy' : `Unhealthy (${healthMap[row.id].fail_count} failures)`">
+              <span :style="{ color: healthMap[row.id].healthy ? '#10b981' : '#ef4444', fontSize: '18px', cursor: 'pointer' }">&#9679;</span>
+            </el-tooltip>
+            <span v-else style="color: #c0c4cc; font-size: 18px">&#9679;</span>
+          </template>
+        </el-table-column>
         <el-table-column label="Models" min-width="200">
           <template #default="{ row }">
             <el-tag v-for="m in row.models" :key="m" size="small" style="margin: 2px">{{ m }}</el-tag>
@@ -26,13 +40,14 @@
         <el-table-column prop="weight" label="Weight" width="72" align="center" />
         <el-table-column label="Enabled" width="76" align="center">
           <template #default="{ row }">
-            <el-switch v-model="row.is_enabled" @change="toggleEnabled(row)" />
+            <el-switch v-model="row.is_enabled" :disabled="!auth.isAdmin()" @change="toggleEnabled(row)" />
           </template>
         </el-table-column>
-        <el-table-column label="Actions" width="180" fixed="right">
+        <el-table-column v-if="auth.isAdmin()" label="Actions" width="230" fixed="right">
           <template #default="{ row }">
             <el-button text type="primary" size="small" @click="openEdit(row)">Edit</el-button>
             <el-button text type="success" size="small" @click="testChannel(row)">Test</el-button>
+            <el-button v-if="healthMap[row.id] && !healthMap[row.id].healthy" text type="warning" size="small" @click="recoverChannel(row)">Recover</el-button>
             <el-popconfirm title="Delete this channel?" @confirm="handleDelete(row.id)">
               <template #reference>
                 <el-button text type="danger" size="small">Delete</el-button>
@@ -78,6 +93,10 @@
               <span>Qwen</span>
               <span class="option-hint">阿里通义千问，使用 DashScope 兼容端点</span>
             </el-option>
+            <el-option label="Azure OpenAI" value="azure">
+              <span>Azure OpenAI</span>
+              <span class="option-hint">Azure 部署的 OpenAI，api-key 认证</span>
+            </el-option>
           </el-select>
           <div class="form-hint">决定使用哪种协议与上游 API 通信。第三方 OpenAI 兼容中转选 OpenAI 即可</div>
         </el-form-item>
@@ -95,9 +114,12 @@
         <el-divider content-position="left" style="margin: 20px 0 16px">模型配置</el-divider>
 
         <el-form-item label="Models">
-          <el-select v-model="form.models" multiple filterable allow-create style="width: 100%" placeholder="输入模型名后按 Enter 添加">
-          </el-select>
-          <div class="form-hint">此渠道支持的模型列表。客户端请求这些模型时会路由到此渠道。直接输入模型名按回车添加</div>
+          <div style="display: flex; gap: 8px; width: 100%">
+            <el-select v-model="form.models" multiple filterable allow-create style="flex: 1" placeholder="输入模型名后按 Enter 添加">
+            </el-select>
+            <el-button @click="fetchModels" :loading="fetchingModels" :disabled="!editingId">Fetch</el-button>
+          </div>
+          <div class="form-hint">此渠道支持的模型列表。点击 Fetch 从上游自动拉取，或手动输入模型名按回车添加</div>
         </el-form-item>
 
         <el-form-item label="Model Mapping">
@@ -120,6 +142,11 @@
         </el-form-item>
 
         <el-divider content-position="left" style="margin: 20px 0 16px">路由与计费</el-divider>
+
+        <el-form-item label="Group">
+          <el-input v-model="form.group" placeholder="留空 = 所有 Key 可访问" />
+          <div class="form-hint">渠道分组标签。Key 的 Channel Group 非空时，只能访问匹配或无分组的渠道</div>
+        </el-form-item>
 
         <el-form-item label="Priority">
           <el-input-number v-model="form.priority" :min="0" />
@@ -174,7 +201,10 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { channelsApi } from '@/api/channels'
+import { useAuthStore } from '@/stores/auth'
 import { ElMessage } from 'element-plus'
+
+const auth = useAuthStore()
 
 const channels = ref<any[]>([])
 const loading = ref(false)
@@ -189,12 +219,14 @@ const newPricingModel = ref('')
 const newPricingPrompt = ref(0)
 const newPricingCompletion = ref(0)
 const newPricingCached = ref(0)
-
+const healthMap = ref<Record<number, { healthy: boolean; fail_count: number; disabled_at: number | null }>>({})
+const fetchingModels = ref(false)
 const providerUrlExamples: Record<string, string> = {
   openai: 'https://api.openai.com',
   anthropic: 'https://api.anthropic.com',
   gemini: 'https://generativelanguage.googleapis.com/v1beta/openai',
   qwen: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+  azure: 'https://{resource}.openai.azure.com',
 }
 
 const baseUrlPlaceholder = computed(() => providerUrlExamples[form.value.provider] || 'https://api.example.com')
@@ -203,7 +235,7 @@ const emptyForm = () => ({
   name: '', provider: 'openai', base_url: '', api_key: '',
   models: [] as string[], model_mapping: {} as Record<string, string>,
   model_pricing: {} as Record<string, { prompt: number; completion: number; cached: number }>,
-  priority: 0, weight: 1, timeout: 120,
+  group: '', priority: 0, weight: 1, timeout: 120,
 })
 const form = ref(emptyForm())
 
@@ -213,10 +245,48 @@ async function load() {
     const res = await channelsApi.list(page.value)
     channels.value = res.items
     total.value = res.total
+    loadHealth()
   } catch {
     ElMessage.error('Failed to load channels')
   } finally {
     loading.value = false
+  }
+}
+
+async function loadHealth() {
+  try {
+    healthMap.value = await channelsApi.healthStatus()
+  } catch { /* ignore */ }
+}
+
+async function recoverChannel(row: any) {
+  try {
+    await channelsApi.recover(row.id)
+    ElMessage.success('Channel recovered')
+    await loadHealth()
+  } catch {
+    ElMessage.error('Recover failed')
+  }
+}
+
+async function fetchModels() {
+  if (!editingId.value) return
+  fetchingModels.value = true
+  try {
+    const res = await channelsApi.fetchModels(editingId.value)
+    const existing = new Set(form.value.models)
+    let added = 0
+    for (const m of res.models) {
+      if (!existing.has(m)) {
+        form.value.models.push(m)
+        added++
+      }
+    }
+    ElMessage.success(`Fetched ${res.models.length} models, ${added} new added`)
+  } catch {
+    ElMessage.error('Failed to fetch models')
+  } finally {
+    fetchingModels.value = false
   }
 }
 

@@ -5,7 +5,7 @@
         <h3>Model Pricing</h3>
         <p>Configure per-model token pricing for cost tracking</p>
       </div>
-      <div style="display: flex; gap: 8px">
+      <div v-if="auth.isAdmin()" style="display: flex; gap: 8px">
         <el-button @click="syncDefaults" :loading="syncing">Sync Defaults</el-button>
         <el-button type="primary" @click="openCreate">Add Price</el-button>
       </div>
@@ -27,7 +27,7 @@
               <span v-for="ch in item.channels" :key="ch" class="channel-tag">{{ ch }}</span>
             </span>
           </div>
-          <el-button text type="primary" size="small" @click="quickAdd(item.model)">添加价格</el-button>
+          <el-button v-if="auth.isAdmin()" text type="primary" size="small" @click="quickAdd(item.model)">添加价格</el-button>
         </div>
       </div>
     </el-card>
@@ -36,10 +36,10 @@
       <el-table :data="items" v-loading="loading" stripe>
         <el-table-column prop="id" label="ID" width="60" />
         <el-table-column prop="model" label="Model" min-width="180" show-overflow-tooltip />
-        <el-table-column label="Prompt ($/1M)" width="120" align="right">
+        <el-table-column label="Input ($/1M)" width="120" align="right">
           <template #default="{ row }"><span style="font-weight: 500">{{ row.prompt_price }}</span></template>
         </el-table-column>
-        <el-table-column label="Completion ($/1M)" width="140" align="right">
+        <el-table-column label="Output ($/1M)" width="120" align="right">
           <template #default="{ row }"><span style="font-weight: 500">{{ row.completion_price }}</span></template>
         </el-table-column>
         <el-table-column label="Cached ($/1M)" width="120" align="right">
@@ -51,10 +51,10 @@
         </el-table-column>
         <el-table-column label="Active" width="76" align="center">
           <template #default="{ row }">
-            <el-switch v-model="row.is_active" @change="toggleActive(row)" />
+            <el-switch v-model="row.is_active" :disabled="!auth.isAdmin()" @change="toggleActive(row)" />
           </template>
         </el-table-column>
-        <el-table-column label="Actions" width="140" fixed="right">
+        <el-table-column v-if="auth.isAdmin()" label="Actions" width="140" fixed="right">
           <template #default="{ row }">
             <el-button text type="primary" size="small" @click="openEdit(row)">Edit</el-button>
             <el-popconfirm title="Delete this price?" @confirm="handleDelete(row.id)">
@@ -82,11 +82,11 @@
         <el-form-item label="Model">
           <el-input v-model="form.model" placeholder="gpt-4o" :disabled="!!editingId" />
         </el-form-item>
-        <el-form-item label="Prompt ($/1M tokens)">
+        <el-form-item label="Input ($/1M tokens)">
           <el-input-number v-model="form.prompt_price" :min="0" :precision="4" :step="0.1" style="width: 100%" />
           <div class="form-hint">输入 token 单价（每百万 token 美元价格）</div>
         </el-form-item>
-        <el-form-item label="Completion ($/1M tokens)">
+        <el-form-item label="Output ($/1M tokens)">
           <el-input-number v-model="form.completion_price" :min="0" :precision="4" :step="0.1" style="width: 100%" />
           <div class="form-hint">输出 token 单价</div>
         </el-form-item>
@@ -106,8 +106,11 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { modelPricesApi } from '@/api/model_prices'
+import { useAuthStore } from '@/stores/auth'
 import { ElMessage } from 'element-plus'
 import { WarningFilled } from '@element-plus/icons-vue'
+
+const auth = useAuthStore()
 
 const items = ref<any[]>([])
 const loading = ref(false)

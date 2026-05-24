@@ -17,6 +17,10 @@ class Settings(BaseSettings):
     INIT_ADMIN_USERNAME: str = "admin"
     INIT_ADMIN_PASSWORD: str = "admin123"
 
+    CHANNEL_HEALTH_THRESHOLD: int = 3
+    CHANNEL_HEALTH_CHECK_INTERVAL: int = 60
+    LOG_RETENTION_DAYS: int = 90
+
     @property
     def database_url(self) -> str:
         return (

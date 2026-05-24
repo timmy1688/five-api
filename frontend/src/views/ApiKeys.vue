@@ -5,16 +5,30 @@
         <h3>API Keys</h3>
         <p>Create and manage API keys with usage quotas</p>
       </div>
-      <el-button type="primary" @click="openCreate">Create Key</el-button>
+      <el-button v-if="auth.isAdmin()" type="primary" @click="openCreate">Create Key</el-button>
     </div>
 
     <el-card shadow="never">
       <el-table :data="keys" v-loading="loading" stripe>
         <el-table-column prop="id" label="ID" width="60" />
         <el-table-column prop="name" label="Name" min-width="100" show-overflow-tooltip />
-        <el-table-column prop="key_prefix" label="Key" width="110">
+        <el-table-column label="Key" min-width="300">
           <template #default="{ row }">
-            <code style="font-size: 12px">{{ row.key_prefix }}...</code>
+            <div class="key-cell">
+              <code class="key-text">{{ visibleKeys[row.id] && row.key_raw ? row.key_raw : row.key_prefix + '••••••••••••••••••••' }}</code>
+              <div class="key-actions">
+                <el-tooltip v-if="row.key_raw" :content="visibleKeys[row.id] ? 'Hide' : 'Show'" placement="top">
+                  <el-button size="small" circle @click="visibleKeys[row.id] = !visibleKeys[row.id]">
+                    <el-icon :size="14"><View v-if="!visibleKeys[row.id]" /><Hide v-else /></el-icon>
+                  </el-button>
+                </el-tooltip>
+                <el-tooltip v-if="visibleKeys[row.id] && row.key_raw" content="Copy" placement="top">
+                  <el-button size="small" type="primary" circle @click="copyText(row.key_raw)">
+                    <el-icon :size="14"><CopyDocument /></el-icon>
+                  </el-button>
+                </el-tooltip>
+              </div>
+            </div>
           </template>
         </el-table-column>
         <el-table-column label="Quota (USD)" min-width="220">
@@ -45,13 +59,20 @@
           </template>
         </el-table-column>
         <el-table-column prop="concurrent_limit" label="Concur." width="72" align="center" />
-        <el-table-column label="Enabled" width="76" align="center">
+        <el-table-column label="RPM" width="72" align="center">
           <template #default="{ row }">
-            <el-switch v-model="row.is_enabled" @change="toggleEnabled(row)" />
+            <span v-if="row.rpm_limit === -1" style="color: #c0c4cc">-</span>
+            <span v-else>{{ row.rpm_limit }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="Actions" width="200" fixed="right">
+        <el-table-column label="Enabled" width="76" align="center">
           <template #default="{ row }">
+            <el-switch v-model="row.is_enabled" :disabled="!auth.isAdmin()" @change="toggleEnabled(row)" />
+          </template>
+        </el-table-column>
+        <el-table-column v-if="auth.isAdmin()" label="Actions" width="250" fixed="right">
+          <template #default="{ row }">
+            <el-button text type="info" size="small" @click="showDetail(row)">View</el-button>
             <el-button text type="primary" size="small" @click="openEdit(row)">Edit</el-button>
             <el-button text size="small" @click="resetQuota(row.id)">Reset</el-button>
             <el-popconfirm title="Delete this key?" @confirm="handleDelete(row.id)">
@@ -59,6 +80,11 @@
                 <el-button text type="danger" size="small">Delete</el-button>
               </template>
             </el-popconfirm>
+          </template>
+        </el-table-column>
+        <el-table-column v-else label="Actions" width="80" fixed="right">
+          <template #default="{ row }">
+            <el-button text type="info" size="small" @click="showDetail(row)">View</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -94,9 +120,22 @@
         <el-form-item label="Concurrency">
           <el-input-number v-model="form.concurrent_limit" :min="1" :max="100" />
         </el-form-item>
+        <el-form-item label="RPM Limit">
+          <el-input-number v-model="form.rpm_limit" :min="-1" :step="10" style="width: 100%" />
+          <div style="font-size: 12px; color: #909399">Requests per minute. -1 = unlimited</div>
+        </el-form-item>
         <el-form-item label="Allowed Models">
           <el-select v-model="form.allowed_models" multiple filterable allow-create style="width: 100%" placeholder="Empty = all models">
           </el-select>
+        </el-form-item>
+        <el-form-item label="Allowed IPs">
+          <el-select v-model="form.allowed_ips" multiple filterable allow-create style="width: 100%" placeholder="Empty = all IPs allowed">
+          </el-select>
+          <div style="font-size: 12px; color: #909399">IP addresses or CIDR ranges (e.g. 192.168.1.100, 10.0.0.0/24). Empty = no restriction.</div>
+        </el-form-item>
+        <el-form-item label="Channel Group">
+          <el-input v-model="form.channel_group" placeholder="留空 = 可访问所有渠道" />
+          <div style="font-size: 12px; color: #909399">限制此 Key 只能访问对应分组的渠道。留空表示不限制。</div>
         </el-form-item>
       </el-form>
       <template #footer>
@@ -116,13 +155,98 @@
         </template>
       </el-input>
     </el-dialog>
+
+    <!-- Detail Drawer -->
+    <el-drawer v-model="detailVisible" title="Key Detail" size="520px">
+      <template v-if="detailRow">
+        <el-descriptions :column="1" border>
+          <el-descriptions-item label="ID">{{ detailRow.id }}</el-descriptions-item>
+          <el-descriptions-item label="Name">{{ detailRow.name }}</el-descriptions-item>
+          <el-descriptions-item label="Key Prefix">
+            <code>{{ detailRow.key_prefix }}...</code>
+          </el-descriptions-item>
+          <el-descriptions-item label="Full Key">
+            <template v-if="detailRow.key_raw">
+              <div style="display: flex; align-items: center; gap: 8px">
+                <code style="font-size: 12px; word-break: break-all">{{ keyVisible ? detailRow.key_raw : '••••••••••••••••••••••••' }}</code>
+                <el-button text size="small" @click="keyVisible = !keyVisible">{{ keyVisible ? 'Hide' : 'Show' }}</el-button>
+                <el-button text type="primary" size="small" @click="copyText(detailRow.key_raw)">Copy</el-button>
+              </div>
+            </template>
+            <span v-else style="color: #94a3b8; font-size: 12px">Created before key storage was enabled</span>
+          </el-descriptions-item>
+          <el-descriptions-item label="Enabled">
+            <el-tag :type="detailRow.is_enabled ? 'success' : 'info'" size="small" round>{{ detailRow.is_enabled ? 'Yes' : 'No' }}</el-tag>
+          </el-descriptions-item>
+          <el-descriptions-item label="Expires">
+            {{ detailRow.expires_at ? formatTime(detailRow.expires_at) : 'Never' }}
+          </el-descriptions-item>
+          <el-descriptions-item label="Created">{{ formatTime(detailRow.created_at) }}</el-descriptions-item>
+        </el-descriptions>
+
+        <div class="detail-section-title">Quota</div>
+        <div class="detail-grid">
+          <div class="detail-card">
+            <div class="detail-card-label">Total</div>
+            <div class="detail-card-value">{{ detailRow.quota_total === -1 ? 'Unlimited' : '$' + detailRow.quota_total.toFixed(2) }}</div>
+          </div>
+          <div class="detail-card">
+            <div class="detail-card-label">Used</div>
+            <div class="detail-card-value" style="color: #6366f1">${{ detailRow.quota_used.toFixed(4) }}</div>
+          </div>
+          <div class="detail-card">
+            <div class="detail-card-label">Remaining</div>
+            <div class="detail-card-value" style="color: #10b981">{{ detailRow.quota_remaining === -1 ? 'Unlimited' : '$' + detailRow.quota_remaining.toFixed(4) }}</div>
+          </div>
+          <div class="detail-card">
+            <div class="detail-card-label">Reset Day</div>
+            <div class="detail-card-value">{{ detailRow.quota_reset_day ? 'Day ' + detailRow.quota_reset_day : '-' }}</div>
+          </div>
+        </div>
+
+        <div class="detail-section-title">Limits</div>
+        <div class="detail-grid">
+          <div class="detail-card">
+            <div class="detail-card-label">Concurrency</div>
+            <div class="detail-card-value">{{ detailRow.concurrent_limit }}</div>
+          </div>
+          <div class="detail-card">
+            <div class="detail-card-label">RPM</div>
+            <div class="detail-card-value">{{ detailRow.rpm_limit === -1 ? 'Unlimited' : detailRow.rpm_limit }}</div>
+          </div>
+        </div>
+
+        <div class="detail-section-title">Allowed Models</div>
+        <div v-if="detailRow.allowed_models.length > 0" style="display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 16px">
+          <el-tag v-for="m in detailRow.allowed_models" :key="m" size="small">{{ m }}</el-tag>
+        </div>
+        <div v-else style="color: #94a3b8; font-size: 13px; margin-bottom: 16px">All models allowed</div>
+
+        <div class="detail-section-title">Allowed IPs</div>
+        <div v-if="detailRow.allowed_ips && detailRow.allowed_ips.length > 0" style="display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 16px">
+          <el-tag v-for="ip in detailRow.allowed_ips" :key="ip" size="small" type="info">{{ ip }}</el-tag>
+        </div>
+        <div v-else style="color: #94a3b8; font-size: 13px; margin-bottom: 16px">No IP restriction</div>
+
+        <div class="detail-section-title">Channel Group</div>
+        <div style="margin-bottom: 16px">
+          <el-tag v-if="detailRow.channel_group" size="small" type="info">{{ detailRow.channel_group }}</el-tag>
+          <span v-else style="color: #94a3b8; font-size: 13px">All channels accessible</span>
+        </div>
+      </template>
+    </el-drawer>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, reactive, onMounted } from 'vue'
 import { keysApi } from '@/api/keys'
+import { useAuthStore } from '@/stores/auth'
 import { ElMessage } from 'element-plus'
+import { View, Hide, CopyDocument } from '@element-plus/icons-vue'
+import dayjs from 'dayjs'
+
+const auth = useAuthStore()
 
 const keys = ref<any[]>([])
 const loading = ref(false)
@@ -133,9 +257,35 @@ const showKeyDialog = ref(false)
 const saving = ref(false)
 const editingId = ref<number | null>(null)
 const newKey = ref('')
+const detailVisible = ref(false)
+const detailRow = ref<any>(null)
+const keyVisible = ref(false)
+const visibleKeys = reactive<Record<number, boolean>>({})
+
+function formatTime(t: string) {
+  return dayjs(t).format('YYYY-MM-DD HH:mm:ss')
+}
+
+function showDetail(row: any) {
+  detailRow.value = row
+  keyVisible.value = false
+  detailVisible.value = true
+}
+
+async function copyText(text: string) {
+  try {
+    await navigator.clipboard.writeText(text)
+    ElMessage.success('Copied')
+  } catch {
+    ElMessage.error('Copy failed')
+  }
+}
 
 const emptyForm = () => ({
-  name: '', quota_total: -1, concurrent_limit: 5, allowed_models: [] as string[],
+  name: '', quota_total: -1, concurrent_limit: 5, rpm_limit: -1,
+  allowed_models: [] as string[],
+  allowed_ips: [] as string[],
+  channel_group: '',
   quota_reset_day: null as number | null,
 })
 const form = ref(emptyForm())
@@ -165,7 +315,10 @@ function openEdit(row: any) {
     name: row.name,
     quota_total: row.quota_total,
     concurrent_limit: row.concurrent_limit,
+    rpm_limit: row.rpm_limit,
     allowed_models: [...row.allowed_models],
+    allowed_ips: [...(row.allowed_ips || [])],
+    channel_group: row.channel_group || '',
     quota_reset_day: row.quota_reset_day ?? null,
   }
   dialogVisible.value = true
@@ -231,3 +384,59 @@ async function copyKey() {
 
 onMounted(load)
 </script>
+
+<style scoped>
+.key-cell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.key-text {
+  font-size: 12px;
+  word-break: break-all;
+  color: #334155;
+}
+
+.key-actions {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.detail-section-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #334155;
+  margin: 20px 0 10px;
+}
+
+.detail-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.detail-card {
+  background: #f8fafc;
+  border-radius: 10px;
+  padding: 12px 14px;
+}
+
+.detail-card-label {
+  font-size: 12px;
+  color: #64748b;
+  margin-bottom: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 600;
+}
+
+.detail-card-value {
+  font-size: 18px;
+  font-weight: 700;
+  color: #0f172a;
+  font-variant-numeric: tabular-nums;
+}
+</style>

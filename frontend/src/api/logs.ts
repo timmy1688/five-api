@@ -9,4 +9,8 @@ export const logsApi = {
     const { data } = await client.get(`/admin/logs/${requestId}`)
     return data
   },
+  cleanup: async (days?: number) => {
+    const { data } = await client.post('/admin/logs/cleanup', null, { params: days ? { days } : {} })
+    return data
+  },
 }

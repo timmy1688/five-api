@@ -5,6 +5,11 @@
         <h3>Request Logs</h3>
         <p>Monitor API requests, token usage and costs</p>
       </div>
+      <el-popconfirm v-if="auth.isAdmin()" title="Delete logs older than 90 days?" @confirm="cleanupLogs">
+        <template #reference>
+          <el-button type="warning" plain>Cleanup</el-button>
+        </template>
+      </el-popconfirm>
     </div>
 
     <el-card shadow="never" style="margin-bottom: 20px">
@@ -165,8 +170,11 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { logsApi } from '@/api/logs'
+import { useAuthStore } from '@/stores/auth'
 import { ElMessage } from 'element-plus'
 import dayjs from 'dayjs'
+
+const auth = useAuthStore()
 
 const logs = ref<any[]>([])
 const loading = ref(false)
@@ -224,6 +232,16 @@ async function showDetail(row: any) {
     detail.value = row
   } finally {
     detailLoading.value = false
+  }
+}
+
+async function cleanupLogs() {
+  try {
+    const res = await logsApi.cleanup()
+    ElMessage.success(`Cleaned up ${res.deleted} logs`)
+    await load()
+  } catch {
+    ElMessage.error('Cleanup failed')
   }
 }
 

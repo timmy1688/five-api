@@ -4,7 +4,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from app.models import Admin, RequestLog
-from app.services.auth import get_current_admin
+from app.services.auth import get_current_admin, require_admin_role
+from app.services.logging_service import cleanup_old_logs
 
 router = APIRouter(prefix="/api/admin/logs", tags=["admin-logs"])
 
@@ -98,3 +99,13 @@ async def get_log(request_id: str, _: Admin = Depends(get_current_admin)):
     if r is None:
         raise HTTPException(status_code=404, detail="Log not found")
     return _to_log(r)
+
+
+@router.post("/cleanup")
+async def cleanup_logs(
+    days: int = Query(None, ge=1),
+    _: Admin = Depends(require_admin_role),
+):
+    """手动清理过期日志。days 为空则使用 LOG_RETENTION_DAYS 配置。"""
+    deleted = await cleanup_old_logs(days)
+    return {"deleted": deleted}

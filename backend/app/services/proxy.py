@@ -6,42 +6,76 @@ from decimal import Decimal
 from app.models import APIKey, Channel
 from app.providers.base import BaseProvider
 from app.services.concurrency import concurrency_limiter
+from app.services.channel_health import record_failure, record_success
+from app.services.failover import is_retryable_error
 from app.services.logging_service import save_request_log
 from app.services.pricing import calculate_cost
 from app.services.quota import deduct_quota
 
 
 async def stream_proxy(
-    provider: BaseProvider,
+    candidates: list[tuple[Channel, type[BaseProvider]]],
     openai_request: dict,
     endpoint: str,
-    channel: Channel,
     api_key: APIKey,
     request_id: str,
     start_time: float,
     ip_address: str = "",
 ) -> AsyncIterator[str]:
     model_requested = openai_request.get("model", "")
-    model_actual = provider.apply_model_mapping(model_requested)
     prompt_tokens = 0
     completion_tokens = 0
     cached_tokens = 0
     status_code = 200
     error_msg = ""
+    channel: Channel | None = None
+    provider: BaseProvider | None = None
+    model_actual = model_requested
+    data_yielded = False
 
     try:
-        async for line in provider.send_stream(openai_request, endpoint):
-            yield line
-            if line.startswith("data: ") and not line.startswith("data: [DONE]"):
-                try:
-                    chunk = json.loads(line[6:])
-                    usage = chunk.get("usage")
-                    if usage:
-                        prompt_tokens = usage.get("prompt_tokens", prompt_tokens)
-                        completion_tokens = usage.get("completion_tokens", completion_tokens)
-                        cached_tokens = (usage.get("prompt_tokens_details") or {}).get("cached_tokens", cached_tokens)
-                except (json.JSONDecodeError, KeyError):
-                    pass
+        last_error: Exception | None = None
+        for i, (ch, provider_cls) in enumerate(candidates):
+            prov = provider_cls(ch)
+            try:
+                async for line in prov.send_stream(openai_request, endpoint):
+                    if not data_yielded:
+                        channel = ch
+                        provider = prov
+                        model_actual = prov.apply_model_mapping(model_requested)
+                        data_yielded = True
+                    yield line
+                    if line.startswith("data: ") and not line.startswith("data: [DONE]"):
+                        try:
+                            chunk = json.loads(line[6:])
+                            usage = chunk.get("usage")
+                            if usage:
+                                prompt_tokens = usage.get("prompt_tokens", prompt_tokens)
+                                completion_tokens = usage.get("completion_tokens", completion_tokens)
+                                cached_tokens = (usage.get("prompt_tokens_details") or {}).get("cached_tokens", cached_tokens)
+                        except (json.JSONDecodeError, KeyError):
+                            pass
+                if not data_yielded:
+                    channel = ch
+                    provider = prov
+                    model_actual = prov.apply_model_mapping(model_requested)
+                last_error = None
+                await record_success(ch.id)
+                break
+            except Exception as e:
+                if not data_yielded and is_retryable_error(e) and i < len(candidates) - 1:
+                    await record_failure(ch.id)
+                    await prov.close()
+                    last_error = e
+                    continue
+                channel = ch
+                provider = prov
+                model_actual = prov.apply_model_mapping(model_requested)
+                raise
+
+        if last_error is not None:
+            raise last_error
+
     except Exception as e:
         status_code = 500
         error_msg = str(e)
@@ -64,11 +98,11 @@ async def stream_proxy(
             request_id=request_id,
             api_key_id=api_key.id,
             api_key_name=api_key.name,
-            channel_id=channel.id,
-            channel_name=channel.name,
+            channel_id=channel.id if channel else 0,
+            channel_name=channel.name if channel else "",
             model_requested=model_requested,
             model_actual=model_actual,
-            provider=channel.provider,
+            provider=channel.provider if channel else "",
             endpoint=endpoint,
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
@@ -80,4 +114,5 @@ async def stream_proxy(
             error_message=error_msg,
             ip_address=ip_address,
         )
-        await provider.close()
+        if provider:
+            await provider.close()

@@ -21,4 +21,16 @@ export const channelsApi = {
     const { data } = await client.post(`/admin/channels/${id}/test`)
     return data
   },
+  healthStatus: async () => {
+    const { data } = await client.get('/admin/channels/health/status')
+    return data
+  },
+  recover: async (id: number) => {
+    const { data } = await client.post(`/admin/channels/${id}/recover`)
+    return data
+  },
+  fetchModels: async (id: number) => {
+    const { data } = await client.post(`/admin/channels/${id}/fetch-models`)
+    return data
+  },
 }
