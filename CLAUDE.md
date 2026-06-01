@@ -2,7 +2,7 @@
 
 ## 项目简介
 
-Five API 是一个自托管的 AI API 网关，对外暴露 OpenAI 兼容接口和 Anthropic 兼容接口，内部将请求路由到多个上游 LLM 提供商（OpenAI、Anthropic Claude、Google Gemini、Alibaba Qwen）。附带 Vue 3 管理后台用于渠道管理、API Key 管理、用量统计和日志查看。支持 Claude Code 直连。
+Five API 是一个自托管的 AI API 网关，对外暴露 OpenAI 兼容接口和 Anthropic 兼容接口，内部将请求路由到多个上游 LLM 提供商（OpenAI、Anthropic Claude、Google Gemini、Alibaba Qwen、Azure OpenAI）。附带 Vue 3 管理后台用于渠道管理、API Key 管理、模型分组、RBAC 权限管理、用量统计和日志查看。支持 Claude Code 直连。
 
 **技术栈**: FastAPI + Tortoise ORM + MySQL + Redis（后端）| Vue 3 + Element Plus + ECharts（前端）| Docker Compose（部署）
 
@@ -12,55 +12,30 @@ Five API 是一个自托管的 AI API 网关，对外暴露 OpenAI 兼容接口�
 
 ### 环境要求
 
-- Python >= 3.11
-- Node.js >= 20
-- MySQL 8.0
-- Redis 7+
-- 或直接使用 Docker Compose
+- Python >= 3.11、Node.js >= 20、MySQL 8.0、Redis 7+（或直接用 Docker Compose）
 
-### 方式一：Docker Compose 一键部署
+### Docker Compose 一键部署
 
 ```bash
 cd /opt/five-api
-
-# 复制并编辑环境变量（修改密码和密钥）
-cp .env.example .env
-vi .env
-
-# 启动所有服务（MySQL + Redis + 后端 + 前端）
+cp .env.example .env && vi .env    # 修改密码和密钥
 docker compose up -d
-
-# 查看日志
-docker compose logs -f backend
+docker compose logs -f backend     # 查看日志
 ```
 
-启动后：
-- 前端管理后台：`http://localhost:80`（可通过 `FRONTEND_PORT` 修改）
-- 后端 API：`http://localhost:8000`（可通过 `BACKEND_PORT` 修改）
-- 默认管理员：`admin` / `admin123`（通过 `.env` 中 `INIT_ADMIN_USERNAME` 和 `INIT_ADMIN_PASSWORD` 配置）
+启动后：前端 `http://localhost:80`、后端 API `http://localhost:8000`、默认管理员 `admin` / `admin123`（Super Admin 角色）
 
-### 方式二：本地开发
+### 本地开发
 
 ```bash
-# 方法 A：使用 start.sh 一键启动
-./start.sh
-# 前端: http://localhost:5001  后端: http://localhost:5002
-# 停止: ./stop.sh
+# 方法 A：一键启动
+./start.sh          # 前端 :5001  后端 :5002
+./stop.sh           # 停止
 
 # 方法 B：手动启动
-# 1. 启动 MySQL + Redis
 docker compose up -d mysql redis
-
-# 2. 后端
-cd /opt/five-api/backend
-cp .env.example .env          # 编辑数据库连接等配置
-pip install -e ".[dev]"       # 安装依赖
-uvicorn app.main:app --reload --port 5002
-
-# 3. 前端（新终端）
-cd /opt/five-api/frontend
-npm install
-npx vite --port 5001          # 启动开发服务器
+cd backend && cp .env.example .env && pip install -e ".[dev]" && uvicorn app.main:app --reload --port 5002
+cd frontend && npm install && npx vite --port 5001
 ```
 
 前端 Vite dev server 已配置代理，`/api` 和 `/v1` 请求自动转发到 `http://127.0.0.1:5002`。
@@ -73,471 +48,270 @@ npx vite --port 5001          # 启动开发服务器
 /opt/five-api/
 ├── backend/
 │   ├── app/
-│   │   ├── main.py                  # FastAPI 应用入口，lifespan，中间件注册
+│   │   ├── main.py                  # FastAPI 应用入口，lifespan，中间件注册，预置角色初始化
 │   │   ├── config.py                # pydantic-settings 配置 + Tortoise ORM 配置
 │   │   ├── dependencies.py          # Redis 连接管理
 │   │   ├── models/                  # Tortoise ORM 数据模型
-│   │   │   ├── admin.py             #   管理员（含 role: admin/viewer）
-│   │   │   ├── channel.py           #   上游渠道（含 model_pricing, group）
-│   │   │   ├── api_key.py           #   API Key（SHA-256 哈希，USD 配额，channel_group）
+│   │   │   ├── user.py              #   管理用户（role_id FK → roles）
+│   │   │   ├── role.py              #   角色（permissions JSON）
+│   │   │   ├── channel.py           #   上游渠道（含 model_pricing）
+│   │   │   ├── api_key.py           #   API Key（SHA-256 哈希，USD 配额，model_group_id）
+│   │   │   ├── model_group.py       #   模型分组（命名的模型列表，分配给 Key）
 │   │   │   ├── model_price.py       #   全局模型定价（含 cached_price）
 │   │   │   └── request_log.py       #   请求日志（含 cost、cached_tokens）
 │   │   ├── schemas/                 # Pydantic 请求/响应模型
 │   │   │   ├── openai.py            #   OpenAI 兼容格式
 │   │   │   ├── anthropic.py         #   Anthropic 兼容格式
-│   │   │   ├── admin.py             #   管理员相关
-│   │   │   ├── channel.py           #   渠道 CRUD（含 model_pricing）
-│   │   │   ├── api_key.py           #   Key CRUD（USD 配额）
-│   │   │   ├── model_price.py       #   模型定价 CRUD（含 cached_price）
-│   │   │   └── stats.py             #   统计数据（含 cost）
-│   │   ├── providers/               # 上游提供商适配器（核心）
+│   │   │   ├── user.py              #   用户相关（UserInfo/Create/Update，含 role_id、permissions）
+│   │   │   ├── role.py              #   角色 CRUD
+│   │   │   ├── channel.py           #   渠道 CRUD
+│   │   │   ├── api_key.py           #   Key CRUD（含 model_group_id）
+│   │   │   ├── model_group.py       #   模型分组 CRUD
+│   │   │   ├── model_price.py       #   模型定价 CRUD
+│   │   │   └── stats.py             #   统计数据
+│   │   ├── providers/               # 上游提供商适配器
 │   │   │   ├── base.py              #   抽象基类 BaseProvider
 │   │   │   ├── openai_provider.py   #   OpenAI（透传）
-│   │   │   ├── anthropic_provider.py#   Anthropic Claude（完整转换 + 原生直通，含缓存 token 映射）
+│   │   │   ├── anthropic_provider.py#   Anthropic（原生直通 + 格式转换）
 │   │   │   ├── gemini_provider.py   #   Google Gemini（透传）
 │   │   │   ├── qwen_provider.py     #   Alibaba Qwen（透传）
-│   │   │   ├── azure_provider.py    #   Azure OpenAI（不同 URL 模式 + api-key 头认证）
-│   │   │   └── registry.py          #   渠道选择 & 模型路由（含渠道分组过滤）
-│   │   ├── services/                # 业务逻辑层
-│   │   │   ├── auth.py              #   JWT + API Key 认证 + require_admin_role
+│   │   │   ├── azure_provider.py    #   Azure OpenAI（api-key 头认证）
+│   │   │   └── registry.py          #   渠道选择 & 模型路由（含协议优先）
+│   │   ├── services/                # 基础设施（依赖 Redis/DB 的可复用模块）
+│   │   │   ├── proxy.py             #   通用代理编排（故障转移 + 计费 + 日志）
+│   │   │   ├── pre_checks.py        #   前置策略管线（quota / model / RPM）
+│   │   │   ├── auth.py              #   JWT + API Key 认证 + RBAC 权限（ALL_PERMISSIONS、require_permission、get_current_admin）
 │   │   │   ├── quota.py             #   USD 配额检查与扣减
-│   │   │   ├── pricing.py           #   费用计算 + 内置主流模型价格表
-│   │   │   ├── concurrency.py       #   Redis Lua 脚本并发限制
-│   │   │   ├── rate_limit.py        #   Redis Lua 脚本 RPM 速率限制
-│   │   │   ├── failover.py          #   渠道故障转移判定（可重试错误识别）
-│   │   │   ├── channel_health.py    #   渠道健康监测 & 自动熔断（Redis）
+│   │   │   ├── pricing.py           #   费用计算 + 内置模型价格表
+│   │   │   ├── concurrency.py       #   Redis 并发限制
+│   │   │   ├── rate_limit.py        #   Redis RPM 速率限制
+│   │   │   ├── failover.py          #   故障转移判定（可重试错误识别）
+│   │   │   ├── channel_health.py    #   渠道健康监测 & 自动熔断
 │   │   │   ├── logging_service.py   #   请求日志持久化 + 自动清理
-│   │   │   ├── metrics.py           #   Prometheus 指标定义与记录
-│   │   │   ├── anthropic_compat.py  #   Anthropic↔OpenAI 格式转换
-│   │   │   └── proxy.py             #   流式代理编排（含故障转移）
+│   │   │   ├── metrics.py           #   Prometheus 指标
+│   │   │   └── anthropic_compat.py  #   Anthropic↔OpenAI 格式转换
 │   │   ├── middleware/
-│   │   │   └── request_id.py        #   ASGI 中间件，注入 X-Request-ID
-│   │   ├── routers/                 # API 路由
-│   │   │   ├── openai_proxy.py      #   /v1/* OpenAI 兼容代理路由
-│   │   │   ├── anthropic_proxy.py   #   /v1/messages Anthropic 兼容代理路由
-│   │   │   ├── admin_auth.py        #   管理员登录
-│   │   │   ├── admin_channels.py    #   渠道 CRUD + 模型拉取 + 健康管理
-│   │   │   ├── admin_keys.py        #   Key CRUD
-│   │   │   ├── admin_logs.py        #   日志查询 + 清理
-│   │   │   ├── admin_model_prices.py#   模型定价 CRUD + 同步内置价格 + 未定价模型查询
-│   │   │   ├── admin_stats.py       #   统计聚合（含 by-channel/error-rate/latency）
-│   │   │   ├── admin_users.py       #   管理员 CRUD（需 admin 角色）
+│   │   │   └── request_id.py        #   注入 X-Request-ID
+│   │   ├── routers/                 # API 路由（前缀 /api/*）
+│   │   │   ├── openai_proxy.py      #   /v1/* OpenAI 兼容代理
+│   │   │   ├── anthropic_proxy.py   #   /v1/messages Anthropic 兼容代理
+│   │   │   ├── auth.py              #   /api/login、/api/me、/api/password
+│   │   │   ├── channels.py          #   /api/channels CRUD + 健康管理
+│   │   │   ├── keys.py              #   /api/keys CRUD
+│   │   │   ├── roles.py             #   /api/roles CRUD + /api/roles/permissions
+│   │   │   ├── model_groups.py      #   /api/model-groups CRUD
+│   │   │   ├── models.py            #   /api/models 模型汇总视图
+│   │   │   ├── logs.py              #   /api/logs 日志查询 + 清理
+│   │   │   ├── model_prices.py      #   /api/model-prices CRUD + 同步内置价格
+│   │   │   ├── stats.py             #   /api/stats 统计聚合
+│   │   │   ├── users.py             #   /api/users 管理员 CRUD
 │   │   │   └── metrics.py           #   Prometheus /metrics 端点
 │   │   └── utils/
-│   │       └── key_generator.py     #   sk-xxx 格式 Key 生成
-│   ├── migrations/                  # Aerich 迁移文件
-│   ├── pyproject.toml               # Python 依赖配置
+│   │       ├── key_generator.py     #   sk-xxx 格式 Key 生成
+│   │       └── ip_check.py          #   IP 解析与白名单匹配
+│   ├── migrations/                  # 数据库迁移文件
+│   ├── pyproject.toml
 │   ├── Dockerfile
 │   └── .env.example
 ├── frontend/
 │   ├── src/
-│   │   ├── main.ts                  # Vue 应用入口
-│   │   ├── App.vue                  # 根组件
-│   │   ├── router/index.ts          # 路由配置 + 导航守卫
-│   │   ├── stores/auth.ts           # Pinia 认证状态
-│   │   ├── api/                     # Axios API 模块
-│   │   │   ├── client.ts            #   Axios 实例 + 拦截器
-│   │   │   ├── auth.ts              #   登录/个人信息
-│   │   │   ├── channels.ts          #   渠道 CRUD + 健康状态 + 模型拉取
-│   │   │   ├── keys.ts              #   Key CRUD
-│   │   │   ├── logs.ts              #   日志查询 + 清理
-│   │   │   ├── model_prices.ts      #   模型定价 CRUD + 同步 + 未定价查询
-│   │   │   ├── stats.ts             #   统计数据（含 by-channel/error-rate/latency）
-│   │   │   └── users.ts             #   管理员 CRUD
-│   │   ├── layouts/AdminLayout.vue  # 管理后台布局（侧边栏+顶栏）
-│   │   ├── styles/global.css        # 全局样式（表格对齐等）
-│   │   └── views/                   # 页面组件
-│   │       ├── Login.vue            #   登录页
-│   │       ├── Dashboard.vue        #   统计仪表盘（Cost + Tokens + 错误率 + 渠道分布 + 延迟）
-│   │       ├── Channels.vue         #   渠道管理（含自定义定价、健康状态、模型拉取、分组）
-│   │       ├── ApiKeys.vue          #   Key 管理（USD 配额、渠道分组）
-│   │       ├── ModelPrices.vue      #   模型定价管理（含缓存价格、同步内置、未定价提示）
-│   │       ├── Logs.vue             #   请求日志（Input/Output/Cache 分列显示 + 清理）
-│   │       └── Admins.vue           #   管理员管理（仅 admin 角色可见）
-│   ├── package.json
-│   ├── vite.config.ts
-│   ├── tsconfig.json
-│   ├── Dockerfile                   # 多阶段构建：npm build → nginx
-│   └── nginx.conf                   # Nginx 反代 + SSE 支持
-├── docker-compose.yml               # 完整部署：mysql + redis + backend + frontend
-├── .env.example                     # Docker Compose 环境变量模板
-├── start.sh                         # 本地开发一键启动（MySQL/Redis + 后端 + 前端）
-├── stop.sh                          # 本地开发一键停止
-└── .gitignore
+│   │   ├── main.ts
+│   │   ├── App.vue
+│   │   ├── router/index.ts          # 路由配置 + 权限守卫
+│   │   ├── stores/auth.ts           # Pinia 认证状态（含 hasPermission）
+│   │   ├── api/                     # Axios API 模块（baseURL: /api）
+│   │   │   ├── client.ts            #   Axios 实例 + JWT 拦截器
+│   │   │   ├── auth.ts, channels.ts, keys.ts, logs.ts
+│   │   │   ├── roles.ts             #   角色 CRUD + 权限列表
+│   │   │   ├── model_groups.ts      #   模型分组 CRUD
+│   │   │   ├── model_prices.ts, stats.ts, users.ts
+│   │   ├── layouts/AdminLayout.vue  # 侧边栏菜单（按权限显隐）
+│   │   ├── styles/global.css
+│   │   └── views/
+│   │       ├── Login.vue, Dashboard.vue
+│   │       ├── Channels.vue         #   渠道管理（含自定义定价、健康状态）
+│   │       ├── ApiKeys.vue          #   Key 管理（USD 配额、模型分组）
+│   │       ├── ModelGroups.vue      #   模型分组管理
+│   │       ├── Roles.vue            #   角色管理（权限勾选矩阵）
+│   │       ├── ModelPrices.vue, Logs.vue, Admins.vue
+│   ├── vite.config.ts, tsconfig.json, package.json
+│   ├── Dockerfile                   # npm build → nginx
+│   └── nginx.conf
+├── docker-compose.yml
+├── start.sh / stop.sh
+└── .env.example
 ```
 
 ---
 
 ## 核心架构
 
-### 请求处理全链路
+### 请求处理管线
 
-网关有两个入口端点：`POST /v1/chat/completions`（OpenAI 格式）和 `POST /v1/messages`（Anthropic 格式）。以下以 `/v1/chat/completions` 为主线，标注 `/v1/messages` 的差异：
+所有代理请求（`/v1/chat/completions`、`/v1/messages` 等）共享同一管线：
 
-#### 第 1 步：Request ID 中间件
+1. **Request ID 中间件** → 注入/复用 `X-Request-ID`
+2. **API Key 认证** → SHA-256 哈希查表，检查启用/过期状态
+3. **前置检查** `run_pre_checks()` → 配额检查 → 模型权限检查 → RPM 限流
+4. **渠道选择** `resolve_candidates()` → 协议优先（匹配协议的渠道排前面）→ 按 priority 分层 + weight 加权随机 → 返回候选列表
+5. **并发限制** `concurrency_limiter.acquire()` → Redis 原子计数
+6. **代理编排** → 下面详述
+7. **后置处理** `_bill_and_log()` → 计费扣费 + 写日志 + 释放并发 + 关闭连接
 
-**文件**: `middleware/request_id.py`
+### 协议优先路由（`providers/registry.py`）
 
-```
-请求进入 Nginx → 转发到 FastAPI
-  │
-  ├─ 检查请求头 X-Request-ID
-  │   ├─ 有: 复用客户端传入的 ID
-  │   └─ 无: 生成 uuid4
-  │
-  ├─ 写入 scope["state"]["request_id"]（后续步骤可读取）
-  └─ 响应头自动附上 X-Request-ID（用于链路追踪）
-```
+`resolve_candidates(model, preferred_protocol)` 支持协议优先排序：
 
-#### 第 2 步：API Key 认证
+- `/v1/messages` 路由传入 `preferred_protocol="anthropic"` → anthropic 渠道优先（passthrough）
+- `/v1/chat/completions` 路由传入 `preferred_protocol="openai"` → openai/gemini/qwen/azure 渠道优先
 
-**文件**: `services/auth.py` → `verify_api_key()` / `verify_api_key_anthropic()`
+协议族定义：
+- **OpenAI 协议族**：`openai`、`gemini`、`qwen`、`azure`
+- **Anthropic 协议族**：`anthropic`
 
-```
-/v1/chat/completions: 提取 Authorization: Bearer sk-abc123...
-/v1/messages:         提取 x-api-key: sk-abc123...（也支持 Authorization: Bearer）
-  │
-  ├─ sha256("sk-abc123...") → key_hash
-  ├─ SELECT * FROM api_keys WHERE key_hash = ?
-  │
-  ├─ 找不到     → 401 invalid_api_key "Invalid API key"
-  ├─ is_enabled=False → 401 key_disabled "API key is disabled"
-  ├─ expires_at < now → 401 key_expired "API key has expired"
-  └─ 通过 → 返回 APIKey 对象（后续步骤使用）
-```
+匹配协议的渠道整体排在不匹配的前面，各组内维持 priority + weight 排序。不匹配的渠道保留作为故障转移备选。
 
-#### 第 3 步：配额前置检查
+### 代理编排（`services/proxy.py`）
 
-**文件**: `services/quota.py` → `check_quota()`
+所有代理路由共享两个通用编排函数，协议差异通过回调注入：
 
-```
-check_quota(api_key):
-  ├─ quota_total == -1     → 通过（无限额度）
-  ├─ quota_used < quota_total → 通过
-  └─ quota_used >= quota_total → 429 quota_exceeded "Spending quota exceeded"
-```
+- **`execute_with_failover(candidates, send_fn, ...)`** — 非流式。遍历候选渠道，调用 `send_fn(provider, channel) → (response, usage_dict)`，成功则计费返回，可重试错误则切换下一渠道。
+- **`stream_with_failover(candidates, stream_fn, ...)`** — 流式。`stream_fn(provider, channel)` yield `(sse_line, usage_dict)`，流式数据开始后绑定渠道不再切换。所有 cleanup（计费、释放并发、关闭连接）在 generator 的 `finally` 中执行。
 
-> **注意**: 这是前置粗检查，非原子扣减。扣减在请求完成后执行（第 8 步）。并发请求可能都通过检查后各自扣减，导致微小超额（一两次请求的费用），这是可接受的。
+路由层只需定义 `send_fn` / `stream_fn` 闭包：
 
-#### 第 4 步：模型权限检查
+```python
+# openai_proxy.py — 所有端点共享 _proxy_endpoint()
+async def _send_fn(provider, channel):
+    result = await provider.send_request(body_dict, endpoint)
+    return result, extract_openai_usage(result)
 
-**文件**: `routers/openai_proxy.py` → `_check_model_access()`
-
-```
-_check_model_access(api_key, "gpt-4o"):
-  ├─ allowed_models 为空列表 → 允许所有模型，通过
-  ├─ "gpt-4o" in allowed_models → 通过
-  └─ "gpt-4o" not in allowed_models → 403 model_not_allowed
+# anthropic_proxy.py — passthrough 分支
+async def _send_fn(provider, channel):
+    if is_passthrough:
+        result = await provider.send_anthropic_passthrough(raw_body, extra_headers)
+        return JSONResponse(content=result), _extract_anthropic_usage(result)
+    else:  # conversion path
+        ...
 ```
 
-#### 第 5 步：RPM 速率限制
+### Anthropic 代理的两条路径
 
-**文件**: `services/rate_limit.py` → Redis Lua 脚本
+| 条件 | 路径 | 说明 |
+|------|------|------|
+| `/v1/messages` + provider=`anthropic` | **Passthrough** | 原样透传，支持 tool_use/thinking/streaming 全部特性 |
+| `/v1/messages` + provider≠`anthropic` | **Conversion** | Anthropic↔OpenAI 双向转换，仅支持纯文本对话 |
+| `/v1/chat/completions` + provider=`anthropic` | **Conversion** | Provider 内部做 OpenAI→Anthropic 转换 |
 
-```
-_check_rate_limits(api_key):
-  │
-  └─ RPM 检查（rpm_limit == -1 跳过）:
-      ├─ Redis Lua INCR five:rpm:{key_id}
-      │   首次 INCR → EXPIRE 60s（滑动窗口）
-      │   current > limit → DECR 回退，返回 0
-      ├─ 返回 1 → 通过
-      └─ 返回 0 → 429 rpm_limit "Requests per minute limit exceeded"
-```
+### RBAC 权限控制（`services/auth.py`）
 
-> **设计**: RPM 通过 `INCR` 在检查时直接计数，每个成功通过检查的请求自动 +1。60 秒后 key 自动过期，计数归零。`rpm_limit = -1` 表示不限制。
+管理后台使用基于角色的细粒度权限控制。
 
-#### 第 6 步：渠道选择 + Provider 实例化
+**权限定义**（15 个，格式 `资源:动作`）：
 
-**文件**: `providers/registry.py` → `resolve_candidates()`
+| 资源 | read | write |
+|------|------|-------|
+| channel | 查看渠道 | 创建/编辑/删除渠道 |
+| key | 查看 Key | 创建/编辑/删除 Key |
+| model_group | 查看分组 | 创建/编辑/删除分组 |
+| model_price | 查看定价 | 创建/编辑/删除定价 |
+| log | 查看日志 | 清理日志 |
+| stat | 查看统计 | — |
+| user | 查看管理员 | 创建/编辑/删除管理员 |
+| role | 查看角色 | 创建/编辑/删除角色 |
 
-```
-resolve_candidates("gpt-4o"):
-  │
-  ├─ SELECT * FROM channels WHERE is_enabled=True
-  ├─ 过滤: "gpt-4o" in channel.models
-  │   └─ 无候选渠道 → 404 model_not_found
-  │
-  ├─ 按 priority 分层（降序）
-  ├─ 各层内按 weight 加权随机排序（Fisher-Yates 加权洗牌）
-  │   例: priority=10 组: 渠道A(w=3) 渠道B(w=1) → A 排在前面概率 75%
-  │       priority=5  组: 渠道C(w=1)
-  │   → 结果: [A, B, C] 或 [B, A, C]
-  │
-  ├─ 查 PROVIDER_MAP[channel.provider]
-  │   "openai"    → OpenAIProvider（透传）
-  │   "anthropic" → AnthropicProvider（/v1/messages 直通 或 /v1/chat/completions 格式转换）
-  │   "gemini"    → GeminiProvider（透传）
-  │   "qwen"      → QwenProvider（透传）
-  │   未知        → 跳过该渠道
-  │
-  └─ 返回有序候选列表 [(channel, provider_cls), ...]
-      首个候选为主渠道，后续为故障转移备选
-```
+**预置角色**（内置不可删改）：
 
-> **故障转移**: 请求优先发送到列表首个渠道。若上游返回 5xx、超时或网络错误（`is_retryable_error()`），自动尝试下一个候选渠道。流式请求仅在尚未向客户端发送数据时才可故障转移。
+| 角色 | 权限 |
+|------|------|
+| Super Admin | 全部 15 个权限 |
+| Viewer | 所有 `*:read` 权限（8 个） |
 
-#### 第 7 步：并发限制
+管理员可自建角色，自由组合权限。
 
-**文件**: `services/concurrency.py` → Redis Lua 脚本
+**权限检查机制**：
 
-```
-concurrency_limiter.acquire(api_key.id, concurrent_limit):
-  │
-  ├─ Redis Lua 原子操作:
-  │   INCR five:concurrency:{key_id}
-  │   首次 INCR → EXPIRE 120s（防崩溃后永不过期）
-  │   current > limit → DECR 回退，返回 0（拒绝）
-  │
-  ├─ 返回 1 → 获取成功，继续
-  └─ 返回 0 → 关闭 provider → 429 concurrent_limit "Too many concurrent requests"
+```python
+# 依赖工厂 — 声明端点所需权限
+def require_permission(*required: str):
+    async def checker(user = Depends(get_current_admin)):
+        if not set(required).issubset(set(user.role.permissions or [])):
+            raise HTTPException(403, "Permission denied")
+        return user
+    return Depends(checker)
+
+# 路由使用
+@router.post("/api/channels")
+async def create(body: ..., user: User = require_permission("channel:write")):
+    ...
 ```
 
-> **安全机制**: Redis key 设置 120 秒 TTL。即使代码崩溃未释放，120 秒后 key 自动过期，并发计数归零。
+**前端权限控制**（三层）：
 
-#### 第 8 步：发送请求到上游（分三条路径，含故障转移）
+| 层级 | 机制 | 示例 |
+|------|------|------|
+| 菜单 | `v-if="auth.hasPermission('xxx:read')"` | 无权限的页面不显示菜单 |
+| 按钮 | `v-if="auth.hasPermission('xxx:write')"` | 无写权限隐藏操作按钮 |
+| 路由 | `router.beforeEach` 权限守卫 | 直接输入 URL 也会重定向 |
 
-##### 路径 A：OpenAI 格式（`/v1/chat/completions`）
+前端仅做 UI 适配，后端是唯一安全屏障。
 
-**文件**: `routers/openai_proxy.py`，`services/proxy.py`
+### 模型权限控制
 
-无论上游 provider 类型是什么，请求体经过 provider 的 `transform_request()` 转为上游格式，响应经过 `transform_response()` 转回 OpenAI 格式。若上游返回可重试错误，自动尝试下一个候选渠道。
+`services/pre_checks.py` 中的 `get_effective_allowed_models()` 按优先级解析：
 
-```
-非流式: provider.send_request() → transform → httpx POST → transform_response → JSON
-流式:   StreamingResponse(stream_proxy()) → send_stream → stream_transform → SSE
-```
+1. `api_key.model_group_id` → 查 `model_groups` 表获取模型列表
+2. `api_key.allowed_models` → 直接使用
+3. 两者都为空 → 允许所有模型
 
-##### 路径 B：Anthropic 直通（`/v1/messages` + `provider=anthropic`）
+### 故障转移
 
-**文件**: `routers/anthropic_proxy.py` → `_non_stream_with_failover()` / `_stream_with_failover()`
-
-当请求通过 `/v1/messages` 进入且渠道 provider 为 `anthropic` 时，跳过格式转换，原样透传（支持跨渠道故障转移）：
-
-```
-request.body() → 获取原始 JSON（保留 tools/tool_use 等全部字段）
-  │
-  ├─ 仅替换 body["model"]（通过 model_mapping）
-  ├─ 设置上游 headers: x-api-key + anthropic-version + 透传 anthropic-beta（白名单过滤）
-  │
-  ├─ 非流式: provider.send_anthropic_passthrough()
-  │   ├─ httpx POST → 上游 /v1/messages
-  │   ├─ 从响应提取 usage.input_tokens / output_tokens / cache_read_input_tokens
-  │   └─ 返回原始 Anthropic JSON（含 tool_use、thinking 等）
-  │
-  └─ 流式: StreamingResponse(_stream_with_failover())
-      ├─ 按候选列表顺序尝试，可重试错误时自动切换下一个渠道
-      ├─ provider.stream_anthropic_passthrough() → 逐行 yield 原始 Anthropic SSE
-      ├─ 从 message_start 提取 input_tokens，从 message_delta 提取 output_tokens
-      └─ finally: 计费 + 扣费 + 写日志 + 释放并发 + 关闭连接
-```
-
-> **适用场景**: Claude Code（需要 tool_use）、DeepSeek Anthropic 端点、Anthropic 官方 API。完整支持 tool_use、thinking、streaming 等所有 Anthropic 原生特性。
-
-##### 路径 C：Anthropic 格式转换（`/v1/messages` + `provider≠anthropic`）
-
-**文件**: `routers/anthropic_proxy.py`，`services/anthropic_compat.py`
-
-当请求通过 `/v1/messages` 进入但渠道 provider 为 `openai`/`gemini`/`qwen` 时，做 Anthropic↔OpenAI 双向格式转换：
-
-```
-anthropic_to_openai_request(body) → 转为 OpenAI 格式
-  │
-  ├─ 非流式: provider.send_request() → openai_to_anthropic_response() → JSON
-  └─ 流式:   stream_proxy() → openai_stream_to_anthropic_stream() → SSE
-```
-
-> **限制**: 此路径仅支持纯文本对话，不支持 tool_use。
-
-##### 通用后置逻辑（所有路径共享）
-
-```
-提取 usage: prompt_tokens, completion_tokens, cached_tokens
-apply_model_mapping → 获取实际模型名（用于查价格）
-  │
-calculate_cost(model_actual, prompt, completion, channel, cached_tokens)
-  ├─ 先查 channel.model_pricing（渠道级覆盖定价）
-  ├─ 没有 → 查 model_prices 表（全局定价）
-  └─ cost = ((prompt - cached) × prompt_price + cached × cached_price + completion × completion_price) / 1M
-  │
-deduct_quota(api_key.id, cost)
-  └─ UPDATE api_keys SET quota_used = quota_used + cost（F() 原子操作）
-  │
-save_request_log(...)
-  └─ INSERT INTO request_logs（记录全部字段，包括 cost、cached_tokens）
-  │
-finally:
-  ├─ concurrency_limiter.release() → Redis DECR
-  └─ provider.close() → 关闭 httpx 连接
-```
-
-> **关键设计**: 流式路径所有 cleanup 在 generator 的 `finally` 里，而非路由 handler 的 `finally`。原因是 `StreamingResponse` 异步消费 generator，路由 handler 的 `finally` 在 stream 开始消费前就执行了。
-
-#### 第 9 步：响应返回客户端
-
-```
-/v1/chat/completions:
-  非流式: Content-Type: application/json + X-Request-ID header
-  流式:   Content-Type: text/event-stream + Cache-Control: no-cache + X-Accel-Buffering: no
-
-/v1/messages:
-  非流式: Content-Type: application/json（原始 Anthropic 格式或转换后的 Anthropic 格式）
-  流式:   Content-Type: text/event-stream（原始 Anthropic SSE 或转换后的 Anthropic SSE）
-```
-
-### 协议转换
-
-网关对外统一暴露 OpenAI 格式的端点，同时提供 Anthropic 原生兼容端点 `/v1/messages`。由渠道的 `provider` 字段决定使用哪个 Provider 类。
-
-#### OpenAI / Gemini / Qwen — 透传
-
-上游本身是 OpenAI 兼容端点，Provider 仅做：
-- 注入上游的 `Authorization: Bearer {channel.api_key}` header
-- 通过 `model_mapping` 替换模型名
-- 流式请求自动加 `stream_options.include_usage=true`（让上游返回 usage）
-- 请求和响应体原样透传
-- 从 `usage.prompt_tokens_details.cached_tokens` 提取缓存命中数
-
-#### Anthropic — 两种路径
-
-**路径 A：原生直通（`/v1/messages` → Anthropic 上游）**
-
-当请求通过 `/v1/messages` 进入且渠道 provider 为 `anthropic` 时，使用 **pass-through 直通模式**：
-- 从 `request.body()` 获取原始 JSON（保留所有字段，包括 `tools`、`tool_choice`、`tool_use`/`tool_result` content blocks 等）
-- 仅替换 `model`（通过 `model_mapping`）和认证 header（`x-api-key`）
-- `anthropic-beta` 头部经白名单过滤（仅透传已知的 beta 功能标识）
-- 请求体和响应体原样透传，不做任何格式转换
-- 从 Anthropic 响应中提取 `usage.input_tokens`/`output_tokens`/`cache_read_input_tokens` 用于计费
-- 完整支持 `tool_use`、`thinking`、`streaming` 等所有 Anthropic 原生特性
-- 支持自动故障转移：若上游返回可重试错误，自动切换到下一个候选渠道
-
-适用于：Anthropic 官方 API、DeepSeek Anthropic 端点（`/anthropic`）等所有 Anthropic 兼容上游。
-
-**路径 B：格式转换（`/v1/chat/completions` → Anthropic 上游 或 `/v1/messages` → 非 Anthropic 上游）**
-
-当请求通过 `/v1/chat/completions` 进入且渠道为 Anthropic，或通过 `/v1/messages` 进入但渠道为非 Anthropic provider 时，使用双向转换：
-
-请求方向（`transform_request`）:
-
-| OpenAI 格式 | Anthropic 格式 |
-|---|---|
-| `messages` 中 role=system 的消息 | 提取为顶级 `system` 参数 |
-| `max_tokens`（可选） | 必填，默认 4096 |
-| `temperature` | 限制在 [0, 1.0] |
-| `stop` (string/array) | `stop_sequences` (array) |
-| `Authorization: Bearer xxx` | `x-api-key: xxx` + `anthropic-version: 2023-06-01` |
-| `POST /v1/chat/completions` | `POST /v1/messages` |
-
-响应方向（`transform_response`）:
-
-| Anthropic 格式 | OpenAI 格式 |
-|---|---|
-| `content[{type:"text", text:"..."}]` | `choices[0].message.content` |
-| `stop_reason: "end_turn"` | `finish_reason: "stop"` |
-| `stop_reason: "max_tokens"` | `finish_reason: "length"` |
-| `usage.input_tokens` | `usage.prompt_tokens` |
-| `usage.output_tokens` | `usage.completion_tokens` |
-| `usage.cache_read_input_tokens` | `usage.prompt_tokens_details.cached_tokens` |
-
-流式方向（`stream_transform`）— Anthropic SSE 事件链转 OpenAI chunk:
-
-| Anthropic 事件 | 处理 |
-|---|---|
-| `message_start` | 提取 model、input_tokens、cache_read_input_tokens |
-| `content_block_delta` (text_delta) | yield `chat.completion.chunk`（delta.content） |
-| `message_delta` | yield chunk + usage（含 cached_tokens）+ finish_reason |
-| `message_stop` | yield `data: [DONE]` |
-
-> **注意**: 格式转换路径（路径 B）仅支持纯文本对话，不支持 `tool_use`。如需完整 Anthropic 特性（如 Claude Code 的工具调用），请使用 Anthropic provider 直通路径（路径 A）。
-
-### 错误码速查表
-
-| 状态码 | 错误码 | 出现步骤 | 原因 | 排查方向 |
-|--------|--------|----------|------|----------|
-| 401 | `invalid_api_key` | 第2步 | Key 不存在或 hash 不匹配 | 确认客户端用的是完整 key（不是 prefix） |
-| 401 | `key_disabled` | 第2步 | Key 被管理员禁用 | 后台检查 Key 的启用状态 |
-| 401 | `key_expired` | 第2步 | Key 已过期 | 后台检查 expires_at |
-| 429 | `quota_exceeded` | 第3步 | USD 余额用完 | 后台查看 quota_used vs quota_total |
-| 429 | `rpm_limit` | 第5步 | 每分钟请求数超限 | 降低请求频率或提高 rpm_limit |
-| 429 | `concurrent_limit` | 第7步 | 同 Key 并发请求超限 | 降低并发或提高 concurrent_limit |
-| 403 | `model_not_allowed` | 第4步 | Key 的 allowed_models 不含该模型 | 后台编辑 Key 添加模型 |
-| 404 | `model_not_found` | 第6步 | 没有启用的渠道支持该模型 | 后台检查渠道 models 列表和 is_enabled |
-| 500 | `unsupported_provider` | 第6步 | 渠道 provider 字段无效 | 后台检查渠道 provider 拼写 |
-| 502 | `upstream_error` | 第8步 | 上游 API 返回错误或超时（所有候选渠道均失败） | Logs 页面查看 error_message 字段 |
-
-### 日志追踪方法
-
-1. 从响应头获取 `X-Request-ID`
-2. 管理后台 → Logs → 搜索该 request_id
-3. 日志记录字段：请求模型 / 实际模型 / 渠道 / Provider / Input Tokens / Output Tokens / Cached Tokens / 费用 / 延迟 / 状态码 / 错误信息 / IP / 是否流式
-
-### 渠道选择与故障转移（`registry.py`、`failover.py`）
-
-**渠道选择**（`resolve_candidates()`）:
-
-1. 查询所有 `is_enabled=True` 的渠道
-2. 过滤 `models` JSON 数组中包含请求模型的渠道
-3. 按 `priority` 降序分层
-4. 各层内按 `weight` 加权随机排序（Fisher-Yates 加权洗牌）
-5. 返回有序候选列表 `[(channel, provider_cls), ...]`
-6. 通过 `model_mapping` 将客户端模型名映射为实际模型名
-
-示例: 客户端请求 `gpt-4`，渠道 `model_mapping` 配置 `{"gpt-4": "gpt-4o"}`，实际发送 `gpt-4o` 到上游。
-
-**故障转移**（`is_retryable_error()`）:
-
-请求发送到候选列表首个渠道，若遇到以下错误则自动尝试下一个候选：
+`is_retryable_error()` 判定以下错误可重试，自动切换下一候选渠道：
 
 | 错误类型 | 说明 |
 |----------|------|
-| `httpx.TimeoutException` | 上游请求超时 |
-| `httpx.NetworkError` | TCP 连接失败、DNS 解析失败等 |
-| `httpx.HTTPStatusError` (5xx) | 上游返回 500/502/503 等服务端错误 |
-| `httpx.RemoteProtocolError` | 上游协议异常（如连接意外断开） |
+| `httpx.TimeoutException` | 上游超时 |
+| `httpx.NetworkError` | 网络不可达 |
+| `httpx.HTTPStatusError` (5xx) | 上游服务端错误 |
+| `httpx.RemoteProtocolError` | 上游协议异常 |
 
-**转移限制**:
-- 非流式请求: 可在任何候选渠道间自由切换
-- 流式请求: **仅在尚未向客户端发送任何数据时**才可故障转移；一旦开始输出数据，则绑定到当前渠道
-- 4xx 错误（如 401 认证失败、429 上游限流）不触发故障转移
-- 所有候选渠道均失败时返回最后一个渠道的错误（502 upstream_error）
+4xx 错误不触发故障转移。流式请求只在尚未发送数据时才可切换。
 
-### 并发限制（`services/concurrency.py`）
+### 错误码速查
 
-基于 Redis Lua 脚本实现原子操作：
-- **acquire**: `INCR` key，超限则 `DECR` 回退 + 拒绝。首次 `INCR` 设置 TTL=120s 防止泄漏
-- **release**: `DECR` key，负数则重置为 0
-- Key 格式: `five:concurrency:{api_key_id}`
-
-### RPM 速率限制（`services/rate_limit.py`）
-
-基于 Redis Lua 脚本实现每分钟请求数限制：
-
-- **检查 + 计数**（请求前）: `INCR five:rpm:{key_id}`，首次设置 60s TTL，超限则 `DECR` 回退
-- 每个成功通过检查的请求自动计数 +1
-- 60 秒后 key 自动过期，计数归零
-- `rpm_limit = -1` 表示不限制
-
-### API Key 安全模型
-
-- 完整的 `sk-xxx` 密钥仅在创建时返回一次
-- 数据库只存 SHA-256 哈希（`key_hash` 字段）
-- 管理后台只展示前缀（`key_prefix`，前 8 字符）
-- 认证时: 提取 Bearer token → 计算 SHA-256 → 查表匹配
+| 状态码 | code | 原因 |
+|--------|------|------|
+| 401 | `invalid_api_key` / `key_disabled` / `key_expired` | Key 认证失败 |
+| 403 | `model_not_allowed` / `Permission denied` | Key 无权访问模型 / 管理员无权限 |
+| 404 | `model_not_found` | 无启用渠道支持该模型 |
+| 429 | `quota_exceeded` / `rpm_limit` / `concurrent_limit` | 配额/速率/并发超限 |
+| 502 | `upstream_error` | 所有候选渠道均失败 |
 
 ---
 
 ## 数据模型
 
-### admins（管理员）
+### roles（角色）
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| id | int PK | |
+| name | varchar(64) UNIQUE | 角色名 |
+| description | varchar(256) | 角色描述 |
+| permissions | JSON | 权限列表 `["channel:read","key:write",...]` |
+| is_builtin | bool | 内置角色不可删改 |
+| created_at / updated_at | datetime | |
+
+### admins（管理用户，模型类 `User`）
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | id | int PK | |
 | username | varchar(64) UNIQUE | |
-| hashed_password | varchar(255) | bcrypt |
-| role | varchar(16) | `admin` / `viewer`，默认 `admin` |
-| is_active | bool | 默认 true |
-| created_at / updated_at | datetime | 自动管理 |
+| hashed_password | varchar(255) | |
+| role_id | int FK → roles | 关联角色 |
+| is_active | bool | |
+| created_at / updated_at | datetime | |
 
 ### channels（上游渠道）
 
@@ -545,283 +319,181 @@ finally:
 |------|------|------|
 | id | int PK | |
 | name | varchar(128) | 显示名 |
-| provider | varchar(32) | `openai` / `anthropic` / `gemini` / `qwen` |
+| provider | varchar(32) | `openai` / `anthropic` / `gemini` / `qwen` / `azure` |
 | base_url | varchar(512) | 上游 API 地址 |
 | api_key | varchar(512) | 上游密钥 |
-| models | JSON | 支持的模型列表 `["gpt-4o", "gpt-4o-mini"]` |
+| models | JSON | 支持的模型列表 |
 | model_mapping | JSON | 别名映射 `{"gpt-4": "gpt-4o"}` |
-| model_pricing | JSON | 渠道级定价覆盖 `{"gpt-4o": {"prompt": 2.5, "completion": 10.0, "cached": 1.25}}`（$/1M tokens）|
-| group | varchar(64) | 渠道分组标签，空 = 所有 Key 可访问 |
-| priority | int | 高优先。同模型多渠道时，先选高优先级 |
-| weight | int | 同优先级加权随机 |
+| model_pricing | JSON | 渠道级定价覆盖（$/1M tokens） |
+| priority | int | 高优先级渠道先被选中 |
+| weight | int | 同优先级按权重加权随机 |
 | is_enabled | bool | |
-| timeout | int | 秒 |
+| timeout | int | 超时秒数 |
 
 ### api_keys
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | id | int PK | |
-| name | varchar(128) | 标签，如 "张三的Key" |
-| key_hash | varchar(64) UNIQUE | SHA-256 哈希 |
-| key_prefix | varchar(12) | 前 8 字符用于展示 |
-| quota_total | decimal(16,6) | -1 = 无限，USD 金额 |
-| quota_used | decimal(16,6) | 已消耗金额（USD） |
-| concurrent_limit | int | 最大并发请求数，默认 5 |
+| name | varchar(128) | 标签名 |
+| key_hash | varchar(64) UNIQUE | SHA-256 哈希（明文仅创建时返回一次） |
+| key_prefix | varchar(12) | 前 8 字符，用于展示 |
+| quota_total | decimal(16,6) | USD 总额度，-1 = 无限 |
+| quota_used | decimal(16,6) | 已消耗金额 |
+| concurrent_limit | int | 最大并发数，默认 5 |
 | rpm_limit | int | 每分钟最大请求数，-1 = 不限制 |
-| allowed_models | JSON | 空列表 = 允许所有模型 |
+| allowed_models | JSON | 模型白名单，空 = 全部允许 |
+| model_group_id | int FK NULL | 关联模型分组，优先于 allowed_models |
 | allowed_ips | JSON | IP 白名单，空 = 不限制 |
-| channel_group | varchar(64) | 渠道分组，空 = 可访问所有渠道 |
 | is_enabled | bool | |
-| quota_reset_day | smallint | 每月重置日（1~31），null = 不自动重置 |
-| quota_last_reset_at | datetime | 上次自动重置时间 |
+| quota_reset_day | smallint | 每月自动重置日（1~31） |
 | expires_at | datetime | null = 永不过期 |
 
-### request_logs（请求日志）
+### model_groups（模型分组）
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| id | bigint PK | |
-| request_id | varchar(36) | UUID，索引 |
-| api_key_id / api_key_name | | 反范式存储 |
-| channel_id / channel_name | | 反范式存储 |
-| model_requested / model_actual | varchar(64) | mapping 前后的模型名 |
-| prompt_tokens | int | 输入 token 数 |
-| completion_tokens | int | 输出 token 数 |
-| total_tokens | int | 总 token 数 |
-| cached_tokens | int | 缓存命中 token 数（Prompt Cache） |
-| cost | decimal(16,6) | 本次请求费用（USD） |
-| is_stream | bool | |
-| status_code | int | 上游响应码 |
-| latency_ms | int | |
-| error_message | text | |
-| ip_address | varchar(45) | |
+| id | int PK | |
+| name | varchar(128) UNIQUE | 分组名 |
+| models | JSON | 模型列表 |
+| created_at / updated_at | datetime | 自动管理 |
 
 ### model_prices（全局模型定价）
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | id | int PK | |
-| model | varchar(64) UNIQUE | 模型名称，如 `gpt-4o` |
-| prompt_price | decimal(16,6) | Prompt 输入单价（$/1M tokens） |
-| completion_price | decimal(16,6) | Completion 输出单价（$/1M tokens） |
-| cached_price | decimal(16,6) | 缓存命中单价（$/1M tokens），默认 0 |
-| currency | varchar(8) | 默认 `USD` |
-| is_active | bool | 默认 true |
-| created_at / updated_at | datetime | 自动管理 |
+| model | varchar(64) UNIQUE | 模型名 |
+| prompt_price | decimal(16,6) | $/1M tokens |
+| completion_price | decimal(16,6) | $/1M tokens |
+| cached_price | decimal(16,6) | 缓存命中价 $/1M tokens |
+| is_active | bool | |
 
-### 计费机制
+### request_logs（请求日志）
 
-每次请求完成后计算费用并从 Key 的 USD 余额中扣减：
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| id | bigint PK | |
+| request_id | varchar(36) | UUID |
+| api_key_id / api_key_name | | 反范式 |
+| channel_id / channel_name | | 反范式 |
+| model_requested / model_actual | varchar(64) | mapping 前后 |
+| prompt_tokens / completion_tokens / cached_tokens | int | token 计数 |
+| cost | decimal(16,6) | 本次费用 USD |
+| is_stream | bool | |
+| status_code / latency_ms / error_message / ip_address | | |
+
+### 计费
 
 ```
-non_cached = prompt_tokens - cached_tokens
-cost = (non_cached × prompt_price + cached_tokens × cached_price + completion_tokens × completion_price) / 1,000,000
+cost = ((prompt - cached) × prompt_price + cached × cached_price + completion × completion_price) / 1M
 ```
 
-**缓存命中折扣**：不同提供商的缓存命中价格差异较大：
-- Anthropic: 缓存命中约为 Prompt 价格的 10%
-- OpenAI: 缓存命中约为 Prompt 价格的 25%~50%
-- Gemini / DeepSeek: 缓存命中约为 Prompt 价格的 25%
+定价优先级：Channel `model_pricing` → 全局 `model_prices` 表。扣减使用 `F()` 原子操作。
 
-**定价优先级**:
-1. Channel 的 `model_pricing` JSON 字段（渠道级覆盖定价，含 `prompt` / `completion` / `cached` 三个价格）
-2. `model_prices` 全局定价表
-
-**内置价格表**: `services/pricing.py` 中的 `DEFAULT_MODEL_PRICES` 包含约 49 个主流模型（OpenAI GPT-5.x/4.x/o-series、Anthropic Claude 4.x/3.x、Google Gemini 2.x/1.5、Qwen3/2、DeepSeek）的 prompt / completion / cached 三个价格。可通过管理后台 Model Pricing 页面的 "Sync Defaults" 按钮一键导入。
-
-**配额检查**: 请求前检查 `quota_used < quota_total`（`quota_total = -1` 表示无限制）
-**扣减方式**: 使用 Tortoise ORM 的 `F()` 表达式实现原子扣减，避免并发竞争
+内置价格表（`services/pricing.py` `DEFAULT_MODEL_PRICES`）含 ~49 个主流模型，可通过管理后台 "Sync Defaults" 一键导入。
 
 ---
 
 ## API 参考
 
-### OpenAI 兼容代理（需 API Key 认证）
+### 代理端点（API Key 认证）
 
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| POST | `/v1/chat/completions` | Chat 补全（支持 stream=true） |
-| POST | `/v1/completions` | 传统补全（支持 stream=true） |
-| POST | `/v1/embeddings` | 向量嵌入 |
-| GET | `/v1/models` | 列出当前 Key 可用的模型 |
-
-认证方式: `Authorization: Bearer sk-xxxxx`
+| 方法 | 路径 | 认证 | 说明 |
+|------|------|------|------|
+| POST | `/v1/chat/completions` | Bearer | OpenAI Chat（支持 stream） |
+| POST | `/v1/completions` | Bearer | OpenAI 传统补全 |
+| POST | `/v1/embeddings` | Bearer | 向量嵌入 |
+| GET | `/v1/models` | Bearer | 当前 Key 可用模型 |
+| GET | `/v1/me` | Bearer | Key 配额/模型/定价信息 |
+| POST | `/v1/messages` | x-api-key 或 Bearer | Anthropic Messages（支持 stream） |
 
 请求示例：
+
 ```bash
+# OpenAI 格式
 curl http://localhost:8000/v1/chat/completions \
-  -H "Authorization: Bearer sk-your-key-here" \
+  -H "Authorization: Bearer sk-your-key" \
   -H "Content-Type: application/json" \
-  -d '{
-    "model": "gpt-4o",
-    "messages": [{"role": "user", "content": "Hello"}],
-    "stream": false
-  }'
-```
+  -d '{"model": "gpt-4o", "messages": [{"role": "user", "content": "Hello"}]}'
 
-流式请求：
-```bash
-curl -N http://localhost:8000/v1/chat/completions \
-  -H "Authorization: Bearer sk-your-key-here" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "gpt-4o",
-    "messages": [{"role": "user", "content": "Hello"}],
-    "stream": true
-  }'
-```
-
-错误响应格式（统一 OpenAI 风格）：
-```json
-{
-  "error": {
-    "message": "Spending quota exceeded",
-    "type": "rate_limit_error",
-    "code": "quota_exceeded"
-  }
-}
-```
-
-### Anthropic 兼容代理（需 API Key 认证）
-
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| POST | `/v1/messages` | Anthropic Messages API（支持 stream=true） |
-
-认证方式: `x-api-key: sk-xxxxx`（也支持 `Authorization: Bearer sk-xxxxx`）
-
-使用与 OpenAI 代理相同的 API Key，共享配额、并发限制和模型权限。
-
-请求示例：
-```bash
-curl http://localhost:8000/v1/messages \
-  -H "x-api-key: sk-your-key-here" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "claude-opus-4-6",
-    "max_tokens": 1024,
-    "messages": [{"role": "user", "content": "Hello"}]
-  }'
-```
-
-流式请求：
-```bash
+# Anthropic 格式（流式）
 curl -N http://localhost:8000/v1/messages \
-  -H "x-api-key: sk-your-key-here" \
+  -H "x-api-key: sk-your-key" \
   -H "Content-Type: application/json" \
-  -d '{
-    "model": "claude-opus-4-6",
-    "max_tokens": 1024,
-    "messages": [{"role": "user", "content": "Hello"}],
-    "stream": true
-  }'
+  -d '{"model": "claude-sonnet-4-6", "max_tokens": 1024, "stream": true, "messages": [{"role": "user", "content": "Hello"}]}'
 ```
 
-错误响应格式（Anthropic 风格）：
-```json
-{
-  "type": "error",
-  "error": {
-    "type": "rate_limit_error",
-    "message": "Spending quota exceeded"
-  }
-}
-```
-
-**实现原理**:
-- 当上游渠道 provider 为 `anthropic` 时，使用 **pass-through 直通模式**：请求体原样透传到上游 Anthropic 兼容端点，仅替换认证信息和模型名。完整支持 `tool_use`、`thinking`、`streaming` 等所有 Anthropic 原生特性。
-- 当上游渠道 provider 为 `openai`/`gemini`/`qwen` 时，在 HTTP 边界做 Anthropic↔OpenAI 格式双向转换（仅支持纯文本对话）。
-
-两种路径均复用全部现有管线（渠道路由、故障转移、配额、RPM、并发、计费、日志），不需要额外配置。
-
-#### Claude Code 直连配置
+#### Claude Code 直连
 
 ```bash
-# 方式一：环境变量
 export ANTHROPIC_BASE_URL=http://your-gateway:8000
 export ANTHROPIC_API_KEY=sk-your-five-api-key
-
-# 方式二：Claude Code settings.json
-{
-  "env": {
-    "ANTHROPIC_BASE_URL": "http://your-gateway:8000",
-    "ANTHROPIC_AUTH_TOKEN": "sk-your-five-api-key"
-  }
-}
 ```
 
-> **推荐**：Claude Code 使用 tool_use 进行代码编辑，必须配合 `provider: "anthropic"` 的渠道（如 Anthropic 官方、DeepSeek Anthropic 端点）才能完整工作。使用 `provider: "openai"` 的渠道只能进行纯文本对话。
+需配合 `provider: "anthropic"` 的渠道（如 Anthropic 官方、DeepSeek Anthropic 端点）以支持 tool_use。
 
-### 管理后台 API（需 JWT 认证）
+### 管理后台 API（JWT 认证 + RBAC 权限）
 
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| POST | `/api/admin/login` | 登录 → `{access_token}` |
-| GET | `/api/admin/me` | 当前管理员信息 |
-| PUT | `/api/admin/password` | 修改密码 |
-| GET/POST | `/api/admin/channels` | 渠道列表(分页) / 创建 |
-| GET/PUT/DELETE | `/api/admin/channels/{id}` | 渠道详情 / 更新 / 删除 |
-| POST | `/api/admin/channels/{id}/test` | 测试渠道连通性 |
-| POST | `/api/admin/channels/{id}/fetch-models` | 从上游拉取可用模型列表 |
-| POST | `/api/admin/channels/fetch-models-preview` | 无需保存渠道，直接传参拉取模型 |
-| GET | `/api/admin/channels/health/status` | 所有渠道健康状态 |
-| POST | `/api/admin/channels/{id}/recover` | 强制恢复被熔断的渠道 |
-| GET/POST | `/api/admin/keys` | Key列表(分页) / 创建(返回一次明文) |
-| GET/PUT/DELETE | `/api/admin/keys/{id}` | Key详情 / 更新 / 删除 |
-| POST | `/api/admin/keys/{id}/reset-quota` | 重置已用配额 |
-| GET/POST | `/api/admin/model-prices` | 模型定价列表(分页) / 创建 |
-| GET/PUT/DELETE | `/api/admin/model-prices/{id}` | 定价详情 / 更新 / 删除 |
-| GET | `/api/admin/model-prices/defaults` | 返回内置价格列表（不写库，仅参考） |
-| POST | `/api/admin/model-prices/sync-defaults` | 批量导入内置价格（已有的不覆盖） |
-| GET | `/api/admin/model-prices/unpriced` | 查询渠道中未设置价格的模型列表 |
-| GET | `/api/admin/logs` | 日志列表(分页+过滤) |
-| GET | `/api/admin/logs/{request_id}` | 单条日志详情 |
-| POST | `/api/admin/logs/cleanup` | 清理过期日志（可选 days 参数） |
-| GET | `/api/admin/stats/overview` | 总览统计 |
-| GET | `/api/admin/stats/usage?days=7` | 时序用量 |
-| GET | `/api/admin/stats/by-model?days=7` | 按模型统计 |
-| GET | `/api/admin/stats/by-key?days=7` | 按 Key 统计 |
-| GET | `/api/admin/stats/by-channel?days=7` | 按渠道统计 |
-| GET | `/api/admin/stats/error-rate?days=7` | 每日错误率趋势 |
-| GET | `/api/admin/stats/latency?days=7` | 延迟 P50/P95/P99 |
-| GET/POST | `/api/admin/users` | 管理员列表 / 创建（需 admin 角色） |
-| PUT/DELETE | `/api/admin/users/{id}` | 管理员更新 / 删除（需 admin 角色） |
-| GET | `/metrics` | Prometheus 指标端点（无需认证） |
+所有管理接口使用 `/api/*` 前缀，通过 `require_permission("resource:action")` 控制访问权限。
 
-分页参数: `?page=1&size=20`
-日志过滤参数: `?api_key_id=1&model=gpt-4o&status_code=200&start_date=...&end_date=...`
+| 方法 | 路径 | 权限 | 说明 |
+|------|------|------|------|
+| POST | `/api/login` | — | 登录 → access_token |
+| GET | `/api/me` | 登录即可 | 当前管理员信息（含角色、权限列表） |
+| PUT | `/api/password` | 登录即可 | 修改密码 |
+| GET/POST | `/api/channels` | channel:read / channel:write | 渠道列表/创建 |
+| GET/PUT/DELETE | `/api/channels/{id}` | channel:read / channel:write | 渠道详情/更新/删除 |
+| POST | `/api/channels/{id}/test` | channel:read | 测试渠道连通性 |
+| POST | `/api/channels/{id}/fetch-models` | channel:read | 从上游拉取模型 |
+| POST | `/api/channels/fetch-models-preview` | channel:read | 直接传参拉取模型 |
+| GET | `/api/channels/health/status` | channel:read | 渠道健康状态 |
+| POST | `/api/channels/{id}/recover` | channel:write | 恢复被熔断的渠道 |
+| GET/POST | `/api/keys` | key:read / key:write | Key 列表/创建 |
+| GET/PUT/DELETE | `/api/keys/{id}` | key:read / key:write | Key 详情/更新/删除 |
+| POST | `/api/keys/{id}/reset-quota` | key:write | 重置配额 |
+| GET/POST | `/api/model-groups` | model_group:read / model_group:write | 模型分组列表/创建 |
+| GET | `/api/model-groups/all` | model_group:read | 全量列表（下拉框用） |
+| GET/PUT/DELETE | `/api/model-groups/{id}` | model_group:read / model_group:write | 分组详情/更新/删除 |
+| GET | `/api/models` | channel:read | 模型汇总（含定价和渠道来源） |
+| GET/POST | `/api/model-prices` | model_price:read / model_price:write | 定价列表/创建 |
+| GET/PUT/DELETE | `/api/model-prices/{id}` | model_price:read / model_price:write | 定价详情/更新/删除 |
+| POST | `/api/model-prices/sync-defaults` | model_price:write | 导入内置价格 |
+| GET | `/api/model-prices/unpriced` | model_price:read | 未定价模型 |
+| GET | `/api/logs` | log:read | 日志列表（分页+过滤） |
+| POST | `/api/logs/cleanup` | log:write | 清理过期日志 |
+| GET | `/api/stats/overview` | stat:read | 总览统计 |
+| GET | `/api/stats/usage` | stat:read | 时序用量 |
+| GET | `/api/stats/by-model` | stat:read | 按模型统计 |
+| GET | `/api/stats/by-key` | stat:read | 按 Key 统计 |
+| GET | `/api/stats/by-channel` | stat:read | 按渠道统计 |
+| GET | `/api/stats/error-rate` | stat:read | 错误率趋势 |
+| GET | `/api/stats/latency` | stat:read | 延迟 P50/P95/P99 |
+| GET/POST | `/api/users` | user:read / user:write | 管理员列表/创建 |
+| PUT/DELETE | `/api/users/{id}` | user:write | 管理员更新/删除 |
+| GET/POST | `/api/roles` | role:read / role:write | 角色列表/创建 |
+| GET | `/api/roles/all` | 登录即可 | 全量角色列表（下拉框用） |
+| GET | `/api/roles/permissions` | 登录即可 | 所有可用权限定义 |
+| GET/PUT/DELETE | `/api/roles/{id}` | role:read / role:write | 角色详情/更新/删除 |
+| GET | `/metrics` | 无需认证 | Prometheus 指标 |
+
+分页: `?page=1&size=20`。日志过滤: `?api_key_id=&model=&status_code=&start_date=&end_date=`
 
 ---
 
-## 配置说明
+## 配置
 
-所有配置通过环境变量或 `.env` 文件管理：
+所有配置通过环境变量或 `.env` 管理，优先级：环境变量 > `.env` > 默认值。
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
 | `SECRET_KEY` | `change-me` | JWT 签名密钥，**必须修改** |
-| `JWT_ALGORITHM` | `HS256` | JWT 算法 |
-| `JWT_EXPIRE_MINUTES` | `1440` | JWT 过期时间（分钟），默认 24 小时 |
-| `MYSQL_HOST` | `127.0.0.1` | Docker 中自动设为 `mysql` |
-| `MYSQL_PORT` | `3306` | |
-| `MYSQL_USER` | `five` | |
-| `MYSQL_PASSWORD` | `five_password` | |
-| `MYSQL_DATABASE` | `five_api` | |
-| `REDIS_URL` | `redis://127.0.0.1:6379/0` | Docker 中自动设为 `redis://redis:6379/0` |
-| `INIT_ADMIN_USERNAME` | `admin` | 首次启动创建的管理员用户名 |
-| `INIT_ADMIN_PASSWORD` | `admin123` | 首次启动创建的管理员密码，**建议修改** |
+| `JWT_EXPIRE_MINUTES` | `1440` | JWT 过期（分钟） |
+| `MYSQL_HOST/PORT/USER/PASSWORD/DATABASE` | `127.0.0.1`/`3306`/`five`/`five_password`/`five_api` | |
+| `REDIS_URL` | `redis://127.0.0.1:6379/0` | |
+| `INIT_ADMIN_USERNAME/PASSWORD` | `admin`/`admin123` | 首次启动创建（Super Admin 角色） |
 
-Docker Compose 额外变量（仅根目录 `.env`）：
-
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `MYSQL_ROOT_PASSWORD` | `root_password` | MySQL root 密码 |
-| `BACKEND_PORT` | `8000` | 后端映射到宿主机的端口 |
-| `FRONTEND_PORT` | `80` | 前端映射到宿主机的端口 |
-| `REDIS_PORT` | `6379` | Redis 映射到宿主机的端口 |
-
-配置加载优先级: 环境变量 > `.env` 文件 > 默认值
+Docker Compose 额外: `MYSQL_ROOT_PASSWORD`、`BACKEND_PORT`(8000)、`FRONTEND_PORT`(80)、`REDIS_PORT`(6379)
 
 ---
 
@@ -829,293 +501,125 @@ Docker Compose 额外变量（仅根目录 `.env`）：
 
 ### 1. 创建渠道
 
-登录管理后台 → Channels → Add Channel：
+管理后台 → Channels → Add Channel。常见配置：
 
-**OpenAI 示例**:
-- Provider: `openai`
-- Base URL: `https://api.openai.com`
-- API Key: `sk-proj-xxxx`（你的 OpenAI Key）
-- Models: `gpt-4o`, `gpt-4o-mini`, `gpt-4.1`
+| Provider | Base URL | 说明 |
+|----------|----------|------|
+| `openai` | `https://api.openai.com` | OpenAI 及兼容中转 |
+| `anthropic` | `https://api.anthropic.com` | Claude 系列，/v1/messages |
+| `gemini` | `https://generativelanguage.googleapis.com/v1beta/openai` | Gemini OpenAI 兼容端点 |
+| `qwen` | `https://dashscope.aliyuncs.com/compatible-mode/v1` | 通义千问 |
+| `azure` | `https://{resource}.openai.azure.com` | Azure OpenAI |
+| `anthropic` | `https://api.deepseek.com/anthropic` | DeepSeek Anthropic 端点（推荐 Claude Code） |
 
-**Anthropic Claude 示例**:
-- Provider: `anthropic`
-- Base URL: `https://api.anthropic.com`
-- API Key: `sk-ant-xxxx`
-- Models: `claude-sonnet-4-6-20250819`, `claude-haiku-4-5-20251001`
-
-**Google Gemini 示例**（使用 OpenAI 兼容端点）:
-- Provider: `gemini`
-- Base URL: `https://generativelanguage.googleapis.com/v1beta/openai`
-- API Key: 你的 Google AI API Key
-- Models: `gemini-2.5-pro`, `gemini-2.5-flash`
-
-**Qwen 示例**（使用 DashScope 兼容端点）:
-- Provider: `qwen`
-- Base URL: `https://dashscope.aliyuncs.com/compatible-mode/v1`
-- API Key: 你的 DashScope Key
-- Models: `qwen3-max`, `qwen-plus`, `qwen-turbo`
-
-**DeepSeek 示例**（使用 Anthropic 兼容端点，推荐用于 Claude Code）:
-- Provider: `anthropic`
-- Base URL: `https://api.deepseek.com/anthropic`
-- API Key: 你的 DeepSeek API Key
-- Models: `deepseek-v4-pro`（或添加别名如 `claude-deepseek-v4-pro`）
-- Model Mapping: `{"claude-deepseek-v4-pro": "deepseek-v4-pro"}`（可选，用于 Claude Code 模型名映射）
-
-> DeepSeek 也提供 OpenAI 兼容端点（`https://api.deepseek.com`，provider 设为 `openai`），但 OpenAI 端点不支持 Anthropic tool_use 协议，仅适用于 `/v1/chat/completions` 的纯文本对话。
+同一模型可以同时配置 OpenAI 和 Anthropic 两种协议的渠道，系统会根据请求来源协议自动优先匹配（见协议优先路由）。
 
 ### 2. 创建 API Key
 
-Channels → API Keys → Create Key：
-- 设置名称、USD 配额（-1 = 无限，如 10 表示 $10）、最大并发数
-- RPM Limit: 每分钟最大请求数（-1 = 不限制，如 60 表示每分钟 60 次）
-- 创建后弹窗显示完整 Key（`sk-xxx`），**仅此一次**，请立即复制保存
+API Keys → Create Key：设置名称、USD 配额（-1=无限）、并发数、RPM。创建后的完整 Key 仅显示一次。
 
-### 3. 配置模型定价
+### 3. 模型分组（可选）
 
-Model Pricing → **Sync Defaults**（推荐）：
-- 点击 "Sync Defaults" 按钮一键导入内置的 49 个主流模型价格（含 prompt / completion / cached 三个价格）
-- 已存在的模型不会被覆盖，只新增缺失的
+Model Groups → 创建分组（如 "基础模型"）→ 添加模型列表 → 在 Key 编辑中关联分组。分组优先于 Key 上的 allowed_models。
 
-手动添加:
-- 点击 "Add Price"，填写模型名和三个价格（Prompt / Completion / Cached，单位 $/1M tokens）
+### 4. 配置定价
 
-渠道级覆盖定价:
-- 编辑渠道 → Custom Pricing → 为特定模型设置 P（Prompt）/ C（Completion）/ Ca（Cached）价格
-- 渠道定价优先于全局定价
+Model Pricing → **Sync Defaults** 一键导入内置价格。也可手动添加或在渠道编辑中设置渠道级覆盖价格。
 
-未定价提示:
-- 页面顶部会显示黄色警告卡片，列出已在渠道中配置但尚未设置价格的模型
-- 点击 "添加价格" 可快速跳转到添加表单
+### 5. 权限管理（可选）
 
-### 4. 调用 API
+Permissions → Roles：创建自定义角色，勾选需要的权限。
+Permissions → Authorization：创建管理员账号并分配角色。
 
-将网关地址当作 OpenAI API 使用：
+### 6. 调用 API
 
 ```python
 from openai import OpenAI
-
-client = OpenAI(
-    api_key="sk-your-gateway-key",
-    base_url="http://your-gateway:8000/v1",
-)
-
-response = client.chat.completions.create(
-    model="gpt-4o",     # 网关会路由到对应渠道
-    messages=[{"role": "user", "content": "Hello"}],
-)
-print(response.choices[0].message.content)
-```
-
-流式：
-```python
-stream = client.chat.completions.create(
-    model="gpt-4o",
-    messages=[{"role": "user", "content": "Hello"}],
-    stream=True,
-)
-for chunk in stream:
-    if chunk.choices[0].delta.content:
-        print(chunk.choices[0].delta.content, end="")
+client = OpenAI(api_key="sk-your-key", base_url="http://your-gateway:8000/v1")
+resp = client.chat.completions.create(model="gpt-4o", messages=[{"role": "user", "content": "Hello"}])
 ```
 
 ---
 
 ## 开发指南
 
-### 添加新的 Provider
+### 分层约定
 
-1. 在 `app/providers/` 下创建 `xxx_provider.py`
-2. 继承 `BaseProvider`，实现三个抽象方法：
-   - `transform_request(openai_request, endpoint)` → `(url_path, headers, body)`
-   - `transform_response(provider_response, endpoint)` → OpenAI 格式 dict
-   - `stream_transform(response, endpoint)` → 逐行 yield OpenAI SSE 格式
-3. 在 `app/providers/registry.py` 的 `PROVIDER_MAP` 中注册
+| 层 | 职责 | 示例 |
+|----|------|------|
+| `routers/` | 解析请求 → 调用服务 → 返回响应（薄层） | 定义 `send_fn` 闭包，调用 `execute_with_failover` |
+| `services/` | 可复用业务逻辑 | `proxy.py`、`pre_checks.py`、`quota.py`、`auth.py` |
+| `providers/` | 上游适配（请求转换 + 发送） | `openai_provider.py` |
+| `utils/` | 无状态工具函数 | `ip_check.py`、`key_generator.py` |
 
-如果新提供商有 OpenAI 兼容端点，可以直接复制 `openai_provider.py`。
+### 添加新 Provider
 
-### 添加新的管理 API
+1. `app/providers/xxx_provider.py` 继承 `BaseProvider`，实现 `transform_request`、`transform_response`、`stream_transform`
+2. `app/providers/registry.py` 的 `PROVIDER_MAP` 中注册
+3. 如果上游有 OpenAI 兼容端点，可直接复制 `openai_provider.py`
+4. 确定协议族归属：OpenAI 兼容加入 `OPENAI_PROTOCOL_PROVIDERS`，Anthropic 兼容加入 `ANTHROPIC_PROTOCOL_PROVIDERS`
 
-1. 在 `app/schemas/` 下定义 Pydantic 模型
-2. 在 `app/routers/` 下创建路由文件，使用 `Depends(get_current_admin)` 保护
-3. 在 `app/main.py` 的 `create_app()` 中注册 router
+### 添加新管理 API
 
-### 更新内置模型价格
+1. `app/schemas/` 定义 Pydantic 模型
+2. `app/routers/` 创建路由，用 `require_permission("resource:action")` 保护
+3. `app/main.py` 注册 router
+4. 如果引入新资源，在 `services/auth.py` 的 `ALL_PERMISSIONS` 中添加对应权限
 
-编辑 `backend/app/services/pricing.py` 中的 `DEFAULT_MODEL_PRICES` 字典，添加或更新模型价格条目。格式：
+### 添加新权限
 
-```python
-"model-name": {"prompt": 2.5, "completion": 10.0, "cached": 1.25},  # $/1M tokens
-```
+1. `services/auth.py` 的 `ALL_PERMISSIONS` 列表中添加新权限字符串
+2. 更新 `BUILTIN_ROLES` 中预置角色的权限列表
+3. 路由中使用 `require_permission("new:read")` / `require_permission("new:write")`
+4. 前端菜单/按钮中使用 `auth.hasPermission("new:read/write")`
 
-用户通过管理后台 "Sync Defaults" 按钮将新价格导入数据库（不覆盖已有条目）。
+### 新增前置策略
 
-### 前端开发
-
-- Element Plus 组件通过 `unplugin-auto-import` 自动导入，模板中直接使用即可
-- 在 `<script setup>` 中需要编程式使用时，显式 `import { ElMessage } from 'element-plus'`
-- API 模块在 `src/api/` 下，基于统一的 Axios client（自动附加 JWT、401 自动跳转登录）
-- 新增页面: 创建 `views/Xxx.vue` → 在 `router/index.ts` 中添加路由 → 在 `AdminLayout.vue` 侧边栏添加菜单项
+在 `services/pre_checks.py` 的 `run_pre_checks()` 中追加即可，所有代理路由自动生效。
 
 ### 代码约定
 
-- 后端所有 list 接口返回 `{"total": N, "items": [...]}` 分页格式
-- 错误响应统一 OpenAI 格式: `{"error": {"message", "type", "code"}}`
-- 认证: 代理路由用 API Key（`verify_api_key`），管理路由用 JWT（`get_current_admin`）
-- 异步操作: 所有数据库和 Redis 操作使用 `await`
-- Provider cleanup: 非流式在路由 `finally` 中释放并发+关闭 provider；流式在 `stream_proxy` 的 `finally` 中处理
+- 所有 list 接口返回 `{"total": N, "items": [...]}`
+- 错误响应：OpenAI 路由用 `openai_error()`，Anthropic 路由用 `anthropic_error()`
+- 认证：代理路由用 `verify_api_key`，管理路由用 `require_permission("xxx:read/write")`，仅需登录的端点用 `get_current_admin`
+- 数据库变更必须附带迁移文件（`migrations/` 按序号命名）
+- 函数职责单一，优先早返回减少嵌套
+- 注释解释"为什么"而非"做了什么"
+
+### 前端开发
+
+- Element Plus 组件自动导入，`<script setup>` 中需编程式使用时显式 import
+- API 模块在 `src/api/`，基于统一 Axios client（`baseURL: '/api'`，自动附加 JWT、401 跳转登录）
+- 权限控制：菜单用 `auth.hasPermission('xxx:read')`，按钮用 `auth.hasPermission('xxx:write')`
+- 新增页面：`views/Xxx.vue` → `router/index.ts` 添加路由和权限映射 → `AdminLayout.vue` 添加菜单项
 
 ---
 
-## 开发规范
-
-### 1. 代码简洁性
-
-- **拒绝冗余代码**：不写无用的变量、多余的 if-else、重复的逻辑。能一行表达的不写三行。
-- **函数职责单一**：每个函数只做一件事，函数体控制在 30 行以内。超过的拆分为子函数。
-- **命名即文档**：变量名、函数名、类名要准确表达意图，避免缩写歧义（`calc_cost` → `calculate_cost`，`ch` 仅在局部循环中使用）。
-- **早返回模式**：用 guard clause 提前返回，减少嵌套层级。
-
-```python
-# ✗ 不要这样
-def check(key):
-    if key is not None:
-        if key.is_enabled:
-            if not key.is_expired():
-                return True
-    return False
-
-# ✓ 应该这样
-def check(key):
-    if key is None:
-        return False
-    if not key.is_enabled:
-        return False
-    if key.is_expired():
-        return False
-    return True
-```
-
-### 2. 架构可复用性
-
-- **跨路由的通用逻辑必须提取到 `services/` 层**：认证检查放 `auth.py`，前置策略检查放 `pre_checks.py`，IP 工具放 `utils/ip_check.py`。路由文件（`routers/`）只负责解析请求 → 调用服务 → 返回响应。
-- **新增策略（限流、黑名单等）只改一处**：所有前置检查统一走 `run_pre_checks(api_key, model, raise_error)`（`services/pre_checks.py`），新增策略只需在此函数中追加，不需要改每个 proxy 路由。
-- **错误格式通过回调解耦**：使用 `openai_error()` / `anthropic_error()` 错误格式化器，业务逻辑不关心最终的响应格式。
-- **共享工具函数放 `utils/`**：如 `get_client_ip()`、`check_ip_allowed()` 等，避免在多个文件中重复定义相同逻辑。
-- **新增字段遵循现有模式**：参考 `allowed_models` 的实现路径（model → schema → router → frontend），保持一致性。
-
-```
-services/           # 业务逻辑层（可复用）
-├── auth.py         #   认证 + IP 白名单检查
-├── pre_checks.py   #   前置策略管线（quota / model / rpm）
-├── quota.py        #   配额检查与扣减
-└── ...
-
-routers/            # 路由层（薄，只做编排）
-├── openai_proxy.py #   await run_pre_checks() → 调用 provider → 返回
-└── anthropic_proxy.py
-
-utils/              # 无状态工具函数
-├── ip_check.py     #   IP 解析与匹配
-└── key_generator.py
-```
-
-### 3. 注释规范
-
-- **每个函数/方法必须写注释**：用简短的中文或英文说明函数的用途、参数含义、返回值。
-- **复杂业务逻辑加行内注释**：解释"为什么"而不是"做了什么"。代码本身说明做了什么，注释说明为什么这样做。
-- **不写废话注释**：`# 设置变量 x = 1` 这种注释没有价值，不要写。
-
-```python
-# ✓ 好的注释：解释为什么
-async def run_pre_checks(api_key: APIKey, model: str, raise_error=openai_error) -> None:
-    """统一前置检查管线：quota → model_access → RPM。
-    
-    所有代理路由共享此函数，新增策略只需在此追加。
-    raise_error 回调决定错误响应格式（OpenAI / Anthropic）。
-    """
-    # 先检查配额，避免无额度的请求消耗下游资源
-    if not await check_quota(api_key):
-        raise_error(429, "rate_limit_error", "quota_exceeded", "Spending quota exceeded")
-
-# ✗ 坏的注释：重复代码逻辑
-# 检查配额是否足够
-if not await check_quota(api_key):
-    # 抛出 429 错误
-    raise_error(429, ...)
-```
-
-### 4. 数据库变更
-
-- **每次 model 变更必须附带迁移文件**：放在 `backend/migrations/` 下，按序号命名（`001_xxx.sql`、`002_xxx.sql`）。
-- **MySQL 8.0 不支持 `ADD COLUMN IF NOT EXISTS`**：使用标准 `ALTER TABLE ... ADD COLUMN` 语法。
-- **迁移文件头部加注释**：说明用途和执行方式。
-
-### 5. 测试要求
-
-- **功能开发完成后必须实际测试**：启动服务，用 `curl` 或前端验证完整链路（创建 → 调用 → 拦截 → 放行）。
-- **覆盖正向和反向场景**：不仅测试"应该通过"的情况，也测试"应该被拒绝"的情况。
-- **流式和非流式都要测**：流式路径和非流式路径的代码分支不同，都需要验证。
-
----
-
-## Docker Compose 服务说明
+## Docker Compose
 
 | 服务 | 端口 | 说明 |
 |------|------|------|
-| mysql | 3306 | MySQL 8.0，数据持久化到 `mysql_data` named volume |
-| redis | 6379 | Redis 7 Alpine，并发限制 + 缓存 |
-| backend | 8000 | FastAPI，等待 mysql/redis healthy 后启动 |
-| frontend | 80 | 多阶段构建：npm build → Nginx 提供 SPA + 反向代理 |
+| mysql | 3306 | MySQL 8.0，数据持久化到 named volume |
+| redis | 6379 | 并发限制 + RPM 限流 |
+| backend | 8000 | FastAPI，等待 mysql/redis healthy |
+| frontend | 80 | npm build → Nginx（SPA + 反代 + SSE 支持） |
 
-所有服务配置 `restart: unless-stopped`，异常退出后自动重启。
-
-Nginx 配置要点：
-- `/` → SPA fallback（`try_files $uri /index.html`）
-- `/api/` → 转发到 `backend:8000`
-- `/v1/` → 转发到 `backend:8000`，**关闭 proxy_buffering** 以支持 SSE 流式，300s 超时
-- 静态资源 `/assets/` 设置 1 年缓存
-- 启用 gzip 压缩
+Nginx 要点：`/v1/` 反代关闭 `proxy_buffering` 以支持 SSE，300s 超时。
 
 ---
 
 ## 常见问题
 
-### 首次启动没有管理员？
+**首次启动没有管理员？** 检查 `.env` 中 `INIT_ADMIN_USERNAME/PASSWORD`，应用启动时 admins 表为空则自动创建（Super Admin 角色）。同时自动创建预置角色（Super Admin、Viewer）。
 
-检查 `.env` 中 `INIT_ADMIN_USERNAME` 和 `INIT_ADMIN_PASSWORD` 是否配置。应用启动时会自动检查 admins 表，为空则创建初始管理员。
+**流式响应不工作？** 确认 Nginx 配置了 `proxy_buffering off`，所有中间反代层都关闭了 response buffering。
 
-### 流式响应不工作？
+**Token 计费不准确？** 非流式直接用上游 `usage`；流式从 SSE 事件中提取。上游未返回 usage 时 tokens 记为 0、cost 为 $0。定价查找：Channel `model_pricing` → 全局 `model_prices` 表。
 
-1. 确认 Nginx 配置了 `proxy_buffering off`（已在 nginx.conf 中设置）
-2. 如果在反代后面，确保所有中间层都关闭了 response buffering
-3. 检查 `X-Accel-Buffering: no` 响应头是否正确传递
+**渠道测试失败？** OpenAI/Gemini/Qwen 测试 `GET /v1/models`，Anthropic 测试发送最小请求到 `/v1/messages`。检查 Base URL 和 API Key。
 
-### Token 计费不准确？
+**日志追踪？** 从响应头获取 `X-Request-ID` → 管理后台 Logs 页面搜索。
 
-- 非流式: 直接使用上游返回的 `usage` 字段
-- 流式: OpenAI/Gemini/Qwen 在 `stream_options.include_usage=true` 时最后一个 chunk 包含 usage；Anthropic 从 `message_start`（input_tokens）和 `message_delta`（output_tokens）事件中提取
-- 如果上游未返回 usage 信息，tokens 记为 0，cost 为 $0
-- 费用计算: `cost = ((prompt - cached) × prompt_price + cached × cached_price + completion × completion_price) / 1M`
-- 缓存命中: Anthropic provider 自动将 `cache_read_input_tokens` 映射为 `cached_tokens`；OpenAI 兼容端点从 `prompt_tokens_details.cached_tokens` 提取
-- 定价查找顺序: Channel 的 `model_pricing` → 全局 `model_prices` 表
-- 如果没有配置任何价格，cost 为 $0（不会阻止请求）
+**权限不够？** 403 Permission denied — 当前管理员的角色缺少所需权限。联系 Super Admin 调整角色权限或分配其他角色。
 
-### 缓存命中 token 始终为 0？
-
-- **Anthropic 直连**（provider=`anthropic`）：自动提取 `cache_read_input_tokens`，需要上游启用 prompt caching（发送 `cache_control` 标记）
-- **OpenAI 直连**：自动缓存 > 1024 tokens 的 prompt 前缀，第二次相同请求会在 `prompt_tokens_details.cached_tokens` 中返回
-- **第三方中转**（provider=`openai` 但 base_url 指向中转）：取决于中转是否透传缓存信息，部分中转不返回 `cached_tokens` 字段
-
-### 渠道测试失败？
-
-- OpenAI/Gemini/Qwen: 测试 `GET /v1/models` 端点
-- Anthropic: 测试发送一个最小请求到 `/v1/messages`
-- 检查 Base URL 和 API Key 是否正确
-
-### 模型价格从哪里来？
-
-1. **内置价格**：`backend/app/services/pricing.py` 的 `DEFAULT_MODEL_PRICES` 包含 49 个主流模型价格
-2. **一键导入**：管理后台 Model Pricing → "Sync Defaults" 按钮
-3. **手动添加/编辑**：管理后台直接添加或修改价格
-4. **渠道覆盖**：编辑渠道 → Custom Pricing 为特定渠道设置不同价格
+**同一模型两个渠道如何路由？** 系统根据请求协议自动优先匹配：`/v1/messages` 优先走 Anthropic 渠道，`/v1/chat/completions` 优先走 OpenAI 兼容渠道。不匹配的渠道作为故障转移备选。

@@ -5,7 +5,7 @@
         <h3>Channels</h3>
         <p>Manage upstream LLM provider connections</p>
       </div>
-      <el-button v-if="auth.isAdmin()" type="primary" @click="openCreate">Add Channel</el-button>
+      <el-button v-if="auth.hasPermission('channel:write')" type="primary" @click="openCreate">Add Channel</el-button>
     </div>
 
     <el-card shadow="never">
@@ -15,12 +15,6 @@
         <el-table-column prop="provider" label="Provider" width="100">
           <template #default="{ row }">
             <el-tag size="small" round>{{ row.provider }}</el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column prop="group" label="Group" width="90" show-overflow-tooltip>
-          <template #default="{ row }">
-            <el-tag v-if="row.group" size="small" type="info" round>{{ row.group }}</el-tag>
-            <span v-else style="color: #c0c4cc; font-size: 12px">-</span>
           </template>
         </el-table-column>
         <el-table-column label="Health" width="72" align="center">
@@ -40,10 +34,10 @@
         <el-table-column prop="weight" label="Weight" width="72" align="center" />
         <el-table-column label="Enabled" width="76" align="center">
           <template #default="{ row }">
-            <el-switch v-model="row.is_enabled" :disabled="!auth.isAdmin()" @change="toggleEnabled(row)" />
+            <el-switch v-model="row.is_enabled" :disabled="!auth.hasPermission('channel:write')" @change="toggleEnabled(row)" />
           </template>
         </el-table-column>
-        <el-table-column v-if="auth.isAdmin()" label="Actions" width="230" fixed="right">
+        <el-table-column v-if="auth.hasPermission('channel:write')" label="Actions" width="230" fixed="right">
           <template #default="{ row }">
             <el-button text type="primary" size="small" @click="openEdit(row)">Edit</el-button>
             <el-button text type="success" size="small" @click="testChannel(row)">Test</el-button>
@@ -117,7 +111,7 @@
           <div style="display: flex; gap: 8px; width: 100%">
             <el-select v-model="form.models" multiple filterable allow-create style="flex: 1" placeholder="输入模型名后按 Enter 添加">
             </el-select>
-            <el-button @click="fetchModels" :loading="fetchingModels" :disabled="!editingId">Fetch</el-button>
+            <el-button @click="fetchModels" :loading="fetchingModels" :disabled="!form.base_url || !form.api_key">Fetch</el-button>
           </div>
           <div class="form-hint">此渠道支持的模型列表。点击 Fetch 从上游自动拉取，或手动输入模型名按回车添加</div>
         </el-form-item>
@@ -142,11 +136,6 @@
         </el-form-item>
 
         <el-divider content-position="left" style="margin: 20px 0 16px">路由与计费</el-divider>
-
-        <el-form-item label="Group">
-          <el-input v-model="form.group" placeholder="留空 = 所有 Key 可访问" />
-          <div class="form-hint">渠道分组标签。Key 的 Channel Group 非空时，只能访问匹配或无分组的渠道</div>
-        </el-form-item>
 
         <el-form-item label="Priority">
           <el-input-number v-model="form.priority" :min="0" />
@@ -235,7 +224,7 @@ const emptyForm = () => ({
   name: '', provider: 'openai', base_url: '', api_key: '',
   models: [] as string[], model_mapping: {} as Record<string, string>,
   model_pricing: {} as Record<string, { prompt: number; completion: number; cached: number }>,
-  group: '', priority: 0, weight: 1, timeout: 120,
+  priority: 0, weight: 1, timeout: 120,
 })
 const form = ref(emptyForm())
 
@@ -270,10 +259,18 @@ async function recoverChannel(row: any) {
 }
 
 async function fetchModels() {
-  if (!editingId.value) return
   fetchingModels.value = true
   try {
-    const res = await channelsApi.fetchModels(editingId.value)
+    let res
+    if (editingId.value) {
+      res = await channelsApi.fetchModels(editingId.value)
+    } else {
+      res = await channelsApi.fetchModelsPreview({
+        provider: form.value.provider,
+        base_url: form.value.base_url,
+        api_key: form.value.api_key,
+      })
+    }
     const existing = new Set(form.value.models)
     let added = 0
     for (const m of res.models) {

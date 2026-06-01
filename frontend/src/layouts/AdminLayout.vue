@@ -10,34 +10,46 @@
         router
         style="border-right: none"
       >
-        <el-menu-item index="/">
+        <el-menu-item v-if="auth.hasPermission('stat:read')" index="/">
           <el-icon><DataBoard /></el-icon>
           <span>Dashboard</span>
         </el-menu-item>
-        <el-menu-item index="/channels">
+        <el-menu-item v-if="auth.hasPermission('channel:read')" index="/channels">
           <el-icon><Connection /></el-icon>
           <span>Channels</span>
         </el-menu-item>
-        <el-menu-item index="/models">
+        <el-menu-item v-if="auth.hasPermission('channel:read')" index="/models">
           <el-icon><Menu /></el-icon>
           <span>Models</span>
         </el-menu-item>
-        <el-menu-item index="/keys">
+        <el-menu-item v-if="auth.hasPermission('key:read')" index="/keys">
           <el-icon><Key /></el-icon>
           <span>API Keys</span>
         </el-menu-item>
-        <el-menu-item index="/model-prices">
+        <el-menu-item v-if="auth.hasPermission('model_group:read')" index="/model-groups">
+          <el-icon><FolderOpened /></el-icon>
+          <span>Model Groups</span>
+        </el-menu-item>
+        <el-menu-item v-if="auth.hasPermission('model_price:read')" index="/model-prices">
           <el-icon><PriceTag /></el-icon>
           <span>Pricing</span>
         </el-menu-item>
-        <el-menu-item index="/logs">
+        <el-menu-item v-if="auth.hasPermission('log:read')" index="/logs">
           <el-icon><Document /></el-icon>
           <span>Logs</span>
         </el-menu-item>
-        <el-menu-item v-if="auth.isAdmin()" index="/admins">
-          <el-icon><User /></el-icon>
-          <span>Admins</span>
-        </el-menu-item>
+        <el-sub-menu v-if="auth.hasAnyPermission('user:read', 'role:read')" index="permission">
+          <template #title>
+            <el-icon><Lock /></el-icon>
+            <span>Permissions</span>
+          </template>
+          <el-menu-item v-if="auth.hasPermission('user:read')" index="/admins">
+            <span>Authorization</span>
+          </el-menu-item>
+          <el-menu-item v-if="auth.hasPermission('role:read')" index="/roles">
+            <span>Roles</span>
+          </el-menu-item>
+        </el-sub-menu>
       </el-menu>
     </el-aside>
     <el-container>
@@ -48,7 +60,7 @@
             <div class="user-info">
               <div class="user-avatar">{{ (auth.username || 'A')[0].toUpperCase() }}</div>
               <span class="user-name">{{ auth.username }}</span>
-              <el-tag v-if="auth.role" :type="auth.role === 'admin' ? 'danger' : 'info'" size="small" round style="margin-left: 6px">{{ auth.role }}</el-tag>
+              <el-tag v-if="auth.roleName" size="small" round style="margin-left: 6px">{{ auth.roleName }}</el-tag>
             </div>
             <template #dropdown>
               <el-dropdown-menu>
@@ -69,7 +81,7 @@
 import { onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
-import { DataBoard, Connection, Key, Document, PriceTag, User, Menu } from '@element-plus/icons-vue'
+import { DataBoard, Connection, Key, Document, PriceTag, Menu, FolderOpened, Lock } from '@element-plus/icons-vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -167,5 +179,23 @@ function handleLogout() {
 
 :deep(.el-menu-item:hover) {
   background: #f8fafc;
+}
+
+:deep(.el-sub-menu__title) {
+  height: 44px;
+  line-height: 44px;
+  margin: 2px 8px;
+  border-radius: 8px;
+  font-size: 14px;
+  color: #64748b;
+}
+
+:deep(.el-sub-menu__title:hover) {
+  background: #f8fafc;
+}
+
+:deep(.el-sub-menu .el-menu-item) {
+  padding-left: 52px !important;
+  min-width: auto;
 }
 </style>

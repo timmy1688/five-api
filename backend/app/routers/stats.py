@@ -1,20 +1,20 @@
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Query
 from tortoise.functions import Count, Sum
 
-from app.models import Admin, APIKey, Channel, RequestLog
+from app.models import User, APIKey, Channel, RequestLog
 from app.schemas.stats import (
     ChannelUsage, ErrorRatePoint, KeyUsage, LatencyStats, LatencyTrendPoint,
     ModelUsage, StatsOverview, ThroughputStats, UsagePoint,
 )
-from app.services.auth import get_current_admin
+from app.services.auth import require_permission
 
-router = APIRouter(prefix="/api/admin/stats", tags=["admin-stats"])
+router = APIRouter(prefix="/api/stats", tags=["stats"])
 
 
 @router.get("/overview", response_model=StatsOverview)
-async def overview(_: Admin = Depends(get_current_admin)):
+async def overview(_: User = require_permission("stat:read")):
     now = datetime.now(timezone.utc)
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
 
@@ -46,7 +46,7 @@ async def overview(_: Admin = Depends(get_current_admin)):
 @router.get("/usage", response_model=list[UsagePoint])
 async def usage(
     days: int = Query(7, ge=1, le=90),
-    _: Admin = Depends(get_current_admin),
+    _: User = require_permission("stat:read"),
 ):
     now = datetime.now(timezone.utc)
     start = now - timedelta(days=days)
@@ -75,7 +75,7 @@ async def usage(
 @router.get("/by-model", response_model=list[ModelUsage])
 async def by_model(
     days: int = Query(7, ge=1, le=90),
-    _: Admin = Depends(get_current_admin),
+    _: User = require_permission("stat:read"),
 ):
     start = datetime.now(timezone.utc) - timedelta(days=days)
     results = (
@@ -92,7 +92,7 @@ async def by_model(
 @router.get("/by-key", response_model=list[KeyUsage])
 async def by_key(
     days: int = Query(7, ge=1, le=90),
-    _: Admin = Depends(get_current_admin),
+    _: User = require_permission("stat:read"),
 ):
     start = datetime.now(timezone.utc) - timedelta(days=days)
     results = (
@@ -109,7 +109,7 @@ async def by_key(
 @router.get("/by-channel", response_model=list[ChannelUsage])
 async def by_channel(
     days: int = Query(7, ge=1, le=90),
-    _: Admin = Depends(get_current_admin),
+    _: User = require_permission("stat:read"),
 ):
     """按渠道统计请求量、Token 和费用。"""
     start = datetime.now(timezone.utc) - timedelta(days=days)
@@ -127,7 +127,7 @@ async def by_channel(
 @router.get("/error-rate", response_model=list[ErrorRatePoint])
 async def error_rate(
     days: int = Query(7, ge=1, le=90),
-    _: Admin = Depends(get_current_admin),
+    _: User = require_permission("stat:read"),
 ):
     """每日错误率趋势。"""
     start = datetime.now(timezone.utc) - timedelta(days=days)
@@ -153,7 +153,7 @@ async def error_rate(
 @router.get("/latency", response_model=LatencyStats)
 async def latency(
     days: int = Query(7, ge=1, le=90),
-    _: Admin = Depends(get_current_admin),
+    _: User = require_permission("stat:read"),
 ):
     """请求延迟 P50/P95/P99 + 按天趋势。"""
     start = datetime.now(timezone.utc) - timedelta(days=days)
@@ -206,7 +206,7 @@ async def latency(
 @router.get("/throughput", response_model=ThroughputStats)
 async def throughput(
     days: int = Query(7, ge=1, le=90),
-    _: Admin = Depends(get_current_admin),
+    _: User = require_permission("stat:read"),
 ):
     """实时吞吐量：当前 QPS/RPM/TPM + 历史峰值。"""
     from tortoise import connections

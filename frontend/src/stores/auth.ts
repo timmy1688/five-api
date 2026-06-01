@@ -5,7 +5,8 @@ import { authApi } from '@/api/auth'
 export const useAuthStore = defineStore('auth', () => {
   const token = ref(localStorage.getItem('token') || '')
   const username = ref('')
-  const role = ref('')
+  const roleName = ref('')
+  const permissions = ref<string[]>([])
 
   async function login(user: string, password: string) {
     const res = await authApi.login(user, password)
@@ -17,17 +18,25 @@ export const useAuthStore = defineStore('auth', () => {
   function logout() {
     token.value = ''
     username.value = ''
-    role.value = ''
+    roleName.value = ''
+    permissions.value = []
     localStorage.removeItem('token')
   }
 
   async function fetchMe() {
     const res = await authApi.me()
     username.value = res.username
-    role.value = res.role || 'admin'
+    roleName.value = res.role_name || ''
+    permissions.value = res.permissions || []
   }
 
-  const isAdmin = () => role.value === 'admin'
+  function hasPermission(perm: string): boolean {
+    return permissions.value.includes(perm)
+  }
 
-  return { token, username, role, login, logout, fetchMe, isAdmin }
+  function hasAnyPermission(...perms: string[]): boolean {
+    return perms.some(p => permissions.value.includes(p))
+  }
+
+  return { token, username, roleName, permissions, login, logout, fetchMe, hasPermission, hasAnyPermission }
 })

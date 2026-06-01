@@ -1,11 +1,11 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
-from app.models import Admin, Channel, ModelPrice
+from app.models import User, Channel, ModelPrice
 from app.schemas.model_price import ModelPriceCreate, ModelPriceResponse, ModelPriceUpdate
-from app.services.auth import get_current_admin, require_admin_role
+from app.services.auth import require_permission
 from app.services.pricing import DEFAULT_MODEL_PRICES
 
-router = APIRouter(prefix="/api/admin/model-prices", tags=["admin-model-prices"])
+router = APIRouter(prefix="/api/model-prices", tags=["model-prices"])
 
 
 def _to_response(mp: ModelPrice) -> ModelPriceResponse:
@@ -26,7 +26,7 @@ def _to_response(mp: ModelPrice) -> ModelPriceResponse:
 async def list_model_prices(
     page: int = Query(1, ge=1),
     size: int = Query(50, ge=1, le=200),
-    _: Admin = Depends(get_current_admin),
+    _: User = require_permission("model_price:read"),
 ):
     total = await ModelPrice.all().count()
     items = await ModelPrice.all().order_by("model").offset((page - 1) * size).limit(size)
@@ -34,7 +34,7 @@ async def list_model_prices(
 
 
 @router.get("/defaults")
-async def get_defaults(_: Admin = Depends(get_current_admin)):
+async def get_defaults(_: User = require_permission("model_price:read")):
     return [
         {"model": model, **prices}
         for model, prices in sorted(DEFAULT_MODEL_PRICES.items())
@@ -42,7 +42,7 @@ async def get_defaults(_: Admin = Depends(get_current_admin)):
 
 
 @router.get("/unpriced")
-async def get_unpriced_models(_: Admin = Depends(get_current_admin)):
+async def get_unpriced_models(_: User = require_permission("model_price:read")):
     channels = await Channel.all().values("id", "name", "models", "model_mapping", "model_pricing")
     priced_models = set()
     for mp in await ModelPrice.filter(is_active=True).values_list("model", flat=True):
@@ -64,7 +64,7 @@ async def get_unpriced_models(_: Admin = Depends(get_current_admin)):
 
 
 @router.post("/sync-defaults")
-async def sync_defaults(_: Admin = Depends(require_admin_role)):
+async def sync_defaults(_: User = require_permission("model_price:write")):
     created = 0
     for model, prices in DEFAULT_MODEL_PRICES.items():
         existing = await ModelPrice.get_or_none(model=model)
@@ -80,7 +80,7 @@ async def sync_defaults(_: Admin = Depends(require_admin_role)):
 
 
 @router.post("", response_model=ModelPriceResponse, status_code=status.HTTP_201_CREATED)
-async def create_model_price(body: ModelPriceCreate, _: Admin = Depends(require_admin_role)):
+async def create_model_price(body: ModelPriceCreate, _: User = require_permission("model_price:write")):
     existing = await ModelPrice.get_or_none(model=body.model)
     if existing:
         raise HTTPException(status_code=409, detail=f"Price for model '{body.model}' already exists")
@@ -89,7 +89,7 @@ async def create_model_price(body: ModelPriceCreate, _: Admin = Depends(require_
 
 
 @router.get("/{price_id}", response_model=ModelPriceResponse)
-async def get_model_price(price_id: int, _: Admin = Depends(get_current_admin)):
+async def get_model_price(price_id: int, _: User = require_permission("model_price:read")):
     mp = await ModelPrice.get_or_none(id=price_id)
     if mp is None:
         raise HTTPException(status_code=404, detail="Model price not found")
@@ -97,7 +97,7 @@ async def get_model_price(price_id: int, _: Admin = Depends(get_current_admin)):
 
 
 @router.put("/{price_id}", response_model=ModelPriceResponse)
-async def update_model_price(price_id: int, body: ModelPriceUpdate, _: Admin = Depends(require_admin_role)):
+async def update_model_price(price_id: int, body: ModelPriceUpdate, _: User = require_permission("model_price:write")):
     mp = await ModelPrice.get_or_none(id=price_id)
     if mp is None:
         raise HTTPException(status_code=404, detail="Model price not found")
@@ -109,7 +109,7 @@ async def update_model_price(price_id: int, body: ModelPriceUpdate, _: Admin = D
 
 
 @router.delete("/{price_id}")
-async def delete_model_price(price_id: int, _: Admin = Depends(require_admin_role)):
+async def delete_model_price(price_id: int, _: User = require_permission("model_price:write")):
     deleted = await ModelPrice.filter(id=price_id).delete()
     if not deleted:
         raise HTTPException(status_code=404, detail="Model price not found")

@@ -5,7 +5,7 @@
         <h3>Request Logs</h3>
         <p>Monitor API requests, token usage and costs</p>
       </div>
-      <el-popconfirm v-if="auth.isAdmin()" title="Delete logs older than 90 days?" @confirm="cleanupLogs">
+      <el-popconfirm v-if="auth.hasPermission('log:write')" title="Delete logs older than 90 days?" @confirm="cleanupLogs">
         <template #reference>
           <el-button type="warning" plain>Cleanup</el-button>
         </template>

@@ -5,7 +5,7 @@
         <h3>API Keys</h3>
         <p>Create and manage API keys with usage quotas</p>
       </div>
-      <el-button v-if="auth.isAdmin()" type="primary" @click="openCreate">Create Key</el-button>
+      <el-button v-if="auth.hasPermission('key:write')" type="primary" @click="openCreate">Create Key</el-button>
     </div>
 
     <el-card shadow="never">
@@ -58,6 +58,12 @@
             <span v-else style="color: #c0c4cc">-</span>
           </template>
         </el-table-column>
+        <el-table-column label="Group" min-width="100">
+          <template #default="{ row }">
+            <el-tag v-if="row.model_group_name" size="small" type="success">{{ row.model_group_name }}</el-tag>
+            <el-tag v-else size="small" type="info">Default</el-tag>
+          </template>
+        </el-table-column>
         <el-table-column prop="concurrent_limit" label="Concur." width="72" align="center" />
         <el-table-column label="RPM" width="72" align="center">
           <template #default="{ row }">
@@ -67,10 +73,10 @@
         </el-table-column>
         <el-table-column label="Enabled" width="76" align="center">
           <template #default="{ row }">
-            <el-switch v-model="row.is_enabled" :disabled="!auth.isAdmin()" @change="toggleEnabled(row)" />
+            <el-switch v-model="row.is_enabled" :disabled="!auth.hasPermission('key:write')" @change="toggleEnabled(row)" />
           </template>
         </el-table-column>
-        <el-table-column v-if="auth.isAdmin()" label="Actions" width="250" fixed="right">
+        <el-table-column v-if="auth.hasPermission('key:write')" label="Actions" width="250" fixed="right">
           <template #default="{ row }">
             <el-button text type="info" size="small" @click="showDetail(row)">View</el-button>
             <el-button text type="primary" size="small" @click="openEdit(row)">Edit</el-button>
@@ -125,17 +131,23 @@
           <div style="font-size: 12px; color: #909399">Requests per minute. -1 = unlimited</div>
         </el-form-item>
         <el-form-item label="Allowed Models">
-          <el-select v-model="form.allowed_models" multiple filterable allow-create style="width: 100%" placeholder="Empty = all models">
+          <el-select v-model="form.allowed_models" multiple filterable allow-create style="width: 100%" placeholder="Empty = all models" :disabled="!!form.model_group_id">
+            <el-option v-for="m in availableModels" :key="m" :label="m" :value="m" />
           </el-select>
+        </el-form-item>
+        <el-form-item label="Model Group">
+          <el-select v-model="form.model_group_id" clearable placeholder="No group (use Allowed Models above)" style="width: 100%" @change="onModelGroupChange">
+            <el-option v-for="g in modelGroups" :key="g.id" :label="g.name" :value="g.id">
+              <span>{{ g.name }}</span>
+              <span style="float: right; color: #94a3b8; font-size: 12px">{{ g.models.length }} models</span>
+            </el-option>
+          </el-select>
+          <div style="font-size: 12px; color: #909399">选择模型分组后将覆盖上方的 Allowed Models 设置。</div>
         </el-form-item>
         <el-form-item label="Allowed IPs">
           <el-select v-model="form.allowed_ips" multiple filterable allow-create style="width: 100%" placeholder="Empty = all IPs allowed">
           </el-select>
           <div style="font-size: 12px; color: #909399">IP addresses or CIDR ranges (e.g. 192.168.1.100, 10.0.0.0/24). Empty = no restriction.</div>
-        </el-form-item>
-        <el-form-item label="Channel Group">
-          <el-input v-model="form.channel_group" placeholder="留空 = 可访问所有渠道" />
-          <div style="font-size: 12px; color: #909399">限制此 Key 只能访问对应分组的渠道。留空表示不限制。</div>
         </el-form-item>
       </el-form>
       <template #footer>
@@ -216,8 +228,15 @@
           </div>
         </div>
 
+        <div class="detail-section-title">Model Group</div>
+        <div style="margin-bottom: 16px">
+          <el-tag v-if="detailRow.model_group_name" size="small" type="success">{{ detailRow.model_group_name }}</el-tag>
+          <span v-else style="color: #94a3b8; font-size: 13px">No group (using Allowed Models)</span>
+        </div>
+
         <div class="detail-section-title">Allowed Models</div>
-        <div v-if="detailRow.allowed_models.length > 0" style="display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 16px">
+        <div v-if="detailRow.model_group_name" style="color: #94a3b8; font-size: 13px; margin-bottom: 16px">Overridden by Model Group</div>
+        <div v-else-if="detailRow.allowed_models.length > 0" style="display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 16px">
           <el-tag v-for="m in detailRow.allowed_models" :key="m" size="small">{{ m }}</el-tag>
         </div>
         <div v-else style="color: #94a3b8; font-size: 13px; margin-bottom: 16px">All models allowed</div>
@@ -227,12 +246,6 @@
           <el-tag v-for="ip in detailRow.allowed_ips" :key="ip" size="small" type="info">{{ ip }}</el-tag>
         </div>
         <div v-else style="color: #94a3b8; font-size: 13px; margin-bottom: 16px">No IP restriction</div>
-
-        <div class="detail-section-title">Channel Group</div>
-        <div style="margin-bottom: 16px">
-          <el-tag v-if="detailRow.channel_group" size="small" type="info">{{ detailRow.channel_group }}</el-tag>
-          <span v-else style="color: #94a3b8; font-size: 13px">All channels accessible</span>
-        </div>
       </template>
     </el-drawer>
   </div>
@@ -241,6 +254,8 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted } from 'vue'
 import { keysApi } from '@/api/keys'
+import { modelGroupsApi } from '@/api/model_groups'
+import { modelsApi } from '@/api/models'
 import { useAuthStore } from '@/stores/auth'
 import { ElMessage } from 'element-plus'
 import { View, Hide, CopyDocument } from '@element-plus/icons-vue'
@@ -261,6 +276,8 @@ const detailVisible = ref(false)
 const detailRow = ref<any>(null)
 const keyVisible = ref(false)
 const visibleKeys = reactive<Record<number, boolean>>({})
+const modelGroups = ref<any[]>([])
+const availableModels = ref<string[]>([])
 
 function formatTime(t: string) {
   return dayjs(t).format('YYYY-MM-DD HH:mm:ss')
@@ -285,10 +302,16 @@ const emptyForm = () => ({
   name: '', quota_total: -1, concurrent_limit: 5, rpm_limit: -1,
   allowed_models: [] as string[],
   allowed_ips: [] as string[],
-  channel_group: '',
+  model_group_id: null as number | null,
   quota_reset_day: null as number | null,
 })
 const form = ref(emptyForm())
+
+function onModelGroupChange(val: number | null) {
+  if (val) {
+    form.value.allowed_models = []
+  }
+}
 
 async function load() {
   loading.value = true
@@ -318,7 +341,7 @@ function openEdit(row: any) {
     rpm_limit: row.rpm_limit,
     allowed_models: [...row.allowed_models],
     allowed_ips: [...(row.allowed_ips || [])],
-    channel_group: row.channel_group || '',
+    model_group_id: row.model_group_id ?? null,
     quota_reset_day: row.quota_reset_day ?? null,
   }
   dialogVisible.value = true
@@ -382,7 +405,22 @@ async function copyKey() {
   }
 }
 
-onMounted(load)
+async function loadModelGroups() {
+  try {
+    modelGroups.value = await modelGroupsApi.listAll()
+  } catch {
+    // silent
+  }
+}
+
+async function loadAvailableModels() {
+  try {
+    const res = await modelsApi.list()
+    availableModels.value = (res.items || []).map((m: any) => m.model)
+  } catch { /* ignore */ }
+}
+
+onMounted(() => { load(); loadModelGroups(); loadAvailableModels() })
 </script>
 
 <style scoped>

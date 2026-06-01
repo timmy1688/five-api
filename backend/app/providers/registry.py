@@ -41,19 +41,30 @@ def _weighted_shuffle(channels: list[Channel]) -> list[Channel]:
     return result
 
 
-async def resolve_candidates(model: str, channel_group: str = "") -> list[tuple[Channel, type[BaseProvider]]]:
-    """返回所有支持该模型的候选渠道，按 priority 降序分层，同层按 weight 加权随机排序。
+OPENAI_PROTOCOL_PROVIDERS = {"openai", "gemini", "qwen", "azure"}
+ANTHROPIC_PROTOCOL_PROVIDERS = {"anthropic"}
 
-    channel_group 为空时可访问所有渠道，非空时只能访问 group 为空或匹配的渠道。
+
+async def resolve_candidates(
+    model: str,
+    preferred_protocol: str | None = None,
+) -> list[tuple[Channel, type[BaseProvider]]]:
+    """返回所有支持该模型的候选渠道。
+
+    排序：协议匹配的渠道整体排在前面，各组内按 priority 降序 + weight 加权随机。
+    不匹配的渠道保留作为故障转移备选。
     """
     from app.services.channel_health import is_channel_healthy
 
+    if preferred_protocol == "openai":
+        preferred_providers = OPENAI_PROTOCOL_PROVIDERS
+    elif preferred_protocol == "anthropic":
+        preferred_providers = ANTHROPIC_PROTOCOL_PROVIDERS
+    else:
+        preferred_providers = None
+
     channels = await Channel.filter(is_enabled=True)
     candidates = [ch for ch in channels if model in (ch.models or [])]
-
-    # 按分组过滤
-    if channel_group:
-        candidates = [ch for ch in candidates if not ch.group or ch.group == channel_group]
 
     # 过滤掉被熔断的渠道
     healthy_candidates = []
@@ -77,21 +88,25 @@ async def resolve_candidates(model: str, channel_group: str = "") -> list[tuple[
             },
         )
 
-    tiers: dict[int, list[Channel]] = {}
-    for ch in healthy_candidates:
-        tiers.setdefault(ch.priority, []).append(ch)
-
-    ordered_tiers = sorted(tiers.keys(), reverse=True)
+    # 按协议匹配分成两组，各组内按 priority 分层 + weight 加权随机
+    if preferred_providers:
+        matched = [ch for ch in healthy_candidates if ch.provider in preferred_providers]
+        unmatched = [ch for ch in healthy_candidates if ch.provider not in preferred_providers]
+        groups = [matched, unmatched]
+    else:
+        groups = [healthy_candidates]
 
     result: list[tuple[Channel, type[BaseProvider]]] = []
-    for priority in ordered_tiers:
-        tier_channels = tiers[priority]
-        shuffled = _weighted_shuffle(tier_channels)
-        for ch in shuffled:
-            provider_cls = PROVIDER_MAP.get(ch.provider)
-            if provider_cls is None:
-                continue
-            result.append((ch, provider_cls))
+    for group in groups:
+        tiers: dict[int, list[Channel]] = {}
+        for ch in group:
+            tiers.setdefault(ch.priority, []).append(ch)
+        for priority in sorted(tiers.keys(), reverse=True):
+            for ch in _weighted_shuffle(tiers[priority]):
+                provider_cls = PROVIDER_MAP.get(ch.provider)
+                if provider_cls is None:
+                    continue
+                result.append((ch, provider_cls))
 
     if not result:
         raise HTTPException(

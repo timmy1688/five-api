@@ -7,11 +7,35 @@ from jose import JWTError, jwt
 from passlib.context import CryptContext
 
 from app.config import settings
-from app.models import Admin, APIKey
+from app.models import User, APIKey
 from app.utils.ip_check import check_ip_allowed, get_client_ip
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 bearer_scheme = HTTPBearer()
+
+ALL_PERMISSIONS = [
+    "channel:read", "channel:write",
+    "key:read", "key:write",
+    "model_group:read", "model_group:write",
+    "model_price:read", "model_price:write",
+    "log:read", "log:write",
+    "stat:read",
+    "user:read", "user:write",
+    "role:read", "role:write",
+]
+
+BUILTIN_ROLES = [
+    {
+        "name": "Super Admin",
+        "description": "Full access to all resources",
+        "permissions": ALL_PERMISSIONS,
+    },
+    {
+        "name": "Viewer",
+        "description": "Read-only access to all resources",
+        "permissions": [p for p in ALL_PERMISSIONS if p.endswith(":read")],
+    },
+]
 
 
 def verify_password(plain: str, hashed: str) -> bool:
@@ -31,7 +55,7 @@ def create_access_token(data: dict) -> str:
 
 async def get_current_admin(
     credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
-) -> Admin:
+) -> User:
     try:
         payload = jwt.decode(
             credentials.credentials,
@@ -44,17 +68,23 @@ async def get_current_admin(
         admin_id = int(raw_id)
     except JWTError:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
-    admin = await Admin.get_or_none(id=admin_id, is_active=True)
+    admin = await User.get_or_none(id=admin_id, is_active=True).select_related("role")
     if admin is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Admin not found")
     return admin
 
 
-def require_admin_role(admin: Admin = Depends(get_current_admin)) -> Admin:
-    """要求当前管理员角色为 admin，viewer 角色不允许执行写操作。"""
-    if admin.role != "admin":
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin role required")
-    return admin
+def require_permission(*required: str):
+    """权限检查依赖工厂。用法: admin = require_permission("channel:write")"""
+    async def checker(admin: User = Depends(get_current_admin)) -> User:
+        user_perms = set(admin.role.permissions or [])
+        if not set(required).issubset(user_perms):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Permission denied",
+            )
+        return admin
+    return Depends(checker)
 
 
 def hash_api_key(raw_key: str) -> str:

@@ -13,10 +13,12 @@ class TokenResponse(BaseModel):
     token_type: str = "bearer"
 
 
-class AdminInfo(BaseModel):
+class UserInfo(BaseModel):
     id: int
     username: str
-    role: str
+    role_id: int
+    role_name: str = ""
+    permissions: list[str] = []
     is_active: bool
     created_at: datetime
 
@@ -26,14 +28,14 @@ class ChangePasswordRequest(BaseModel):
     new_password: str
 
 
-class AdminCreate(BaseModel):
+class UserCreate(BaseModel):
     username: str
     password: str
-    role: str = "viewer"
+    role_id: int
 
 
-class AdminUpdate(BaseModel):
+class UserUpdate(BaseModel):
     username: str | None = None
     password: str | None = None
-    role: str | None = None
+    role_id: int | None = None
     is_active: bool | None = None

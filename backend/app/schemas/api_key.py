@@ -22,7 +22,7 @@ class APIKeyCreate(BaseModel):
     rpm_limit: int = -1
     allowed_models: list[str] = []
     allowed_ips: list[str] = []
-    channel_group: str = ""
+    model_group_id: int | None = None
     quota_reset_day: int | None = None
     expires_at: datetime | None = None
 
@@ -39,7 +39,7 @@ class APIKeyUpdate(BaseModel):
     rpm_limit: int | None = None
     allowed_models: list[str] | None = None
     allowed_ips: list[str] | None = None
-    channel_group: str | None = None
+    model_group_id: int | None = None
     is_enabled: bool | None = None
     quota_reset_day: int | None = None
     expires_at: datetime | None = None
@@ -62,7 +62,8 @@ class APIKeyResponse(BaseModel):
     rpm_limit: int
     allowed_models: list[str]
     allowed_ips: list[str]
-    channel_group: str
+    model_group_id: int | None
+    model_group_name: str | None = None
     is_enabled: bool
     quota_reset_day: int | None
     quota_last_reset_at: datetime | None

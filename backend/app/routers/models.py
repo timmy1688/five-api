@@ -1,14 +1,13 @@
 from fastapi import APIRouter, Depends
 
-from app.models import Admin, Channel, ModelPrice
-from app.services.auth import get_current_admin
+from app.models import User, Channel, ModelPrice
+from app.services.auth import require_permission
 
-router = APIRouter(prefix="/api/admin/models", tags=["admin-models"])
+router = APIRouter(prefix="/api/models", tags=["models"])
 
 
 @router.get("")
-async def list_models(_: Admin = Depends(get_current_admin)):
-    """汇总所有渠道的模型信息，包括定价和渠道来源。"""
+async def list_models(_: User = require_permission("channel:read")):
     channels = await Channel.filter(is_enabled=True).values(
         "id", "name", "provider", "models", "model_mapping", "model_pricing",
     )

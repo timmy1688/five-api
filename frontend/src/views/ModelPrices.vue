@@ -5,7 +5,7 @@
         <h3>Model Pricing</h3>
         <p>Configure per-model token pricing for cost tracking</p>
       </div>
-      <div v-if="auth.isAdmin()" style="display: flex; gap: 8px">
+      <div v-if="auth.hasPermission('model_price:write')" style="display: flex; gap: 8px">
         <el-button @click="syncDefaults" :loading="syncing">Sync Defaults</el-button>
         <el-button type="primary" @click="openCreate">Add Price</el-button>
       </div>
@@ -27,7 +27,7 @@
               <span v-for="ch in item.channels" :key="ch" class="channel-tag">{{ ch }}</span>
             </span>
           </div>
-          <el-button v-if="auth.isAdmin()" text type="primary" size="small" @click="quickAdd(item.model)">添加价格</el-button>
+          <el-button v-if="auth.hasPermission('model_price:write')" text type="primary" size="small" @click="quickAdd(item.model)">添加价格</el-button>
         </div>
       </div>
     </el-card>
@@ -51,10 +51,10 @@
         </el-table-column>
         <el-table-column label="Active" width="76" align="center">
           <template #default="{ row }">
-            <el-switch v-model="row.is_active" :disabled="!auth.isAdmin()" @change="toggleActive(row)" />
+            <el-switch v-model="row.is_active" :disabled="!auth.hasPermission('model_price:write')" @change="toggleActive(row)" />
           </template>
         </el-table-column>
-        <el-table-column v-if="auth.isAdmin()" label="Actions" width="140" fixed="right">
+        <el-table-column v-if="auth.hasPermission('model_price:write')" label="Actions" width="140" fixed="right">
           <template #default="{ row }">
             <el-button text type="primary" size="small" @click="openEdit(row)">Edit</el-button>
             <el-popconfirm title="Delete this price?" @confirm="handleDelete(row.id)">

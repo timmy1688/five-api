@@ -51,7 +51,9 @@ async def test_chat_completions_non_stream(client):
     mock_provider.apply_model_mapping = lambda m: m
     mock_provider.close = AsyncMock()
 
-    with patch("app.routers.openai_proxy.resolve_channel", return_value=(ch, mock_provider)):
+    mock_provider_cls = lambda channel: mock_provider
+
+    with patch("app.routers.openai_proxy.resolve_candidates", return_value=[(ch, mock_provider_cls)]):
         resp = await client.post(
             "/v1/chat/completions",
             json={"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}]},
@@ -87,7 +89,9 @@ async def test_chat_completions_quota_exceeded(client):
         headers=auth_header(raw_key),
     )
     assert resp.status_code == 429
-    assert "quota" in resp.json()["error"]["message"].lower()
+    body = resp.json()
+    error = body.get("error") or body.get("detail", {}).get("error", {})
+    assert "quota" in error.get("message", "").lower()
 
 
 async def test_chat_completions_model_not_allowed(client):
@@ -206,7 +210,9 @@ async def test_embeddings_non_stream(client):
     mock_provider.apply_model_mapping = lambda m: m
     mock_provider.close = AsyncMock()
 
-    with patch("app.routers.openai_proxy.resolve_channel", return_value=(ch, mock_provider)):
+    mock_provider_cls = lambda channel: mock_provider
+
+    with patch("app.routers.openai_proxy.resolve_candidates", return_value=[(ch, mock_provider_cls)]):
         resp = await client.post(
             "/v1/embeddings",
             json={"model": "text-embedding-3-small", "input": "hello"},

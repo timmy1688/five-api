@@ -2,7 +2,7 @@ import client from './client'
 
 export const modelsApi = {
   list: async () => {
-    const { data } = await client.get('/admin/models')
+    const { data } = await client.get('/models')
     return data
   },
 }

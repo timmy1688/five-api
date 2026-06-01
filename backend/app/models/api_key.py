@@ -15,6 +15,7 @@ class APIKey(Model):
     allowed_models = fields.JSONField(default=list)
     allowed_ips = fields.JSONField(default=list)
     channel_group = fields.CharField(max_length=64, default="")
+    model_group_id = fields.IntField(null=True, default=None)
     is_enabled = fields.BooleanField(default=True)
     quota_reset_day = fields.SmallIntField(null=True)
     quota_last_reset_at = fields.DatetimeField(null=True)

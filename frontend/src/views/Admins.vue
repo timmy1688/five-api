@@ -5,16 +5,16 @@
         <h3>Admins</h3>
         <p>Manage administrator accounts and roles</p>
       </div>
-      <el-button type="primary" @click="openCreate">Add Admin</el-button>
+      <el-button v-if="auth.hasPermission('user:write')" type="primary" @click="openCreate">Add Admin</el-button>
     </div>
 
     <el-card shadow="never">
       <el-table :data="admins" v-loading="loading" stripe>
         <el-table-column prop="id" label="ID" width="60" />
         <el-table-column prop="username" label="Username" min-width="120" />
-        <el-table-column prop="role" label="Role" width="100">
+        <el-table-column label="Role" width="140">
           <template #default="{ row }">
-            <el-tag :type="row.role === 'admin' ? 'danger' : 'info'" size="small" round>{{ row.role }}</el-tag>
+            <el-tag size="small" round>{{ row.role_name }}</el-tag>
           </template>
         </el-table-column>
         <el-table-column label="Active" width="76" align="center">
@@ -25,7 +25,7 @@
         <el-table-column prop="created_at" label="Created" width="165">
           <template #default="{ row }">{{ formatTime(row.created_at) }}</template>
         </el-table-column>
-        <el-table-column label="Actions" width="160" fixed="right">
+        <el-table-column v-if="auth.hasPermission('user:write')" label="Actions" width="160" fixed="right">
           <template #default="{ row }">
             <el-button text type="primary" size="small" @click="openEdit(row)">Edit</el-button>
             <el-popconfirm title="Delete this admin?" @confirm="handleDelete(row.id)">
@@ -47,14 +47,10 @@
           <el-input v-model="form.password" type="password" show-password :placeholder="editingId ? '留空不修改' : ''" />
         </el-form-item>
         <el-form-item label="Role">
-          <el-select v-model="form.role" style="width: 100%">
-            <el-option label="Admin" value="admin">
-              <span>Admin</span>
-              <span style="float: right; font-size: 12px; color: #94a3b8">可读写所有功能</span>
-            </el-option>
-            <el-option label="Viewer" value="viewer">
-              <span>Viewer</span>
-              <span style="float: right; font-size: 12px; color: #94a3b8">只读权限</span>
+          <el-select v-model="form.role_id" style="width: 100%">
+            <el-option v-for="r in roles" :key="r.id" :label="r.name" :value="r.id">
+              <span>{{ r.name }}</span>
+              <span style="float: right; font-size: 12px; color: #94a3b8">{{ r.description }}</span>
             </el-option>
           </el-select>
         </el-form-item>
@@ -73,16 +69,20 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { usersApi } from '@/api/users'
+import { rolesApi } from '@/api/roles'
+import { useAuthStore } from '@/stores/auth'
 import { ElMessage } from 'element-plus'
 import dayjs from 'dayjs'
 
+const auth = useAuthStore()
 const admins = ref<any[]>([])
+const roles = ref<any[]>([])
 const loading = ref(false)
 const dialogVisible = ref(false)
 const saving = ref(false)
 const editingId = ref<number | null>(null)
 
-const emptyForm = () => ({ username: '', password: '', role: 'viewer', is_active: true })
+const emptyForm = () => ({ username: '', password: '', role_id: null as number | null, is_active: true })
 const form = ref(emptyForm())
 
 function formatTime(t: string) {
@@ -101,6 +101,12 @@ async function load() {
   }
 }
 
+async function loadRoles() {
+  try {
+    roles.value = await rolesApi.listAll()
+  } catch { /* silent */ }
+}
+
 function openCreate() {
   editingId.value = null
   form.value = emptyForm()
@@ -109,7 +115,7 @@ function openCreate() {
 
 function openEdit(row: any) {
   editingId.value = row.id
-  form.value = { username: row.username, password: '', role: row.role, is_active: row.is_active }
+  form.value = { username: row.username, password: '', role_id: row.role_id, is_active: row.is_active }
   dialogVisible.value = true
 }
 
@@ -117,12 +123,12 @@ async function handleSave() {
   saving.value = true
   try {
     if (editingId.value) {
-      const data: any = { role: form.value.role, is_active: form.value.is_active }
+      const data: any = { role_id: form.value.role_id, is_active: form.value.is_active }
       if (form.value.password) data.password = form.value.password
       await usersApi.update(editingId.value, data)
     } else {
-      if (!form.value.username || !form.value.password) {
-        ElMessage.warning('Username and password are required')
+      if (!form.value.username || !form.value.password || !form.value.role_id) {
+        ElMessage.warning('Username, password and role are required')
         saving.value = false
         return
       }
@@ -148,5 +154,5 @@ async function handleDelete(id: number) {
   }
 }
 
-onMounted(load)
+onMounted(() => { load(); loadRoles() })
 </script>
