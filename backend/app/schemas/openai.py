@@ -1,12 +1,16 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 
 class ChatMessage(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     role: str
     content: str | list | None = None
 
 
 class ChatCompletionRequest(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     model: str
     messages: list[ChatMessage]
     temperature: float | None = None
@@ -20,6 +24,8 @@ class ChatCompletionRequest(BaseModel):
 
 
 class CompletionRequest(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     model: str
     prompt: str | list[str]
     max_tokens: int | None = None
@@ -30,6 +36,8 @@ class CompletionRequest(BaseModel):
 
 
 class EmbeddingRequest(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     model: str
     input: str | list[str]
     encoding_format: str | None = None
