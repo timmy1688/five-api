@@ -18,7 +18,7 @@ export ANTHROPIC_API_KEY=sk-your-gateway-key
 
 ### 协议自动转换 — 一套 Key 通吃所有模型
 
-**双向协议转换**：Anthropic 客户端可以透明调用 OpenAI 兼容模型（含 Gemini/Qwen 等），反之亦然。网关自动处理请求和响应的格式转换，包括流式传输。
+**双向协议转换**：Anthropic 客户端可以透明调用 OpenAI 兼容模型（含 Gemini/Qwen 等），反之亦然。网关自动处理请求和响应的格式转换，包括流式传输，以及 **工具调用（tool_use ↔ tool_calls）的全链路双向转换**（含多轮 tool_result 往返与流式工具参数）。
 
 **协议优先路由**：`/v1/messages` 请求优先匹配 Anthropic 渠道（原生直通），`/v1/chat/completions` 优先匹配 OpenAI 兼容渠道。不匹配的渠道作为故障转移备选，确保最大可用性。
 

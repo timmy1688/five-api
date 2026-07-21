@@ -26,12 +26,19 @@ router = APIRouter(tags=["anthropic-proxy"])
 
 
 def _extract_anthropic_usage(resp: dict) -> dict:
-    """从 Anthropic 响应中提取 usage。"""
+    """从 Anthropic 响应中提取 usage。
+
+    Anthropic 的 input_tokens 不含缓存 token，而计费按 OpenAI 口径（prompt_tokens
+    含全部输入）。这里把 cache_read + cache_creation 补进 prompt_tokens，
+    cached_tokens 只取 cache_read（享受缓存折扣价）。
+    """
     usage = resp.get("usage", {})
+    cache_read = usage.get("cache_read_input_tokens", 0) or 0
+    cache_creation = usage.get("cache_creation_input_tokens", 0) or 0
     return {
-        "prompt_tokens": usage.get("input_tokens", 0),
-        "completion_tokens": usage.get("output_tokens", 0),
-        "cached_tokens": usage.get("cache_read_input_tokens", 0),
+        "prompt_tokens": (usage.get("input_tokens", 0) or 0) + cache_read + cache_creation,
+        "completion_tokens": usage.get("output_tokens", 0) or 0,
+        "cached_tokens": cache_read,
     }
 
 
@@ -46,10 +53,15 @@ async def _passthrough_stream_with_usage(
     body: dict,
     extra_headers: dict[str, str] | None,
 ) -> AsyncIterator[tuple[str, dict]]:
-    """Yield (sse_line, usage_dict)，从 Anthropic SSE 流中提取 token 用量。"""
+    """Yield (sse_line, usage_dict)，从 Anthropic SSE 流中提取 token 用量。
+
+    Anthropic 的 input_tokens 不含缓存 token，计费按 OpenAI 口径补齐：
+    prompt_tokens = input_tokens + cache_read + cache_creation，cached_tokens 取 cache_read。
+    """
     input_tokens = 0
     output_tokens = 0
-    cached_tokens = 0
+    cache_read = 0
+    cache_creation = 0
 
     async for line in provider.stream_anthropic_passthrough(body, extra_headers):
         stripped = line.strip()
@@ -60,7 +72,8 @@ async def _passthrough_stream_with_usage(
                 if event_msg:
                     u = event_msg.get("usage", {})
                     input_tokens = u.get("input_tokens", input_tokens)
-                    cached_tokens = u.get("cache_read_input_tokens", cached_tokens)
+                    cache_read = u.get("cache_read_input_tokens", cache_read)
+                    cache_creation = u.get("cache_creation_input_tokens", cache_creation)
                 delta_usage = data.get("usage", {})
                 if delta_usage:
                     output_tokens = delta_usage.get("output_tokens", output_tokens)
@@ -68,9 +81,9 @@ async def _passthrough_stream_with_usage(
                 pass
 
         yield line, {
-            "prompt_tokens": input_tokens,
+            "prompt_tokens": input_tokens + cache_read + cache_creation,
             "completion_tokens": output_tokens,
-            "cached_tokens": cached_tokens,
+            "cached_tokens": cache_read,
         }
 
 
@@ -110,10 +123,10 @@ async def messages(
                 async for line, usage in _passthrough_stream_with_usage(provider, raw_body, extra_headers):
                     yield line, usage
             else:
-                openai_body = anthropic_to_openai_request(body.model_dump())
+                openai_body = anthropic_to_openai_request(raw_body)
                 openai_sse = provider.send_stream(openai_body, "/v1/chat/completions")
-                async for line in openai_stream_to_anthropic_stream(openai_sse, body.model):
-                    yield line, {}
+                async for line, usage in openai_stream_to_anthropic_stream(openai_sse, body.model):
+                    yield line, usage
 
         return StreamingResponse(
             stream_with_failover(
@@ -131,7 +144,7 @@ async def messages(
             result = await provider.send_anthropic_passthrough(raw_body, extra_headers)
             return JSONResponse(content=result), _extract_anthropic_usage(result)
         else:
-            openai_body = anthropic_to_openai_request(body.model_dump())
+            openai_body = anthropic_to_openai_request(raw_body)
             result = await provider.send_request(openai_body, "/v1/chat/completions")
             return openai_to_anthropic_response(result, body.model), extract_openai_usage(result)
 

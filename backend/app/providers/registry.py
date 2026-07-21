@@ -43,17 +43,30 @@ ANTHROPIC_PROTOCOL_PROVIDERS = {"anthropic"}
 def _promote_sticky(
     result: list[tuple[Channel, type[BaseProvider]]],
     channel_id: int,
+    preferred_providers: set[str] | None = None,
 ) -> list[tuple[Channel, type[BaseProvider]]]:
     """把粘性会话上次使用的渠道提到候选列表最前。
 
-    只有该渠道仍是健康候选（存在于列表中）时才提前；否则保持原序，
+    仅当该渠道仍是健康候选（存在于列表中）时才提前；否则保持原序，
     让粘性绑定自然回退到正常路由。
+
+    协议优先高于粘性：若粘性渠道不属于 preferred 协议组，但 preferred 组仍有
+    健康渠道，则忽略粘性、回到协议优先排序（避免 preferred 渠道临时故障恢复后，
+    会话被跨协议粘性长期卡在非优先渠道上）。此时下次请求成功会把粘性重绑回
+    preferred 渠道，实现自愈。
     """
-    for i, (ch, _) in enumerate(result):
-        if ch.id == channel_id:
-            if i != 0:
-                result.insert(0, result.pop(i))
-            break
+    idx = next((i for i, (ch, _) in enumerate(result) if ch.id == channel_id), None)
+    if idx is None:
+        return result
+
+    sticky_ch = result[idx][0]
+    if preferred_providers is not None and sticky_ch.provider not in preferred_providers:
+        has_healthy_preferred = any(ch.provider in preferred_providers for ch, _ in result)
+        if has_healthy_preferred:
+            return result
+
+    if idx != 0:
+        result.insert(0, result.pop(idx))
     return result
 
 
@@ -135,7 +148,7 @@ async def resolve_candidates(
         )
 
     if sticky_channel_id is not None:
-        result = _promote_sticky(result, sticky_channel_id)
+        result = _promote_sticky(result, sticky_channel_id, preferred_providers)
 
     return result
 

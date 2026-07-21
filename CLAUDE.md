@@ -90,7 +90,7 @@ cd frontend && npm install && npx vite --port 5001
 │   │   │   ├── channel_health.py    #   渠道健康监测 & 自动熔断
 │   │   │   ├── logging_service.py   #   请求日志持久化 + 自动清理
 │   │   │   ├── metrics.py           #   Prometheus 指标
-│   │   │   └── anthropic_compat.py  #   Anthropic↔OpenAI 格式转换
+│   │   │   └── anthropic_compat.py  #   Anthropic↔OpenAI 格式转换（含工具/tool_use，方向 A）
 │   │   ├── middleware/
 │   │   │   └── request_id.py        #   注入 X-Request-ID
 │   │   ├── routers/                 # API 路由（前缀 /api/*）
@@ -185,7 +185,8 @@ cd frontend && npm install && npx vite --port 5001
 - **会话标识**：优先取请求头 `X-Session-Id` / `session_id` / `X-Conversation-Id`；取不到则用请求体前缀（`system` + 首条 `user` 消息）算 SHA-256 指纹。该前缀在整段多轮对话中不变，因此无需客户端配合即可天然粘住。
 - **绑定存储**：Redis `five:sticky:{api_key_id}:{session_hash} → channel_id`，TTL = `STICKY_SESSION_TTL`（默认 900s），每次成功后刷新。
 - **路由注入**：路由查出 `sticky_channel_id` 传给 `resolve_candidates()`，`_promote_sticky()` 把它提到候选列表最前——**仅当该渠道仍是健康候选时**；否则保持正常排序，绑定自然回退。
-- **回写时机**：`proxy.py` 的 `execute_with_failover` / `stream_with_failover` 在 `record_success()` 后调用 `bind_sticky_channel()`，故障转移到新渠道时会重新绑定，自愈。
+- **协议优先高于跨协议粘性**：若粘性渠道属于 **非** preferred 协议组、而 preferred 协议组仍有健康渠道，则 `_promote_sticky()` **忽略粘性**、回到协议优先排序。这避免了「preferred 协议渠道临时故障 → fallback 到跨协议渠道 → 恢复后仍被粘性长期卡住」的问题。粘性渠道属于 preferred 组、或 preferred 组无健康渠道（真需 fallback）时才提升。
+- **回写时机**：`proxy.py` 的 `execute_with_failover` / `stream_with_failover` 在 `record_success()` 后调用 `bind_sticky_channel()`，故障转移到新渠道时会重新绑定。结合上一条：preferred 渠道恢复后，下一次请求即按协议优先走回该渠道并把粘性重绑过去，实现自愈——无需手动清 Redis 或等 TTL 过期。
 - **关闭**：`STICKY_SESSION_ENABLED=false` 时 `make_session_key()` 直接返回 None，管线零开销。
 - 仅对含 `messages` 的会话生效（chat/messages）；`embeddings` / 传统 `completions` 不产生指纹。
 
@@ -218,8 +219,25 @@ async def _send_fn(provider, channel):
 | 条件 | 路径 | 说明 |
 |------|------|------|
 | `/v1/messages` + provider=`anthropic` | **Passthrough** | 原样透传，支持 tool_use/thinking/streaming 全部特性 |
-| `/v1/messages` + provider≠`anthropic` | **Conversion** | Anthropic↔OpenAI 双向转换，仅支持纯文本对话 |
-| `/v1/chat/completions` + provider=`anthropic` | **Conversion** | Provider 内部做 OpenAI→Anthropic 转换 |
+| `/v1/messages` + provider=`openai` | **Conversion（方向 A）** | `anthropic_compat.py`：Anthropic→OpenAI 请求、OpenAI→Anthropic 响应/流 |
+| `/v1/chat/completions` + provider=`anthropic` | **Conversion（方向 B）** | `anthropic_provider.py`：OpenAI→Anthropic 请求、Anthropic→OpenAI 响应/流 |
+
+### 跨协议工具转换（tool-aware conversion）
+
+两条 Conversion 路径都支持 **工具调用（function calling）** 的全链路双向转换，不再局限于纯文本：
+
+| 概念 | Anthropic 侧 | OpenAI 侧 |
+|------|-------------|-----------|
+| 工具定义 | `tools[].input_schema` | `tools[].function.parameters` |
+| 工具选择 | `tool_choice: {auto/any/tool/none}` | `tool_choice: auto/required/none/{function}` |
+| 模型发起调用 | content block `tool_use` | `message.tool_calls` |
+| 回传工具结果 | user 消息里的 `tool_result` block | 独立的 `role:"tool"` 消息 |
+| 结束原因 | `stop_reason: tool_use` | `finish_reason: tool_calls` |
+
+要点：
+- **多轮往返**：历史消息里的 `tool_use` / `tool_result` 会被正确互转，多轮工具对话不断链。连续的 OpenAI `tool` 消息合并进一个 Anthropic user 消息的多个 `tool_result` block（满足角色交替约束）。
+- **流式**：方向 A 的工具参数按 index 累积、在流末统一以 `input_json_delta` 输出（规避并行工具调用分片交错乱序）；方向 B 用「Anthropic block index → OpenAI tool_call index」映射把 `input_json_delta` 转成 `delta.tool_calls` 分片。
+- **局限**：Conversion 路径的图片等多模态 block 按最佳努力降级为文本；追求全特性时应让客户端协议与渠道 `provider` 一致，走 Passthrough。
 
 ### RBAC 权限控制（`services/auth.py`）
 
@@ -407,9 +425,35 @@ async def create(body: ..., user: User = require_permission("channel:write")):
 cost = ((prompt - cached) × prompt_price + cached × cached_price + completion × completion_price) / 1M
 ```
 
-定价优先级：Channel `model_pricing` → 全局 `model_prices` 表。扣减使用 `F()` 原子操作。
+定价优先级：Channel `model_pricing` → 全局 `model_prices` 表（查价用 `model_actual`，即经 `model_mapping` 后的真实上游模型名）。扣减使用 `F()` 原子操作。
 
 内置价格表（`services/pricing.py` `DEFAULT_MODEL_PRICES`）含 ~49 个主流模型，可通过管理后台 "Sync Defaults" 一键导入。
+
+#### 跨协议计费口径统一（重要）
+
+费用公式按 **OpenAI 口径** 设计：`prompt_tokens` **包含** 缓存命中，`cached_tokens` 是其子集（`prompt - cached` 才是非缓存输入）。但两家上游口径不同：
+
+| | prompt/input 是否含缓存 | 缓存字段 |
+|--|--|--|
+| OpenAI | **含** | `prompt_tokens_details.cached_tokens` |
+| Anthropic | **不含** | `cache_read_input_tokens`（读）、`cache_creation_input_tokens`（写） |
+
+因此凡是从 **Anthropic 上游** 取 usage 的路径，都必须折算成 OpenAI 口径，否则 `prompt - cached` 会把非缓存 token 也减掉导致**少计费**：
+
+```
+prompt_tokens = input_tokens + cache_read_input_tokens + cache_creation_input_tokens
+cached_tokens = cache_read_input_tokens          # cache_creation 暂按 prompt_price 计（无专门 cache-write 价）
+```
+
+归一化位置共 4 处（改动需同步维护）：
+- `routers/anthropic_proxy.py` `_extract_anthropic_usage`（passthrough 非流式）
+- `routers/anthropic_proxy.py` `_passthrough_stream_with_usage`（passthrough 流式）
+- `providers/anthropic_provider.py` `transform_response`（方向 B 非流式）
+- `providers/anthropic_provider.py` `stream_transform`（方向 B 流式）
+
+方向 A（openai 上游）本就是 OpenAI 口径，无需折算。归一化后所有路径共用同一公式，同一请求无论走 passthrough / 方向 A / 方向 B，`prompt_tokens` 与 cost 完全一致。
+
+> ⚠️ **流式转换必须请求 usage**：Anthropic→openai 渠道（方向 A）转换时，`anthropic_to_openai_request` 会在流式下自动附加 `stream_options={"include_usage": true}`，否则 OpenAI 兼容上游流式默认不返回 usage，会导致 token 记 0。
 
 ---
 
@@ -665,7 +709,7 @@ Nginx 要点：`/v1/` 反代关闭 `proxy_buffering` 以支持 SSE，300s 超时
 
 **流式响应不工作？** 确认 Nginx 配置了 `proxy_buffering off`，所有中间反代层都关闭了 response buffering。
 
-**Token 计费不准确？** 非流式直接用上游 `usage`；流式从 SSE 事件中提取。上游未返回 usage 时 tokens 记为 0、cost 为 $0。定价查找：Channel `model_pricing` → 全局 `model_prices` 表。
+**Token 计费不准确？** 非流式直接用上游 `usage`；流式从 SSE 事件中提取。上游未返回 usage 时 tokens 记为 0、cost 为 $0。定价查找：Channel `model_pricing` → 全局 `model_prices` 表。注意跨协议口径统一：Anthropic 的 `input_tokens` 不含缓存，取用时须补齐为 `input + cache_read + cache_creation`（详见「跨协议计费口径统一」）。流式走 Anthropic→openai 转换时依赖 `stream_options.include_usage`，否则上游不吐 usage 会记 0。
 
 **渠道测试失败？** `provider=openai` 测试 `GET /v1/models`，`provider=anthropic` 测试发送最小请求到 `/v1/messages`。检查 Base URL 和 API Key。
 
