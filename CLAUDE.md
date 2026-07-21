@@ -2,7 +2,7 @@
 
 ## 项目简介
 
-Five API 是一个自托管的 AI API 网关，对外暴露 OpenAI 兼容接口和 Anthropic 兼容接口，内部将请求路由到多个上游 LLM 提供商（OpenAI、Anthropic Claude、Google Gemini、Alibaba Qwen、Azure OpenAI）。附带 Vue 3 管理后台用于渠道管理、API Key 管理、模型分组、RBAC 权限管理、用量统计和日志查看。支持 Claude Code 直连。
+Five API 是一个自托管的 AI API 网关，对外暴露 OpenAI 兼容接口和 Anthropic 兼容接口，内部按两种线协议（OpenAI 兼容 / Anthropic）将请求路由到多个上游 LLM 提供商（OpenAI、Anthropic Claude、Google Gemini、Alibaba Qwen 等，均通过对应协议接入）。附带 Vue 3 管理后台用于渠道管理、API Key 管理、模型分组、RBAC 权限管理、用量统计和日志查看。支持 Claude Code 直连。
 
 **技术栈**: FastAPI + Tortoise ORM + MySQL + Redis（后端）| Vue 3 + Element Plus + ECharts（前端）| Docker Compose（部署）
 
@@ -29,8 +29,11 @@ docker compose logs -f backend     # 查看日志
 
 ```bash
 # 方法 A：一键启动
-./start.sh          # 前端 :5001  后端 :5002
-./stop.sh           # 停止
+./service.sh start      # 前端 :5001  后端 :5002
+./service.sh stop       # 停止
+./service.sh restart    # 重启
+./service.sh status     # 查看状态
+./service.sh logs       # 跟踪日志
 
 # 方法 B：手动启动
 docker compose up -d mysql redis
@@ -71,11 +74,8 @@ cd frontend && npm install && npx vite --port 5001
 │   │   │   └── stats.py             #   统计数据
 │   │   ├── providers/               # 上游提供商适配器
 │   │   │   ├── base.py              #   抽象基类 BaseProvider
-│   │   │   ├── openai_provider.py   #   OpenAI（透传）
-│   │   │   ├── anthropic_provider.py#   Anthropic（原生直通 + 格式转换）
-│   │   │   ├── gemini_provider.py   #   Google Gemini（透传）
-│   │   │   ├── qwen_provider.py     #   Alibaba Qwen（透传）
-│   │   │   ├── azure_provider.py    #   Azure OpenAI（api-key 头认证）
+│   │   │   ├── openai_provider.py   #   OpenAI 协议（含所有 OpenAI 兼容端点，透传）
+│   │   │   ├── anthropic_provider.py#   Anthropic 协议（原生直通 + 格式转换）
 │   │   │   └── registry.py          #   渠道选择 & 模型路由（含协议优先）
 │   │   ├── services/                # 基础设施（依赖 Redis/DB 的可复用模块）
 │   │   │   ├── proxy.py             #   通用代理编排（故障转移 + 计费 + 日志）
@@ -85,6 +85,7 @@ cd frontend && npm install && npx vite --port 5001
 │   │   │   ├── pricing.py           #   费用计算 + 内置模型价格表
 │   │   │   ├── concurrency.py       #   Redis 并发限制
 │   │   │   ├── rate_limit.py        #   Redis RPM 速率限制
+│   │   │   ├── sticky_session.py    #   粘性会话（同一会话固定渠道）
 │   │   │   ├── failover.py          #   故障转移判定（可重试错误识别）
 │   │   │   ├── channel_health.py    #   渠道健康监测 & 自动熔断
 │   │   │   ├── logging_service.py   #   请求日志持久化 + 自动清理
@@ -138,7 +139,7 @@ cd frontend && npm install && npx vite --port 5001
 │   ├── Dockerfile                   # npm build → nginx
 │   └── nginx.conf
 ├── docker-compose.yml
-├── start.sh / stop.sh
+├── service.sh                  # start / stop / restart / status / logs
 └── .env.example
 ```
 
@@ -153,7 +154,7 @@ cd frontend && npm install && npx vite --port 5001
 1. **Request ID 中间件** → 注入/复用 `X-Request-ID`
 2. **API Key 认证** → SHA-256 哈希查表，检查启用/过期状态
 3. **前置检查** `run_pre_checks()` → 配额检查 → 模型权限检查 → RPM 限流
-4. **渠道选择** `resolve_candidates()` → 协议优先（匹配协议的渠道排前面）→ 按 priority 分层 + weight 加权随机 → 返回候选列表
+4. **渠道选择** `resolve_candidates()` → 协议优先（匹配协议的渠道排前面）→ 按 priority 分层 + weight 加权随机 → 粘性会话渠道提前 → 返回候选列表
 5. **并发限制** `concurrency_limiter.acquire()` → Redis 原子计数
 6. **代理编排** → 下面详述
 7. **后置处理** `_bill_and_log()` → 计费扣费 + 写日志 + 释放并发 + 关闭连接
@@ -163,13 +164,30 @@ cd frontend && npm install && npx vite --port 5001
 `resolve_candidates(model, preferred_protocol)` 支持协议优先排序：
 
 - `/v1/messages` 路由传入 `preferred_protocol="anthropic"` → anthropic 渠道优先（passthrough）
-- `/v1/chat/completions` 路由传入 `preferred_protocol="openai"` → openai/gemini/qwen/azure 渠道优先
+- `/v1/chat/completions` 路由传入 `preferred_protocol="openai"` → openai 渠道优先
 
-协议族定义：
-- **OpenAI 协议族**：`openai`、`gemini`、`qwen`、`azure`
-- **Anthropic 协议族**：`anthropic`
+**渠道只有两种线协议**，`provider` 字段即协议：
+- **`openai`**：OpenAI 及所有 OpenAI 兼容端点（官方、第三方中转、Gemini、Qwen 等）——统一透传
+- **`anthropic`**：Anthropic 原生协议（`/v1/messages`）
 
 匹配协议的渠道整体排在不匹配的前面，各组内维持 priority + weight 排序。不匹配的渠道保留作为故障转移备选。
+
+> ⚠️ **`provider` 表示"线协议"，不是"厂商"。** 协议族由 `provider` 推断，Anthropic passthrough 也靠 `provider == "anthropic"` 判定。因此按**端点协议**而非厂商来建渠道：
+> - 厂商的 OpenAI 兼容端点（含 Gemini / Qwen 中转）→ `provider=openai`（透传）
+> - 厂商的 **Anthropic 兼容端点**（如 DeepSeek、千问）→ `provider=anthropic`，`base_url` 指向该 Anthropic 端点，`models` 填对应模型名 → 走 passthrough（保留 tool_use / thinking）
+>
+> 同一模型可同时建这两种渠道，`/v1/messages` 自动优先走 anthropic 渠道、`/v1/chat/completions` 优先走 openai 渠道。**切勿**把 Anthropic 端点错填成 `provider=openai`，否则会走转换路径（丢失 tool_use）。
+
+### 粘性会话（`services/sticky_session.py`）
+
+同一会话的请求尽量固定到同一渠道，提升上游 prompt 缓存命中率、避免多轮对话跨渠道串味。
+
+- **会话标识**：优先取请求头 `X-Session-Id` / `session_id` / `X-Conversation-Id`；取不到则用请求体前缀（`system` + 首条 `user` 消息）算 SHA-256 指纹。该前缀在整段多轮对话中不变，因此无需客户端配合即可天然粘住。
+- **绑定存储**：Redis `five:sticky:{api_key_id}:{session_hash} → channel_id`，TTL = `STICKY_SESSION_TTL`（默认 900s），每次成功后刷新。
+- **路由注入**：路由查出 `sticky_channel_id` 传给 `resolve_candidates()`，`_promote_sticky()` 把它提到候选列表最前——**仅当该渠道仍是健康候选时**；否则保持正常排序，绑定自然回退。
+- **回写时机**：`proxy.py` 的 `execute_with_failover` / `stream_with_failover` 在 `record_success()` 后调用 `bind_sticky_channel()`，故障转移到新渠道时会重新绑定，自愈。
+- **关闭**：`STICKY_SESSION_ENABLED=false` 时 `make_session_key()` 直接返回 None，管线零开销。
+- 仅对含 `messages` 的会话生效（chat/messages）；`embeddings` / 传统 `completions` 不产生指纹。
 
 ### 代理编排（`services/proxy.py`）
 
@@ -319,7 +337,7 @@ async def create(body: ..., user: User = require_permission("channel:write")):
 |------|------|------|
 | id | int PK | |
 | name | varchar(128) | 显示名 |
-| provider | varchar(32) | `openai` / `anthropic` / `gemini` / `qwen` / `azure` |
+| provider | varchar(32) | 线协议：`openai`（含所有 OpenAI 兼容端点）/ `anthropic` |
 | base_url | varchar(512) | 上游 API 地址 |
 | api_key | varchar(512) | 上游密钥 |
 | models | JSON | 支持的模型列表 |
@@ -492,6 +510,8 @@ export ANTHROPIC_API_KEY=sk-your-five-api-key
 | `MYSQL_HOST/PORT/USER/PASSWORD/DATABASE` | `127.0.0.1`/`3306`/`five`/`five_password`/`five_api` | |
 | `REDIS_URL` | `redis://127.0.0.1:6379/0` | |
 | `INIT_ADMIN_USERNAME/PASSWORD` | `admin`/`admin123` | 首次启动创建（Super Admin 角色） |
+| `STICKY_SESSION_ENABLED` | `true` | 粘性会话开关 |
+| `STICKY_SESSION_TTL` | `900` | 会话→渠道绑定的 Redis 过期秒数 |
 
 Docker Compose 额外: `MYSQL_ROOT_PASSWORD`、`BACKEND_PORT`(8000)、`FRONTEND_PORT`(80)、`REDIS_PORT`(6379)
 
@@ -503,16 +523,42 @@ Docker Compose 额外: `MYSQL_ROOT_PASSWORD`、`BACKEND_PORT`(8000)、`FRONTEND_
 
 管理后台 → Channels → Add Channel。常见配置：
 
-| Provider | Base URL | 说明 |
-|----------|----------|------|
-| `openai` | `https://api.openai.com` | OpenAI 及兼容中转 |
-| `anthropic` | `https://api.anthropic.com` | Claude 系列，/v1/messages |
-| `gemini` | `https://generativelanguage.googleapis.com/v1beta/openai` | Gemini OpenAI 兼容端点 |
-| `qwen` | `https://dashscope.aliyuncs.com/compatible-mode/v1` | 通义千问 |
-| `azure` | `https://{resource}.openai.azure.com` | Azure OpenAI |
-| `anthropic` | `https://api.deepseek.com/anthropic` | DeepSeek Anthropic 端点（推荐 Claude Code） |
+渠道 `provider` 只有两个取值：`openai`（OpenAI 兼容端点）和 `anthropic`（Anthropic 原生端点）。常见上游：
+
+| provider | 上游 | Base URL |
+|----------|------|----------|
+| `openai` | OpenAI 及兼容中转 | `https://api.openai.com` |
+| `openai` | Google Gemini（OpenAI 兼容端点） | `https://generativelanguage.googleapis.com/v1beta/openai` |
+| `openai` | 通义千问（DashScope 兼容端点） | `https://dashscope.aliyuncs.com/compatible-mode/v1` |
+| `openai` | DeepSeek OpenAI 端点 | `https://api.deepseek.com` |
+| `anthropic` | Anthropic 官方 Claude | `https://api.anthropic.com` |
+| `anthropic` | DeepSeek Anthropic 端点（推荐 Claude Code） | `https://api.deepseek.com/anthropic` |
 
 同一模型可以同时配置 OpenAI 和 Anthropic 两种协议的渠道，系统会根据请求来源协议自动优先匹配（见协议优先路由）。
+
+> **`provider` 按端点协议填，不是按厂商填**：厂商若提供 Anthropic 兼容端点（如 DeepSeek、千问），应建 `provider=anthropic` 的渠道，才能走 passthrough 保留 tool_use；填成 `provider=openai` 会走转换路径丢失 tool_use。
+
+#### 示例：DeepSeek 同模型双协议
+
+DeepSeek 同时提供 OpenAI 端点（`/v1/chat/completions`）和 Anthropic 端点（`/anthropic/v1/messages`）。给同一个模型建两条渠道即可两种协议通吃：
+
+| 渠道 | provider | base_url | models |
+|------|----------|----------|--------|
+| DeepSeek-OpenAI | `openai` | `https://api.deepseek.com` | `deepseek-chat`、`deepseek-reasoner` |
+| DeepSeek-Anthropic | `anthropic` | `https://api.deepseek.com/anthropic` | `deepseek-chat`、`deepseek-reasoner` |
+
+路由行为：
+- 客户端走 `/v1/chat/completions`（OpenAI SDK） → 优先命中 **DeepSeek-OpenAI** 渠道，透传。
+- 客户端走 `/v1/messages`（Claude Code / Anthropic SDK） → 优先命中 **DeepSeek-Anthropic** 渠道，passthrough，保留 tool_use / thinking。
+- 若首选协议的渠道全部故障，另一条渠道作为故障转移备选（跨协议时自动走转换路径）。
+
+Claude Code 直连时，配 `provider=anthropic` 的那条渠道即可：
+
+```bash
+export ANTHROPIC_BASE_URL=http://your-gateway:8000
+export ANTHROPIC_API_KEY=sk-your-five-api-key
+# 请求模型名用 deepseek-chat / deepseek-reasoner
+```
 
 ### 2. 创建 API Key
 
@@ -552,12 +598,17 @@ resp = client.chat.completions.create(model="gpt-4o", messages=[{"role": "user",
 | `providers/` | 上游适配（请求转换 + 发送） | `openai_provider.py` |
 | `utils/` | 无状态工具函数 | `ip_check.py`、`key_generator.py` |
 
-### 添加新 Provider
+### 接入新上游
+
+系统只有两种线协议，绝大多数上游无需写新适配器：
+
+- **OpenAI 兼容端点**（含 Gemini/Qwen 等中转）→ 直接建 `provider=openai` 的渠道，填 base_url 即可。
+- **Anthropic 兼容端点** → 建 `provider=anthropic` 的渠道。
+
+只有当上游是一种**全新的、非 OpenAI/非 Anthropic 的原生协议**时，才需要新增适配器：
 
 1. `app/providers/xxx_provider.py` 继承 `BaseProvider`，实现 `transform_request`、`transform_response`、`stream_transform`
-2. `app/providers/registry.py` 的 `PROVIDER_MAP` 中注册
-3. 如果上游有 OpenAI 兼容端点，可直接复制 `openai_provider.py`
-4. 确定协议族归属：OpenAI 兼容加入 `OPENAI_PROTOCOL_PROVIDERS`，Anthropic 兼容加入 `ANTHROPIC_PROTOCOL_PROVIDERS`
+2. `app/providers/registry.py` 的 `PROVIDER_MAP` 中注册，并归入 `OPENAI_PROTOCOL_PROVIDERS` 或 `ANTHROPIC_PROTOCOL_PROVIDERS`
 
 ### 添加新管理 API
 
@@ -616,7 +667,7 @@ Nginx 要点：`/v1/` 反代关闭 `proxy_buffering` 以支持 SSE，300s 超时
 
 **Token 计费不准确？** 非流式直接用上游 `usage`；流式从 SSE 事件中提取。上游未返回 usage 时 tokens 记为 0、cost 为 $0。定价查找：Channel `model_pricing` → 全局 `model_prices` 表。
 
-**渠道测试失败？** OpenAI/Gemini/Qwen 测试 `GET /v1/models`，Anthropic 测试发送最小请求到 `/v1/messages`。检查 Base URL 和 API Key。
+**渠道测试失败？** `provider=openai` 测试 `GET /v1/models`，`provider=anthropic` 测试发送最小请求到 `/v1/messages`。检查 Base URL 和 API Key。
 
 **日志追踪？** 从响应头获取 `X-Request-ID` → 管理后台 Logs 页面搜索。
 

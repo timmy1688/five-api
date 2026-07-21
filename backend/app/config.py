@@ -21,6 +21,9 @@ class Settings(BaseSettings):
     CHANNEL_HEALTH_CHECK_INTERVAL: int = 60
     LOG_RETENTION_DAYS: int = 90
 
+    STICKY_SESSION_ENABLED: bool = True
+    STICKY_SESSION_TTL: int = 900
+
     @property
     def database_url(self) -> str:
         return (

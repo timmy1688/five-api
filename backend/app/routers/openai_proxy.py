@@ -11,6 +11,7 @@ from app.services.auth import verify_api_key
 from app.services.concurrency import ConcurrencyExceeded, concurrency_limiter
 from app.services.pre_checks import get_effective_allowed_models, openai_error, run_pre_checks
 from app.services.proxy import execute_with_failover, extract_openai_usage, stream_with_failover
+from app.services.sticky_session import get_sticky_channel, make_session_key
 from app.utils.ip_check import get_client_ip
 
 router = APIRouter(tags=["openai-proxy"])
@@ -26,7 +27,13 @@ async def _proxy_endpoint(request: Request, body, endpoint: str, api_key: APIKey
     """chat/completions/embeddings 共享的编排入口。"""
     await run_pre_checks(api_key, body.model)
 
-    candidates = await resolve_candidates(body.model, preferred_protocol="openai")
+    body_dict = body.model_dump()
+    session_key = make_session_key(api_key.id, request.headers, body_dict)
+    sticky_channel_id = await get_sticky_channel(session_key)
+
+    candidates = await resolve_candidates(
+        body.model, preferred_protocol="openai", sticky_channel_id=sticky_channel_id,
+    )
     request_id = getattr(request.state, "request_id", "")
     ip = get_client_ip(request)
     start_time = time.monotonic()
@@ -35,8 +42,6 @@ async def _proxy_endpoint(request: Request, body, endpoint: str, api_key: APIKey
         await concurrency_limiter.acquire(api_key.id, api_key.concurrent_limit)
     except ConcurrencyExceeded:
         openai_error(429, "rate_limit_error", "concurrent_limit", "Too many concurrent requests")
-
-    body_dict = body.model_dump()
 
     if getattr(body, "stream", False):
         async def _stream_fn(provider, channel):
@@ -53,6 +58,7 @@ async def _proxy_endpoint(request: Request, body, endpoint: str, api_key: APIKey
             stream_with_failover(
                 candidates, _stream_fn, api_key, endpoint, body.model,
                 request_id, start_time, ip, _openai_error_event,
+                session_key=session_key,
             ),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
@@ -65,6 +71,7 @@ async def _proxy_endpoint(request: Request, body, endpoint: str, api_key: APIKey
     return await execute_with_failover(
         candidates, _send_fn, api_key, endpoint, body.model,
         request_id, start_time, ip, openai_error,
+        session_key=session_key,
     )
 
 

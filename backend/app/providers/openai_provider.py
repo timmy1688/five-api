@@ -7,7 +7,8 @@ from app.providers.base import BaseProvider
 
 
 class OpenAIProvider(BaseProvider):
-    """Passthrough provider for OpenAI and OpenAI-compatible APIs."""
+    """Passthrough provider for OpenAI and all OpenAI-compatible APIs
+    (OpenAI 官方、第三方中转、Gemini/Qwen 等兼容端点)。"""
 
     def __init__(self, channel: Channel):
         super().__init__(channel)

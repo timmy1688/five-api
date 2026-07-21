@@ -5,7 +5,7 @@ from tortoise.models import Model
 class Channel(Model):
     id = fields.IntField(pk=True)
     name = fields.CharField(max_length=128)
-    provider = fields.CharField(max_length=32)
+    provider = fields.CharField(max_length=32)  # 协议：openai | anthropic
     base_url = fields.CharField(max_length=512)
     api_key = fields.CharField(max_length=512)
     models = fields.JSONField(default=list)

@@ -19,6 +19,7 @@ from app.services.auth import verify_api_key_anthropic
 from app.services.concurrency import ConcurrencyExceeded, concurrency_limiter
 from app.services.pre_checks import anthropic_error, run_pre_checks
 from app.services.proxy import execute_with_failover, extract_openai_usage, stream_with_failover
+from app.services.sticky_session import get_sticky_channel, make_session_key
 from app.utils.ip_check import get_client_ip
 
 router = APIRouter(tags=["anthropic-proxy"])
@@ -81,7 +82,13 @@ async def messages(
 ):
     await run_pre_checks(api_key, body.model, anthropic_error)
 
-    candidates = await resolve_candidates(body.model, preferred_protocol="anthropic")
+    raw_body = json.loads(await request.body())
+    session_key = make_session_key(api_key.id, request.headers, raw_body)
+    sticky_channel_id = await get_sticky_channel(session_key)
+
+    candidates = await resolve_candidates(
+        body.model, preferred_protocol="anthropic", sticky_channel_id=sticky_channel_id,
+    )
     request_id = getattr(request.state, "request_id", "")
     ip = get_client_ip(request)
     start_time = time.monotonic()
@@ -91,7 +98,6 @@ async def messages(
     except ConcurrencyExceeded:
         anthropic_error(429, "rate_limit_error", "concurrent_limit", "Too many concurrent requests")
 
-    raw_body = json.loads(await request.body())
     extra_headers = {
         k: v for k, v in request.headers.items()
         if k.startswith("anthropic-")
@@ -113,6 +119,7 @@ async def messages(
             stream_with_failover(
                 candidates, _stream_fn, api_key, "/v1/messages", body.model,
                 request_id, start_time, ip, _anthropic_error_event,
+                session_key=session_key,
             ),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
@@ -131,4 +138,5 @@ async def messages(
     return await execute_with_failover(
         candidates, _send_fn, api_key, "/v1/messages", body.model,
         request_id, start_time, ip, anthropic_error,
+        session_key=session_key,
     )

@@ -6,16 +6,11 @@ from app.models import Channel
 from app.providers.base import BaseProvider
 from app.providers.openai_provider import OpenAIProvider
 from app.providers.anthropic_provider import AnthropicProvider
-from app.providers.gemini_provider import GeminiProvider
-from app.providers.qwen_provider import QwenProvider
-from app.providers.azure_provider import AzureProvider
 
+# 渠道只区分两种线协议：openai（含所有 OpenAI 兼容端点）与 anthropic
 PROVIDER_MAP: dict[str, type[BaseProvider]] = {
     "openai": OpenAIProvider,
     "anthropic": AnthropicProvider,
-    "gemini": GeminiProvider,
-    "qwen": QwenProvider,
-    "azure": AzureProvider,
 }
 
 
@@ -41,18 +36,37 @@ def _weighted_shuffle(channels: list[Channel]) -> list[Channel]:
     return result
 
 
-OPENAI_PROTOCOL_PROVIDERS = {"openai", "gemini", "qwen", "azure"}
+OPENAI_PROTOCOL_PROVIDERS = {"openai"}
 ANTHROPIC_PROTOCOL_PROVIDERS = {"anthropic"}
+
+
+def _promote_sticky(
+    result: list[tuple[Channel, type[BaseProvider]]],
+    channel_id: int,
+) -> list[tuple[Channel, type[BaseProvider]]]:
+    """把粘性会话上次使用的渠道提到候选列表最前。
+
+    只有该渠道仍是健康候选（存在于列表中）时才提前；否则保持原序，
+    让粘性绑定自然回退到正常路由。
+    """
+    for i, (ch, _) in enumerate(result):
+        if ch.id == channel_id:
+            if i != 0:
+                result.insert(0, result.pop(i))
+            break
+    return result
 
 
 async def resolve_candidates(
     model: str,
     preferred_protocol: str | None = None,
+    sticky_channel_id: int | None = None,
 ) -> list[tuple[Channel, type[BaseProvider]]]:
     """返回所有支持该模型的候选渠道。
 
     排序：协议匹配的渠道整体排在前面，各组内按 priority 降序 + weight 加权随机。
     不匹配的渠道保留作为故障转移备选。
+    若传入 sticky_channel_id 且该渠道仍健康，则将其提到最前（粘性会话）。
     """
     from app.services.channel_health import is_channel_healthy
 
@@ -119,6 +133,9 @@ async def resolve_candidates(
                 }
             },
         )
+
+    if sticky_channel_id is not None:
+        result = _promote_sticky(result, sticky_channel_id)
 
     return result
 

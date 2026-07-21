@@ -19,6 +19,7 @@ from app.services.failover import is_retryable_error
 from app.services.logging_service import save_request_log
 from app.services.pricing import calculate_cost
 from app.services.quota import deduct_quota
+from app.services.sticky_session import bind_sticky_channel
 
 
 def extract_openai_usage(data: dict) -> dict:
@@ -90,6 +91,7 @@ async def execute_with_failover(
     start_time: float,
     ip: str,
     format_error: Callable,
+    session_key: str | None = None,
 ) -> Any:
     """非流式通用编排：故障转移 → 计费 → 日志。
 
@@ -114,6 +116,7 @@ async def execute_with_failover(
                     is_stream=False, status_code=200, start_time=start_time, ip=ip,
                 )
                 await record_success(channel.id)
+                await bind_sticky_channel(session_key, channel.id)
                 return response
 
             except HTTPException:
@@ -147,6 +150,7 @@ async def stream_with_failover(
     start_time: float,
     ip: str,
     format_error_event: Callable,
+    session_key: str | None = None,
 ) -> AsyncIterator[str]:
     """流式通用编排：故障转移 → 逐行 yield → 计费 → 日志。
 
@@ -188,6 +192,7 @@ async def stream_with_failover(
                     model_actual = prov.apply_model_mapping(model_requested)
                 last_error = None
                 await record_success(ch.id)
+                await bind_sticky_channel(session_key, ch.id)
                 break
 
             except Exception as e:

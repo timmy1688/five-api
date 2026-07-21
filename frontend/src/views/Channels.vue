@@ -73,26 +73,14 @@
           <el-select v-model="form.provider" style="width: 100%">
             <el-option label="OpenAI" value="openai">
               <span>OpenAI</span>
-              <span class="option-hint">OpenAI 及兼容端点（如第三方中转）</span>
+              <span class="option-hint">OpenAI 协议：官方 / 第三方中转 / Gemini / Qwen 等兼容端点</span>
             </el-option>
             <el-option label="Anthropic" value="anthropic">
               <span>Anthropic</span>
-              <span class="option-hint">Claude 系列，使用 /v1/messages 接口</span>
-            </el-option>
-            <el-option label="Gemini" value="gemini">
-              <span>Gemini</span>
-              <span class="option-hint">Google Gemini，使用 OpenAI 兼容端点</span>
-            </el-option>
-            <el-option label="Qwen" value="qwen">
-              <span>Qwen</span>
-              <span class="option-hint">阿里通义千问，使用 DashScope 兼容端点</span>
-            </el-option>
-            <el-option label="Azure OpenAI" value="azure">
-              <span>Azure OpenAI</span>
-              <span class="option-hint">Azure 部署的 OpenAI，api-key 认证</span>
+              <span class="option-hint">Anthropic 协议，使用 /v1/messages 接口</span>
             </el-option>
           </el-select>
-          <div class="form-hint">决定使用哪种协议与上游 API 通信。第三方 OpenAI 兼容中转选 OpenAI 即可</div>
+          <div class="form-hint">选择上游端点的线协议：OpenAI 兼容端点（含 Gemini/Qwen 中转）选 OpenAI，Claude 系列选 Anthropic</div>
         </el-form-item>
 
         <el-form-item label="Base URL">
@@ -213,9 +201,6 @@ const fetchingModels = ref(false)
 const providerUrlExamples: Record<string, string> = {
   openai: 'https://api.openai.com',
   anthropic: 'https://api.anthropic.com',
-  gemini: 'https://generativelanguage.googleapis.com/v1beta/openai',
-  qwen: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
-  azure: 'https://{resource}.openai.azure.com',
 }
 
 const baseUrlPlaceholder = computed(() => providerUrlExamples[form.value.provider] || 'https://api.example.com')

@@ -18,7 +18,7 @@ export ANTHROPIC_API_KEY=sk-your-gateway-key
 
 ### 协议自动转换 — 一套 Key 通吃所有模型
 
-**双向协议转换**：Anthropic 客户端可以透明调用 OpenAI/Gemini/Qwen/Azure 模型，反之亦然。网关自动处理请求和响应的格式转换，包括流式传输。
+**双向协议转换**：Anthropic 客户端可以透明调用 OpenAI 兼容模型（含 Gemini/Qwen 等），反之亦然。网关自动处理请求和响应的格式转换，包括流式传输。
 
 **协议优先路由**：`/v1/messages` 请求优先匹配 Anthropic 渠道（原生直通），`/v1/chat/completions` 优先匹配 OpenAI 兼容渠道。不匹配的渠道作为故障转移备选，确保最大可用性。
 
@@ -84,9 +84,8 @@ Five API 的做法：上游 Key 只存在网关里，每个人拿到的是网关
 |----------|------|
 | **OpenAI** | GPT-5.x / GPT-4.x / o 系列推理模型，透传 |
 | **Anthropic** | Claude 4.x / 3.x，原生直通 + Beta 特性 |
-| **Google Gemini** | Gemini 3.x / 2.x / 1.5，OpenAI 兼容端点 |
-| **Alibaba Qwen** | 通义千问全系列，DashScope 兼容端点 |
-| **Azure OpenAI** | 支持 Deployment 路由 + api-key 头认证 |
+| **Google Gemini** | Gemini 3.x / 2.x / 1.5，OpenAI 兼容端点（`provider=openai`） |
+| **Alibaba Qwen** | 通义千问全系列，DashScope 兼容端点（`provider=openai`） |
 | **DeepSeek** | 通过 OpenAI 兼容端点或 Anthropic 端点接入 |
 
 支持任何 OpenAI 兼容的第三方中转站。
@@ -182,24 +181,26 @@ docker compose up -d
 ```bash
 docker compose up -d mysql redis  # 只启动依赖
 
-./start.sh
+./service.sh start
 # 前端: http://localhost:5001
 # 后端: http://localhost:5002
-# 日志: logs/backend.log, logs/frontend.log
-# 停止: ./stop.sh
+# 日志: ./service.sh logs   (或 logs/backend.log, logs/frontend.log)
+# 停止: ./service.sh stop   重启: ./service.sh restart
 ```
 
 ## 使用
 
 **1. 添加渠道** — 管理后台 → Channels → Add Channel
 
-| Provider | Base URL | 说明 |
-|----------|----------|------|
-| `openai` | `https://api.openai.com` | OpenAI 及兼容中转 |
-| `anthropic` | `https://api.anthropic.com` | Claude 系列 |
-| `gemini` | `https://generativelanguage.googleapis.com/v1beta/openai` | Gemini OpenAI 兼容端点 |
-| `qwen` | `https://dashscope.aliyuncs.com/compatible-mode/v1` | 通义千问 |
-| `azure` | `https://{resource}.openai.azure.com` | Azure OpenAI |
+渠道 `provider` 只有 `openai`（OpenAI 兼容端点）和 `anthropic`（Anthropic 原生端点）两种：
+
+| provider | 上游 | Base URL |
+|----------|------|----------|
+| `openai` | OpenAI 及兼容中转 | `https://api.openai.com` |
+| `openai` | Google Gemini | `https://generativelanguage.googleapis.com/v1beta/openai` |
+| `openai` | 通义千问 | `https://dashscope.aliyuncs.com/compatible-mode/v1` |
+| `anthropic` | Anthropic Claude | `https://api.anthropic.com` |
+| `anthropic` | DeepSeek（Claude Code 推荐） | `https://api.deepseek.com/anthropic` |
 
 **2. 创建 Key** — 设置 USD 配额和并发数，复制生成的 `sk-xxx`（仅显示一次）
 
@@ -257,7 +258,7 @@ cost = ((prompt - cached) × prompt_price + cached × cached_price + completion 
 ```
 backend/
   app/
-    providers/     # 上游适配器（OpenAI/Anthropic/Gemini/Qwen/Azure）
+    providers/     # 上游适配器（两种线协议：OpenAI 兼容 / Anthropic）
     routers/       # API 路由（代理 + 管理 + 统计 + 指标）
     services/      # 业务逻辑（认证/RBAC/计费/配额/并发/限流/熔断/日志/指标）
     models/        # ORM 模型（User/Role/Channel/APIKey/ModelGroup/ModelPrice/RequestLog）
@@ -274,7 +275,7 @@ frontend/
 
 ## 二次开发
 
-**添加新 Provider**：继承 `BaseProvider`，实现 `transform_request` / `transform_response` / `stream_transform` 三个方法，在 `registry.py` 注册并声明协议族归属。OpenAI 兼容的端点直接复制 `openai_provider.py`。
+**接入新上游**：系统只有 OpenAI / Anthropic 两种线协议，OpenAI 兼容端点直接建 `provider=openai` 渠道、Anthropic 端点建 `provider=anthropic` 渠道即可，无需写代码。仅当上游是全新原生协议时，才继承 `BaseProvider` 实现 `transform_request` / `transform_response` / `stream_transform`，并在 `registry.py` 注册。
 
 **添加新权限**：`services/auth.py` 的 `ALL_PERMISSIONS` 添加权限 → 更新 `BUILTIN_ROLES` → 路由用 `require_permission()` 保护 → 前端用 `auth.hasPermission()` 控制 UI。
 

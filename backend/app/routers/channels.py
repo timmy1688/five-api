@@ -118,8 +118,8 @@ async def test_channel(channel_id: int, _: User = require_permission("channel:re
                     json={"model": "claude-3-haiku-20240307", "max_tokens": 1, "messages": [{"role": "user", "content": "hi"}]},
                 )
             else:
-                url = _models_url(ch.provider, ch.base_url)
-                headers = {"api-key": ch.api_key} if ch.provider == "azure" else {"Authorization": f"Bearer {ch.api_key}"}
+                url = _models_url(ch.base_url)
+                headers = {"Authorization": f"Bearer {ch.api_key}"}
                 resp = await client.get(url, headers=headers)
         success = resp.status_code < 400
         if success:
@@ -160,10 +160,8 @@ async def fetch_models(channel_id: int, _: User = require_permission("channel:re
     return await _fetch_models_from_upstream(ch.provider, ch.base_url, ch.api_key)
 
 
-def _models_url(provider: str, base_url: str) -> str:
+def _models_url(base_url: str) -> str:
     base = base_url.rstrip("/")
-    if provider == "azure":
-        return f"{base}/openai/models?api-version=2024-12-01-preview"
     if base.endswith(("/v1", "/v1beta/openai", "/compatible-mode/v1")):
         return f"{base}/models"
     return f"{base}/v1/models"
@@ -174,12 +172,11 @@ async def _fetch_models_from_upstream(provider: str, base_url: str, api_key: str
         return {"models": ANTHROPIC_MODELS}
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
-            url = _models_url(provider, base_url)
-            headers: dict[str, str] = {"Content-Type": "application/json"}
-            if provider == "azure":
-                headers["api-key"] = api_key
-            else:
-                headers["Authorization"] = f"Bearer {api_key}"
+            url = _models_url(base_url)
+            headers: dict[str, str] = {
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {api_key}",
+            }
             resp = await client.get(url, headers=headers)
             resp.raise_for_status()
             data = resp.json()
