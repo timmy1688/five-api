@@ -3,8 +3,8 @@
     <!-- Time range selector -->
     <div class="page-header">
       <div>
-        <h3>Dashboard</h3>
-        <p>Overview of API usage, cost and performance</p>
+        <h3>Overview</h3>
+        <p>API usage, cost, and performance at a glance</p>
       </div>
       <el-radio-group v-model="days" size="small" @change="reload">
         <el-radio-button :value="1">1d</el-radio-button>
@@ -16,7 +16,7 @@
 
     <!-- Stat cards (6) -->
     <el-row :gutter="16" style="margin-bottom: 20px">
-      <el-col :span="4" v-for="card in cards" :key="card.label">
+      <el-col :xs="24" :sm="12" :md="8" :lg="4" v-for="card in cards" :key="card.label">
         <el-card shadow="never" class="stat-card">
           <div class="stat-icon" :style="{ background: card.bg }">
             <el-icon :size="18" color="#fff"><component :is="card.icon" /></el-icon>
@@ -48,13 +48,13 @@
 
     <!-- Row 1: Cost & Tokens + Top Models -->
     <el-row :gutter="20" style="margin-bottom: 20px">
-      <el-col :span="16">
+      <el-col :xs="24" :lg="16" class="chart-col">
         <el-card shadow="never">
           <template #header><span style="font-weight: 600">Cost & Tokens ({{ days }}d)</span></template>
           <v-chart :option="usageChartOption" style="height: 320px" autoresize />
         </el-card>
       </el-col>
-      <el-col :span="8">
+      <el-col :xs="24" :lg="8" class="chart-col">
         <el-card shadow="never">
           <template #header><span style="font-weight: 600">Top Models (by Cost)</span></template>
           <v-chart :option="modelChartOption" style="height: 320px" autoresize />
@@ -62,15 +62,15 @@
       </el-col>
     </el-row>
 
-    <!-- Row 2: Error Rate + Channel Usage -->
+    <!-- Row 2: Gateway Error Rate + Channel Usage -->
     <el-row :gutter="20" style="margin-bottom: 20px">
-      <el-col :span="12">
+      <el-col :xs="24" :lg="12" class="chart-col">
         <el-card shadow="never">
-          <template #header><span style="font-weight: 600">Error Rate ({{ days }}d)</span></template>
+          <template #header><span style="font-weight: 600">Gateway Error Rate ({{ days }}d)</span></template>
           <v-chart :option="errorChartOption" style="height: 280px" autoresize />
         </el-card>
       </el-col>
-      <el-col :span="12">
+      <el-col :xs="24" :lg="12" class="chart-col">
         <el-card shadow="never">
           <template #header><span style="font-weight: 600">Channel Usage (by Cost)</span></template>
           <v-chart :option="channelChartOption" style="height: 280px" autoresize />
@@ -284,6 +284,10 @@ onUnmounted(() => {
   padding: 16px;
 }
 
+.stat-card {
+  margin-bottom: 16px;
+}
+
 .stat-icon {
   width: 40px;
   height: 40px;
@@ -309,7 +313,8 @@ onUnmounted(() => {
 }
 
 .throughput-grid {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
   gap: 16px;
 }
 
@@ -344,7 +349,8 @@ onUnmounted(() => {
 }
 
 .latency-grid {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
   gap: 16px;
 }
 
@@ -369,5 +375,9 @@ onUnmounted(() => {
   font-size: 24px;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
+}
+
+.chart-col {
+  margin-bottom: 20px;
 }
 </style>

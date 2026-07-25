@@ -2,8 +2,8 @@
   <div>
     <div class="page-header">
       <div>
-        <h3>Roles</h3>
-        <p>Manage roles and their permissions</p>
+        <h3>Roles & Permissions</h3>
+        <p>Manage roles and administrative permissions</p>
       </div>
       <el-button v-if="auth.hasPermission('role:write')" type="primary" @click="openCreate">Create Role</el-button>
     </div>

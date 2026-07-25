@@ -99,9 +99,9 @@ async def resolve_candidates(
         if await is_channel_healthy(ch.id):
             healthy_candidates.append(ch)
 
-    # 如果所有渠道都被熔断，降级使用全部候选（避免完全无法服务）
+    # 全部熔断时只半开一个最高优先级渠道，避免同时冲击所有故障上游。
     if not healthy_candidates and candidates:
-        healthy_candidates = candidates
+        healthy_candidates = [max(candidates, key=lambda ch: (ch.priority, ch.weight))]
 
     if not healthy_candidates:
         raise HTTPException(

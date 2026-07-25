@@ -7,6 +7,15 @@ from app.services.auth import hash_password, require_permission
 router = APIRouter(prefix="/api/users", tags=["users"])
 
 
+async def _is_last_active_super_admin(admin: User) -> bool:
+    return (
+        admin.is_active
+        and admin.role
+        and admin.role.name == "Super Admin"
+        and await User.filter(role_id=admin.role_id, is_active=True).count() <= 1
+    )
+
+
 def _to_response(a: User) -> UserInfo:
     return UserInfo(
         id=a.id,
@@ -52,9 +61,25 @@ async def update_admin(admin_id: int, body: UserUpdate, current: User = require_
     if a is None:
         raise HTTPException(status_code=404, detail="Admin not found")
     update_data = body.model_dump(exclude_unset=True)
-    if "role_id" in update_data and update_data["role_id"] is not None:
+    if admin_id == current.id:
+        if "role_id" in update_data and update_data["role_id"] != current.role_id:
+            raise HTTPException(status_code=400, detail="Cannot change your own role")
+        if update_data.get("is_active") is False:
+            raise HTTPException(status_code=400, detail="Cannot disable yourself")
+    if "role_id" in update_data:
+        if update_data["role_id"] is None:
+            raise HTTPException(status_code=400, detail="role_id cannot be null")
         if not await Role.exists(id=update_data["role_id"]):
             raise HTTPException(status_code=404, detail="Role not found")
+    removes_super_admin = (
+        ("role_id" in update_data and update_data["role_id"] != a.role_id)
+        or update_data.get("is_active") is False
+    )
+    if removes_super_admin and await _is_last_active_super_admin(a):
+        raise HTTPException(
+            status_code=409,
+            detail="At least one active Super Admin is required",
+        )
     if "password" in update_data:
         pw = update_data.pop("password")
         if pw:
@@ -69,7 +94,13 @@ async def update_admin(admin_id: int, body: UserUpdate, current: User = require_
 async def delete_admin(admin_id: int, current: User = require_permission("user:write")):
     if admin_id == current.id:
         raise HTTPException(status_code=400, detail="Cannot delete yourself")
-    deleted = await User.filter(id=admin_id).delete()
-    if not deleted:
+    admin = await User.get_or_none(id=admin_id).select_related("role")
+    if admin is None:
         raise HTTPException(status_code=404, detail="Admin not found")
+    if await _is_last_active_super_admin(admin):
+        raise HTTPException(
+            status_code=409,
+            detail="At least one active Super Admin is required",
+        )
+    await admin.delete()
     return {"message": "Deleted"}

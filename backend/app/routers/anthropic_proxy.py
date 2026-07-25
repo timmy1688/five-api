@@ -2,7 +2,7 @@ import json
 import time
 from collections.abc import AsyncIterator
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from app.models import APIKey
@@ -18,7 +18,12 @@ from app.services.anthropic_compat import (
 from app.services.auth import verify_api_key_anthropic
 from app.services.concurrency import ConcurrencyExceeded, concurrency_limiter
 from app.services.pre_checks import anthropic_error, run_pre_checks
-from app.services.proxy import execute_with_failover, extract_openai_usage, stream_with_failover
+from app.services.proxy import (
+    execute_with_failover,
+    extract_openai_usage,
+    log_rejected_request,
+    stream_with_failover,
+)
 from app.services.sticky_session import get_sticky_channel, make_session_key
 from app.utils.ip_check import get_client_ip
 
@@ -93,22 +98,37 @@ async def messages(
     body: AnthropicMessagesRequest,
     api_key: APIKey = Depends(verify_api_key_anthropic),
 ):
-    await run_pre_checks(api_key, body.model, anthropic_error)
-
-    raw_body = json.loads(await request.body())
-    session_key = make_session_key(api_key.id, request.headers, raw_body)
-    sticky_channel_id = await get_sticky_channel(session_key)
-
-    candidates = await resolve_candidates(
-        body.model, preferred_protocol="anthropic", sticky_channel_id=sticky_channel_id,
-    )
     request_id = getattr(request.state, "request_id", "")
     ip = get_client_ip(request)
     start_time = time.monotonic()
 
     try:
-        await concurrency_limiter.acquire(api_key.id, api_key.concurrent_limit)
+        await run_pre_checks(api_key, body.model, anthropic_error)
+
+        raw_body = json.loads(await request.body())
+        session_key = make_session_key(api_key.id, request.headers, raw_body)
+        sticky_channel_id = await get_sticky_channel(session_key)
+
+        candidates = await resolve_candidates(
+            body.model, preferred_protocol="anthropic",
+            sticky_channel_id=sticky_channel_id,
+        )
+    except HTTPException as exc:
+        await log_rejected_request(
+            api_key, request_id, "/v1/messages", body.model, exc.status_code,
+            start_time, ip, str(exc.detail),
+        )
+        raise
+
+    try:
+        concurrency_lease_id = await concurrency_limiter.acquire(
+            api_key.id, api_key.concurrent_limit
+        )
     except ConcurrencyExceeded:
+        await log_rejected_request(
+            api_key, request_id, "/v1/messages", body.model, 429,
+            start_time, ip, "Too many concurrent requests",
+        )
         anthropic_error(429, "rate_limit_error", "concurrent_limit", "Too many concurrent requests")
 
     extra_headers = {
@@ -132,6 +152,7 @@ async def messages(
             stream_with_failover(
                 candidates, _stream_fn, api_key, "/v1/messages", body.model,
                 request_id, start_time, ip, _anthropic_error_event,
+                concurrency_lease_id,
                 session_key=session_key,
             ),
             media_type="text/event-stream",
@@ -151,5 +172,6 @@ async def messages(
     return await execute_with_failover(
         candidates, _send_fn, api_key, "/v1/messages", body.model,
         request_id, start_time, ip, anthropic_error,
+        concurrency_lease_id,
         session_key=session_key,
     )

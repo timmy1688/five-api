@@ -37,9 +37,6 @@ services:
     ports:
       - "${BACKEND_PORT:-8000}:8000"
     environment:
-      SECRET_KEY: ${SECRET_KEY:-change-me-to-a-random-string}
-      JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
-      JWT_EXPIRE_MINUTES: ${JWT_EXPIRE_MINUTES:-1440}
       MYSQL_HOST: mysql
       MYSQL_PORT: 3306
       MYSQL_USER: ${MYSQL_USER:-five}
@@ -48,6 +45,8 @@ services:
       REDIS_URL: redis://redis:6379/0
       INIT_ADMIN_USERNAME: ${INIT_ADMIN_USERNAME:-admin}
       INIT_ADMIN_PASSWORD: ${INIT_ADMIN_PASSWORD:-admin123}
+    volumes:
+      - ./data:/data
     depends_on:
       mysql:
         condition: service_healthy
@@ -64,4 +63,3 @@ services:
     depends_on:
       - backend
     restart: unless-stopped
-

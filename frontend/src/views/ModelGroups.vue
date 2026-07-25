@@ -3,7 +3,7 @@
     <div class="page-header">
       <div>
         <h3>Model Groups</h3>
-        <p>Create named model groups and assign them to API keys</p>
+        <p>Group models and assign them to API keys</p>
       </div>
       <el-button v-if="auth.hasPermission('model_group:write')" type="primary" @click="openCreate">Create Group</el-button>
     </div>

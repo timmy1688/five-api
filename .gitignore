@@ -45,9 +45,11 @@ Thumbs.db
 mysql_data/
 redis_data/
 
-# ── Aerich migrations (auto-generated, keep in repo) ──
-# !backend/migrations/
-backend/migrations/
+# ── Aerich migrations (versioned with the application) ──
+!backend/migrations/
+!backend/migrations/**
+backend/migrations/**/__pycache__/
+backend/migrations/**/*.py[cod]
 
 # ── OS / misc ──
 *.log

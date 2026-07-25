@@ -19,7 +19,7 @@
 ## 接入 Claude Code CLI
 
 > Claude Code CLI 使用 **Anthropic 原生协议**（`/v1/messages`），包括 `tool_use` 工具调用。
-> Five API 支持两种模式：当上游渠道 provider 为 `anthropic` 时使用 **pass-through 直通**（推荐，完整支持 tool_use）；当上游为 `openai` 等其他 provider 时做格式转换（仅支持纯文本对话）。
+> Five API 支持两种模式：当上游渠道 provider 为 `anthropic` 时使用 **pass-through 直通**（推荐，保留原生 Beta 特性）；当上游为 `openai` 时自动转换请求、响应、流式事件和工具调用。
 
 ### 方式一：环境变量（临时）
 
@@ -103,7 +103,7 @@ Five API 支持将任何提供 Anthropic 兼容端点的模型接入 Claude Code
 
 - Claude Code 会向 `/v1/messages` 发送 Anthropic 格式请求（含 `tool_use` 工具调用）
 - **推荐使用 `provider: "anthropic"` 的渠道**（pass-through 直通模式），完整支持 tool_use、thinking 等 Anthropic 原生特性
-- 使用 `provider: "openai"` 等非 Anthropic 渠道时，网关做格式转换，**仅支持纯文本对话**，不支持工具调用
+- 使用 `provider: "openai"` 渠道时，网关会转换 `tool_use` / `tool_result` 与 OpenAI `tool_calls`，但供应商专属 Beta 字段只在 Anthropic 直通模式保留
 - `ANTHROPIC_AUTH_TOKEN`（Bearer token）优先级高于 `ANTHROPIC_API_KEY`（X-Api-Key header）
 - 确保渠道的 models 列表包含 Claude Code 使用的模型名
 
@@ -172,6 +172,20 @@ codex -m claude-sonnet-4-20250514 "write tests for auth.py"
 - `wire_api` 必须设为 `"chat"`，Five API 提供的是 Chat Completions 端点
 - 不要创建 `[model_providers.openai]`，这是 Codex 内置保留名，会被忽略。使用自定义名称如 `five-api`
 - Codex 默认使用 Responses API (`"responses"`)，不设 `wire_api = "chat"` 会导致请求格式不兼容
+
+---
+
+## 接入自建 vLLM 上游
+
+在管理后台创建渠道即可，无需新增适配器：
+
+- Provider：`OpenAI Compatible`
+- Base URL：`http://vllm-host:8000/v1`（服务根地址也支持）
+- API Key：vLLM 未启用 `--api-key` 时留空
+- Models：点击 Fetch，或手动填写 vLLM 启动时加载的模型名
+
+如果 Five API 运行在容器内，Base URL 应填写容器可访问的主机名或 IP，
+不要使用只指向 Five API 容器自身的 `127.0.0.1`。
 
 ---
 

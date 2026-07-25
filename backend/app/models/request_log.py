@@ -23,6 +23,7 @@ class RequestLog(Model):
     latency_ms = fields.IntField(default=0)
     error_message = fields.TextField(default="")
     ip_address = fields.CharField(max_length=45, default="")
+    failed_over = fields.BooleanField(default=False)
     created_at = fields.DatetimeField(auto_now_add=True, index=True)
 
     class Meta:

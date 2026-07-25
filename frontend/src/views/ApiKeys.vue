@@ -3,7 +3,7 @@
     <div class="page-header">
       <div>
         <h3>API Keys</h3>
-        <p>Create and manage API keys with usage quotas</p>
+        <p>Manage gateway keys, quotas, and model access</p>
       </div>
       <el-button v-if="auth.hasPermission('key:write')" type="primary" @click="openCreate">Create Key</el-button>
     </div>
@@ -15,19 +15,7 @@
         <el-table-column label="Key" min-width="300">
           <template #default="{ row }">
             <div class="key-cell">
-              <code class="key-text">{{ visibleKeys[row.id] && row.key_raw ? row.key_raw : row.key_prefix + '••••••••••••••••••••' }}</code>
-              <div class="key-actions">
-                <el-tooltip v-if="row.key_raw" :content="visibleKeys[row.id] ? 'Hide' : 'Show'" placement="top">
-                  <el-button size="small" circle @click="visibleKeys[row.id] = !visibleKeys[row.id]">
-                    <el-icon :size="14"><View v-if="!visibleKeys[row.id]" /><Hide v-else /></el-icon>
-                  </el-button>
-                </el-tooltip>
-                <el-tooltip v-if="visibleKeys[row.id] && row.key_raw" content="Copy" placement="top">
-                  <el-button size="small" type="primary" circle @click="copyText(row.key_raw)">
-                    <el-icon :size="14"><CopyDocument /></el-icon>
-                  </el-button>
-                </el-tooltip>
-              </div>
+              <code class="key-text">{{ row.key_prefix }}••••••••••••••••••••</code>
             </div>
           </template>
         </el-table-column>
@@ -142,7 +130,7 @@
               <span style="float: right; color: #94a3b8; font-size: 12px">{{ g.models.length }} models</span>
             </el-option>
           </el-select>
-          <div style="font-size: 12px; color: #909399">选择模型分组后将覆盖上方的 Allowed Models 设置。</div>
+          <div style="font-size: 12px; color: #909399">Selecting a model group overrides Allowed Models above.</div>
         </el-form-item>
         <el-form-item label="Allowed IPs">
           <el-select v-model="form.allowed_ips" multiple filterable allow-create style="width: 100%" placeholder="Empty = all IPs allowed">
@@ -176,16 +164,6 @@
           <el-descriptions-item label="Name">{{ detailRow.name }}</el-descriptions-item>
           <el-descriptions-item label="Key Prefix">
             <code>{{ detailRow.key_prefix }}...</code>
-          </el-descriptions-item>
-          <el-descriptions-item label="Full Key">
-            <template v-if="detailRow.key_raw">
-              <div style="display: flex; align-items: center; gap: 8px">
-                <code style="font-size: 12px; word-break: break-all">{{ keyVisible ? detailRow.key_raw : '••••••••••••••••••••••••' }}</code>
-                <el-button text size="small" @click="keyVisible = !keyVisible">{{ keyVisible ? 'Hide' : 'Show' }}</el-button>
-                <el-button text type="primary" size="small" @click="copyText(detailRow.key_raw)">Copy</el-button>
-              </div>
-            </template>
-            <span v-else style="color: #94a3b8; font-size: 12px">Created before key storage was enabled</span>
           </el-descriptions-item>
           <el-descriptions-item label="Enabled">
             <el-tag :type="detailRow.is_enabled ? 'success' : 'info'" size="small" round>{{ detailRow.is_enabled ? 'Yes' : 'No' }}</el-tag>
@@ -252,13 +230,12 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
+import { ref, onMounted } from 'vue'
 import { keysApi } from '@/api/keys'
 import { modelGroupsApi } from '@/api/model_groups'
 import { modelsApi } from '@/api/models'
 import { useAuthStore } from '@/stores/auth'
 import { ElMessage } from 'element-plus'
-import { View, Hide, CopyDocument } from '@element-plus/icons-vue'
 import dayjs from 'dayjs'
 
 const auth = useAuthStore()
@@ -274,8 +251,6 @@ const editingId = ref<number | null>(null)
 const newKey = ref('')
 const detailVisible = ref(false)
 const detailRow = ref<any>(null)
-const keyVisible = ref(false)
-const visibleKeys = reactive<Record<number, boolean>>({})
 const modelGroups = ref<any[]>([])
 const availableModels = ref<string[]>([])
 
@@ -285,7 +260,6 @@ function formatTime(t: string) {
 
 function showDetail(row: any) {
   detailRow.value = row
-  keyVisible.value = false
   detailVisible.value = true
 }
 
@@ -434,12 +408,6 @@ onMounted(() => { load(); loadModelGroups(); loadAvailableModels() })
   font-size: 12px;
   word-break: break-all;
   color: #334155;
-}
-
-.key-actions {
-  display: flex;
-  gap: 4px;
-  flex-shrink: 0;
 }
 
 .detail-section-title {

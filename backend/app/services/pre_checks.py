@@ -19,13 +19,14 @@ def anthropic_error(status_code: int, error_type: str, code: str, message: str):
     )
 
 
-async def get_effective_allowed_models(api_key: APIKey) -> list[str]:
-    """返回 Key 的有效模型白名单。优先级：model_group > allowed_models > 空（不限制）。"""
+async def get_effective_allowed_models(api_key: APIKey) -> list[str] | None:
+    """返回有效模型白名单；None 表示不限制，空列表表示禁止全部。"""
     if api_key.model_group_id:
         group = await ModelGroup.get_or_none(id=api_key.model_group_id)
         if group:
             return group.models or []
-    return api_key.allowed_models or []
+        return []
+    return api_key.allowed_models or None
 
 
 async def run_pre_checks(api_key: APIKey, model: str, raise_error=openai_error) -> None:
@@ -34,7 +35,7 @@ async def run_pre_checks(api_key: APIKey, model: str, raise_error=openai_error) 
         raise_error(429, "rate_limit_error", "quota_exceeded", "Spending quota exceeded")
 
     effective_models = await get_effective_allowed_models(api_key)
-    if effective_models and model not in effective_models:
+    if effective_models is not None and model not in effective_models:
         raise_error(403, "invalid_request_error", "model_not_allowed", f"Model {model} not allowed for this key")
 
     try:

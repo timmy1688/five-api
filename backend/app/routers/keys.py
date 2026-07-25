@@ -1,3 +1,5 @@
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.models import User, APIKey, ModelGroup
@@ -24,7 +26,6 @@ async def _to_response(k: APIKey, group_name_map: dict[int, str] | None = None) 
         id=k.id,
         name=k.name,
         key_prefix=k.key_prefix,
-        key_raw=k.key_raw or "",
         quota_total=total,
         quota_used=used,
         quota_remaining=remaining,
@@ -73,7 +74,6 @@ async def create_key(body: APIKeyCreate, _: User = require_permission("key:write
         name=body.name,
         key_hash=hash_api_key(raw_key),
         key_prefix=raw_key[:8],
-        key_raw=raw_key,
         quota_total=body.quota_total,
         concurrent_limit=body.concurrent_limit,
         rpm_limit=body.rpm_limit,
@@ -81,6 +81,9 @@ async def create_key(body: APIKeyCreate, _: User = require_permission("key:write
         allowed_ips=body.allowed_ips,
         model_group_id=body.model_group_id,
         quota_reset_day=body.quota_reset_day,
+        quota_last_reset_at=(
+            datetime.now(timezone.utc) if body.quota_reset_day is not None else None
+        ),
         expires_at=body.expires_at,
     )
     resp = await _to_response(k)
@@ -104,6 +107,12 @@ async def update_key(key_id: int, body: APIKeyUpdate, _: User = require_permissi
     if "model_group_id" in update_data and update_data["model_group_id"] is not None:
         if not await ModelGroup.exists(id=update_data["model_group_id"]):
             raise HTTPException(status_code=404, detail="Model group not found")
+    if "quota_reset_day" in update_data:
+        update_data["quota_last_reset_at"] = (
+            datetime.now(timezone.utc)
+            if update_data["quota_reset_day"] is not None
+            else None
+        )
     if update_data:
         await APIKey.filter(id=key_id).update(**update_data)
         k = await APIKey.get(id=key_id)
@@ -120,7 +129,10 @@ async def delete_key(key_id: int, _: User = require_permission("key:write")):
 
 @router.post("/{key_id}/reset-quota")
 async def reset_quota(key_id: int, _: User = require_permission("key:write")):
-    updated = await APIKey.filter(id=key_id).update(quota_used=0)
+    updated = await APIKey.filter(id=key_id).update(
+        quota_used=0,
+        quota_last_reset_at=datetime.now(timezone.utc),
+    )
     if not updated:
         raise HTTPException(status_code=404, detail="Key not found")
     return {"message": "Quota reset"}

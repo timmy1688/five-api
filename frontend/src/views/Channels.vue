@@ -3,31 +3,49 @@
     <div class="page-header">
       <div>
         <h3>Channels</h3>
-        <p>Manage upstream LLM provider connections</p>
+        <p>Connect official APIs, proxy services, and self-hosted models</p>
       </div>
       <el-button v-if="auth.hasPermission('channel:write')" type="primary" @click="openCreate">Add Channel</el-button>
+    </div>
+
+    <div class="channel-summary">
+      <div class="summary-item"><span>Total</span><strong>{{ total }}</strong></div>
+      <div class="summary-item"><span>Enabled</span><strong>{{ enabledCount }}</strong></div>
+      <div class="summary-item"><span>Healthy</span><strong class="success-text">{{ healthyCount }}</strong></div>
+      <div class="summary-item"><span>Models</span><strong>{{ modelCount }}</strong></div>
     </div>
 
     <el-card shadow="never">
       <el-table :data="channels" v-loading="loading" stripe>
         <el-table-column prop="id" label="ID" width="60" />
-        <el-table-column prop="name" label="Name" min-width="120" show-overflow-tooltip />
-        <el-table-column prop="provider" label="Provider" width="100">
+        <el-table-column prop="name" label="Name" min-width="170" show-overflow-tooltip>
           <template #default="{ row }">
-            <el-tag size="small" round>{{ row.provider }}</el-tag>
+            <div class="channel-name">
+              <strong>{{ row.name }}</strong>
+              <span>{{ compactUrl(row.base_url) }}</span>
+            </div>
           </template>
         </el-table-column>
-        <el-table-column label="Health" width="72" align="center">
+        <el-table-column prop="provider" label="Protocol" width="155">
           <template #default="{ row }">
-            <el-tooltip v-if="healthMap[row.id]" :content="healthMap[row.id].healthy ? 'Healthy' : `Unhealthy (${healthMap[row.id].fail_count} failures)`">
-              <span :style="{ color: healthMap[row.id].healthy ? '#10b981' : '#ef4444', fontSize: '18px', cursor: 'pointer' }">&#9679;</span>
-            </el-tooltip>
-            <span v-else style="color: #c0c4cc; font-size: 18px">&#9679;</span>
+            <el-tag size="small" round>{{ providerLabel(row.provider) }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="Health" width="110">
+          <template #default="{ row }">
+            <div class="health-cell" :class="{ unknown: !healthMap[row.id], unhealthy: healthMap[row.id] && !healthMap[row.id].healthy }">
+              <span class="health-dot" />
+              <span>{{ !healthMap[row.id] ? 'Unknown' : healthMap[row.id].healthy ? 'Healthy' : 'Unhealthy' }}</span>
+            </div>
           </template>
         </el-table-column>
         <el-table-column label="Models" min-width="200">
           <template #default="{ row }">
-            <el-tag v-for="m in row.models" :key="m" size="small" style="margin: 2px">{{ m }}</el-tag>
+            <div class="model-tags">
+              <el-tag v-for="m in row.models.slice(0, 3)" :key="m" size="small">{{ m }}</el-tag>
+              <el-tag v-if="row.models.length > 3" size="small" type="info">+{{ row.models.length - 3 }}</el-tag>
+              <span v-if="!row.models.length" class="muted-text">Not configured</span>
+            </div>
           </template>
         </el-table-column>
         <el-table-column prop="priority" label="Priority" width="80" align="center" />
@@ -37,10 +55,10 @@
             <el-switch v-model="row.is_enabled" :disabled="!auth.hasPermission('channel:write')" @change="toggleEnabled(row)" />
           </template>
         </el-table-column>
-        <el-table-column v-if="auth.hasPermission('channel:write')" label="Actions" width="230" fixed="right">
+        <el-table-column v-if="auth.hasPermission('channel:write')" label="Actions" width="220" fixed="right">
           <template #default="{ row }">
             <el-button text type="primary" size="small" @click="openEdit(row)">Edit</el-button>
-            <el-button text type="success" size="small" @click="testChannel(row)">Test</el-button>
+            <el-button text type="success" size="small" :loading="testingId === row.id" @click="testChannel(row)">Test</el-button>
             <el-button v-if="healthMap[row.id] && !healthMap[row.id].healthy" text type="warning" size="small" @click="recoverChannel(row)">Recover</el-button>
             <el-popconfirm title="Delete this channel?" @confirm="handleDelete(row.id)">
               <template #reference>
@@ -62,52 +80,64 @@
       />
     </el-card>
 
-    <el-dialog v-model="dialogVisible" :title="editingId ? 'Edit Channel' : 'Add Channel'" width="640px" top="5vh">
-      <el-form :model="form" label-width="130px" class="channel-form" style="padding: 0 8px">
-        <el-form-item label="Name">
+    <el-dialog v-model="dialogVisible" :title="editingId ? 'Edit channel' : 'Add channel'" width="760px" top="4vh">
+      <el-form ref="formRef" :model="form" :rules="rules" label-position="top" class="channel-form">
+        <el-alert
+          v-if="form.provider === 'openai'"
+          class="provider-alert"
+          title="OpenAI-compatible mode"
+          description="Supports OpenAI, DeepSeek, vLLM, Ollama, and compatible gateways. For vLLM, use a URL such as http://127.0.0.1:8000/v1; API Key can be empty."
+          type="info"
+          :closable="false"
+          show-icon
+        />
+
+        <div class="form-grid">
+        <el-form-item label="Name" prop="name">
           <el-input v-model="form.name" placeholder="e.g. OpenAI Official" />
-          <div class="form-hint">给渠道起个名字，方便在日志和列表中识别</div>
+          <div class="form-hint">A short name shown in routing logs</div>
         </el-form-item>
 
         <el-form-item label="Provider">
           <el-select v-model="form.provider" style="width: 100%">
-            <el-option label="OpenAI" value="openai">
-              <span>OpenAI</span>
-              <span class="option-hint">OpenAI 协议：官方 / 第三方中转 / Gemini / Qwen 等兼容端点</span>
+            <el-option label="OpenAI Compatible" value="openai">
+              <span>OpenAI Compatible</span>
+              <span class="option-hint">OpenAI / vLLM / proxy</span>
             </el-option>
             <el-option label="Anthropic" value="anthropic">
               <span>Anthropic</span>
-              <span class="option-hint">Anthropic 协议，使用 /v1/messages 接口</span>
+              <span class="option-hint">Native /v1/messages</span>
             </el-option>
           </el-select>
-          <div class="form-hint">选择上游端点的线协议：OpenAI 兼容端点（含 Gemini/Qwen 中转）选 OpenAI，Claude 系列选 Anthropic</div>
+          <div class="form-hint">The wire protocol implemented by the upstream</div>
         </el-form-item>
 
-        <el-form-item label="Base URL">
+        <el-form-item label="Base URL" prop="base_url">
           <el-input v-model="form.base_url" :placeholder="baseUrlPlaceholder" />
-          <div class="form-hint">上游 API 地址，不含 /v1 后缀。如使用第三方中转填其域名即可</div>
+          <div class="form-hint">Server root and URLs ending in /v1 are both supported</div>
         </el-form-item>
 
         <el-form-item label="API Key">
-          <el-input v-model="form.api_key" type="password" show-password placeholder="上游平台提供的 API Key" />
-          <div class="form-hint">上游提供商的密钥，编辑时留空表示不修改</div>
+          <el-input v-model="form.api_key" type="password" show-password :placeholder="editingId ? 'Leave empty to keep the current key' : 'Optional for self-hosted services'" />
+          <div class="form-hint">Optional for local vLLM; encrypted at rest when provided</div>
         </el-form-item>
+        </div>
 
-        <el-divider content-position="left" style="margin: 20px 0 16px">模型配置</el-divider>
+        <el-divider content-position="left">Models</el-divider>
 
         <el-form-item label="Models">
           <div style="display: flex; gap: 8px; width: 100%">
-            <el-select v-model="form.models" multiple filterable allow-create style="flex: 1" placeholder="输入模型名后按 Enter 添加">
+            <el-select v-model="form.models" multiple filterable allow-create style="flex: 1" placeholder="Enter a model name and press Enter">
             </el-select>
-            <el-button @click="fetchModels" :loading="fetchingModels" :disabled="!form.base_url || !form.api_key">Fetch</el-button>
+            <el-button @click="fetchModels" :loading="fetchingModels" :disabled="!form.base_url">Fetch</el-button>
           </div>
-          <div class="form-hint">此渠道支持的模型列表。点击 Fetch 从上游自动拉取，或手动输入模型名按回车添加</div>
+          <div class="form-hint">Fetch from /models, or type a model name and press Enter</div>
         </el-form-item>
 
         <el-form-item label="Model Mapping">
           <div class="form-hint" style="margin-bottom: 8px">
-            模型别名映射：左侧填客户端请求的名称，右侧填实际发送给上游的名称。<br/>
-            例如客户端请求 <code>gpt-4</code>，实际转发为 <code>gpt-4o</code>
+            Map a public model alias to the model name expected upstream.<br/>
+            Example: client requests <code>my-model</code>, upstream receives <code>local-model</code>.
           </div>
           <div v-for="(val, key, idx) in form.model_mapping" :key="idx" style="display: flex; gap: 8px; margin-bottom: 4px">
             <el-input :model-value="key" disabled style="width: 45%" />
@@ -116,34 +146,41 @@
             <el-button text type="danger" @click="removeMapping(key as string)">X</el-button>
           </div>
           <div style="display: flex; gap: 8px; align-items: center">
-            <el-input v-model="newMappingKey" placeholder="客户端模型名" style="width: 45%" />
+            <el-input v-model="newMappingKey" placeholder="Public model" style="width: 45%" />
             <span class="mapping-arrow">&rarr;</span>
-            <el-input v-model="newMappingVal" placeholder="上游实际模型名" style="width: 45%" />
+            <el-input v-model="newMappingVal" placeholder="Upstream model" style="width: 45%" />
             <el-button text type="primary" @click="addMapping">+</el-button>
           </div>
         </el-form-item>
 
-        <el-divider content-position="left" style="margin: 20px 0 16px">路由与计费</el-divider>
+        <el-divider content-position="left">Routing and billing</el-divider>
 
+        <div class="routing-grid">
         <el-form-item label="Priority">
           <el-input-number v-model="form.priority" :min="0" />
-          <div class="form-hint">多个渠道支持同一模型时，优先选择数值更高的渠道</div>
+          <div class="form-hint">Higher values are selected first</div>
         </el-form-item>
 
         <el-form-item label="Weight">
           <el-input-number v-model="form.weight" :min="1" />
-          <div class="form-hint">同 Priority 的渠道之间按权重随机分配流量。如 A=3, B=1 则 A 分到 75% 请求</div>
+          <div class="form-hint">Traffic share within the same priority</div>
         </el-form-item>
 
         <el-form-item label="Timeout (s)">
           <el-input-number v-model="form.timeout" :min="10" :max="600" />
-          <div class="form-hint">上游请求超时时间（秒）</div>
+          <div class="form-hint">Upstream request timeout</div>
         </el-form-item>
+
+        <el-form-item label="Retries">
+          <el-input-number v-model="form.max_retries" :min="0" :max="5" />
+          <div class="form-hint">Retries before switching channels</div>
+        </el-form-item>
+        </div>
 
         <el-form-item label="Custom Pricing">
           <div class="form-hint" style="margin-bottom: 8px">
-            为此渠道单独设置模型价格（$/1M tokens），覆盖全局定价表。留空则使用全局价格。<br/>
-            P = Prompt 输入价格，C = Completion 输出价格，Ca = 缓存命中价格
+            Optional channel price per 1M tokens; overrides global pricing.<br/>
+            P = input, C = output, Ca = cached input.
           </div>
           <div v-for="(val, key) in form.model_pricing" :key="key" style="display: flex; gap: 6px; margin-bottom: 4px; align-items: center">
             <el-input :model-value="key" disabled style="width: 24%" />
@@ -156,7 +193,7 @@
             <el-button text type="danger" @click="removePricing(key as string)">X</el-button>
           </div>
           <div style="display: flex; gap: 6px; align-items: center">
-            <el-input v-model="newPricingModel" placeholder="模型名" style="width: 24%" />
+            <el-input v-model="newPricingModel" placeholder="Model" style="width: 24%" />
             <span class="pricing-label">P:</span>
             <el-input-number v-model="newPricingPrompt" :min="0" :precision="4" :controls="false" placeholder="2.5" style="width: 20%" />
             <span class="pricing-label">C:</span>
@@ -180,6 +217,7 @@ import { ref, computed, onMounted } from 'vue'
 import { channelsApi } from '@/api/channels'
 import { useAuthStore } from '@/stores/auth'
 import { ElMessage } from 'element-plus'
+import type { FormInstance } from 'element-plus'
 
 const auth = useAuthStore()
 
@@ -189,7 +227,9 @@ const total = ref(0)
 const page = ref(1)
 const dialogVisible = ref(false)
 const saving = ref(false)
+const testingId = ref<number | null>(null)
 const editingId = ref<number | null>(null)
+const formRef = ref<FormInstance>()
 const newMappingKey = ref('')
 const newMappingVal = ref('')
 const newPricingModel = ref('')
@@ -209,9 +249,46 @@ const emptyForm = () => ({
   name: '', provider: 'openai', base_url: '', api_key: '',
   models: [] as string[], model_mapping: {} as Record<string, string>,
   model_pricing: {} as Record<string, { prompt: number; completion: number; cached: number }>,
-  priority: 0, weight: 1, timeout: 120,
+  priority: 0, weight: 1, timeout: 120, max_retries: 1,
 })
 const form = ref(emptyForm())
+const enabledCount = computed(() => channels.value.filter(channel => channel.is_enabled).length)
+const healthyCount = computed(() => channels.value.filter(channel => healthMap.value[channel.id]?.healthy).length)
+const modelCount = computed(() => new Set(channels.value.flatMap(channel => channel.models)).size)
+const rules = {
+  name: [{ required: true, message: 'Enter a channel name', trigger: 'blur' }],
+  base_url: [
+    { required: true, message: 'Enter the upstream Base URL', trigger: 'blur' },
+    { pattern: /^https?:\/\/.+/i, message: 'Use a full http:// or https:// URL', trigger: 'blur' },
+  ],
+}
+
+function providerLabel(provider: string) {
+  return provider === 'openai' ? 'OpenAI Compatible' : 'Anthropic'
+}
+
+function compactUrl(value: string) {
+  try {
+    const url = new URL(value)
+    return `${url.host}${url.pathname === '/' ? '' : url.pathname}`
+  } catch {
+    return value
+  }
+}
+
+function apiError(error: any, fallback: string) {
+  const detail = error?.response?.data?.detail
+  return typeof detail === 'string' ? detail : fallback
+}
+
+function resetDrafts() {
+  newMappingKey.value = ''
+  newMappingVal.value = ''
+  newPricingModel.value = ''
+  newPricingPrompt.value = 0
+  newPricingCompletion.value = 0
+  newPricingCached.value = 0
+}
 
 async function load() {
   loading.value = true
@@ -219,9 +296,9 @@ async function load() {
     const res = await channelsApi.list(page.value)
     channels.value = res.items
     total.value = res.total
-    loadHealth()
-  } catch {
-    ElMessage.error('Failed to load channels')
+    await loadHealth()
+  } catch (error) {
+    ElMessage.error(apiError(error, 'Failed to load channels'))
   } finally {
     loading.value = false
   }
@@ -238,8 +315,8 @@ async function recoverChannel(row: any) {
     await channelsApi.recover(row.id)
     ElMessage.success('Channel recovered')
     await loadHealth()
-  } catch {
-    ElMessage.error('Recover failed')
+  } catch (error) {
+    ElMessage.error(apiError(error, 'Recover failed'))
   }
 }
 
@@ -265,8 +342,8 @@ async function fetchModels() {
       }
     }
     ElMessage.success(`Fetched ${res.models.length} models, ${added} new added`)
-  } catch {
-    ElMessage.error('Failed to fetch models')
+  } catch (error) {
+    ElMessage.error(apiError(error, 'Failed to fetch models'))
   } finally {
     fetchingModels.value = false
   }
@@ -275,12 +352,20 @@ async function fetchModels() {
 function openCreate() {
   editingId.value = null
   form.value = emptyForm()
+  resetDrafts()
   dialogVisible.value = true
 }
 
 function openEdit(row: any) {
   editingId.value = row.id
-  form.value = { ...row, models: [...row.models], model_mapping: { ...row.model_mapping }, model_pricing: { ...row.model_pricing } }
+  resetDrafts()
+  form.value = {
+    ...row,
+    api_key: '',
+    models: [...row.models],
+    model_mapping: { ...row.model_mapping },
+    model_pricing: { ...row.model_pricing },
+  }
   dialogVisible.value = true
 }
 
@@ -311,6 +396,9 @@ function removePricing(key: string) {
 }
 
 async function handleSave() {
+  if (!formRef.value) return
+  const valid = await formRef.value.validate().catch(() => false)
+  if (!valid) return
   saving.value = true
   try {
     if (editingId.value) {
@@ -321,8 +409,8 @@ async function handleSave() {
     dialogVisible.value = false
     ElMessage.success('Saved')
     await load()
-  } catch {
-    ElMessage.error('Save failed')
+  } catch (error) {
+    ElMessage.error(apiError(error, 'Save failed'))
   } finally {
     saving.value = false
   }
@@ -333,27 +421,30 @@ async function handleDelete(id: number) {
     await channelsApi.remove(id)
     ElMessage.success('Deleted')
     await load()
-  } catch {
-    ElMessage.error('Delete failed')
+  } catch (error) {
+    ElMessage.error(apiError(error, 'Delete failed'))
   }
 }
 
 async function toggleEnabled(row: any) {
   try {
     await channelsApi.update(row.id, { is_enabled: row.is_enabled })
-  } catch {
+  } catch (error) {
     row.is_enabled = !row.is_enabled
-    ElMessage.error('Update failed')
+    ElMessage.error(apiError(error, 'Update failed'))
   }
 }
 
 async function testChannel(row: any) {
+  testingId.value = row.id
   try {
     const res = await channelsApi.test(row.id)
     if (res.success) ElMessage.success(`Test passed (${res.status_code})`)
     else ElMessage.error(`Test failed: ${res.error || res.status_code}`)
-  } catch {
-    ElMessage.error('Test request failed')
+  } catch (error) {
+    ElMessage.error(apiError(error, 'Test request failed'))
+  } finally {
+    testingId.value = null
   }
 }
 
@@ -361,6 +452,114 @@ onMounted(load)
 </script>
 
 <style scoped>
+.channel-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.summary-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 70px;
+  padding: 16px 18px;
+  border: 1px solid #e8edf5;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.82);
+}
+
+.summary-item span {
+  color: #64748b;
+  font-size: 13px;
+}
+
+.summary-item strong {
+  color: #0f172a;
+  font-size: 24px;
+  font-variant-numeric: tabular-nums;
+}
+
+.summary-item .success-text {
+  color: #059669;
+}
+
+.channel-name {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.channel-name strong {
+  overflow: hidden;
+  color: #1e293b;
+  text-overflow: ellipsis;
+}
+
+.channel-name span {
+  overflow: hidden;
+  color: #94a3b8;
+  font-size: 12px;
+  text-overflow: ellipsis;
+}
+
+.health-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: #059669;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.health-cell.unknown {
+  color: #94a3b8;
+}
+
+.health-cell.unhealthy {
+  color: #dc2626;
+}
+
+.health-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 12%, transparent);
+}
+
+.model-tags {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.muted-text {
+  color: #94a3b8;
+  font-size: 12px;
+}
+
+.provider-alert {
+  margin-bottom: 20px;
+}
+
+.form-grid,
+.routing-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: 18px;
+}
+
+.channel-form {
+  max-height: calc(88vh - 170px);
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: 2px 8px 8px 2px;
+}
+
 .form-hint {
   font-size: 12px;
   color: #94a3b8;
@@ -400,5 +599,29 @@ onMounted(load)
   font-size: 13px;
   font-weight: 600;
   color: #64748b;
+}
+
+.channel-form :deep(.el-divider) {
+  margin: 22px 0 18px;
+}
+
+.channel-form :deep(.el-form-item) {
+  margin-bottom: 18px;
+}
+
+@media (max-width: 720px) {
+  .channel-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .form-grid,
+  .routing-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .summary-item {
+    min-height: 60px;
+    padding: 12px 14px;
+  }
 }
 </style>

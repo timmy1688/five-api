@@ -1,31 +1,58 @@
-import asyncio
 from decimal import Decimal
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 import pytest
 from httpx import ASGITransport, AsyncClient
 from tortoise import Tortoise
 
 from app.main import create_app
-from app.models import Admin, APIKey, Channel, ModelPrice, RequestLog
-from app.services.auth import create_access_token, hash_api_key, hash_password
+from app.models import APIKey, Channel, ModelPrice, Role, User
+from app.services.auth import ALL_PERMISSIONS, create_access_token, hash_api_key, hash_password
 
 TEST_TORTOISE_ORM = {
     "connections": {"default": "sqlite://:memory:"},
-    "apps": {
-        "models": {
-            "models": ["app.models"],
-            "default_connection": "default",
-        }
-    },
+    "apps": {"models": {"models": ["app.models"], "default_connection": "default"}},
 }
 
 
-@pytest.fixture(scope="session")
-def event_loop():
-    loop = asyncio.new_event_loop()
-    yield loop
-    loop.close()
+async def create_admin(username: str, password: str = "pw") -> User:
+    role, _ = await Role.get_or_create(
+        name="Super Admin",
+        defaults={"permissions": ALL_PERMISSIONS, "is_builtin": True},
+    )
+    return await User.create(
+        username=username, hashed_password=hash_password(password), role=role
+    )
+
+
+class FakeRedis:
+    def __init__(self):
+        self.data = {}
+
+    async def eval(self, *_):
+        return 1
+
+    async def get(self, key):
+        return self.data.get(key)
+
+    async def set(self, key, value, ex=None):
+        self.data[key] = str(value)
+
+    async def delete(self, *keys):
+        return sum(self.data.pop(key, None) is not None for key in keys)
+
+    async def exists(self, *keys):
+        return sum(key in self.data for key in keys)
+
+    async def incr(self, key):
+        self.data[key] = str(int(self.data.get(key, 0)) + 1)
+        return int(self.data[key])
+
+    async def expire(self, *_):
+        return True
+
+    async def ttl(self, key):
+        return 30 if key in self.data else -2
 
 
 @pytest.fixture(autouse=True)
@@ -33,21 +60,19 @@ async def setup_db():
     await Tortoise.init(config=TEST_TORTOISE_ORM)
     await Tortoise.generate_schemas()
     yield
+    from app.providers.base import close_http_clients
+    await close_http_clients()
     await Tortoise._drop_databases()
-    await Tortoise.close_connections()
 
 
 @pytest.fixture
 async def admin():
-    return await Admin.create(
-        username="testadmin",
-        hashed_password=hash_password("testpass123"),
-    )
+    return await create_admin("testadmin", "testpass123")
 
 
 @pytest.fixture
 def admin_token(admin):
-    return create_access_token({"sub": admin.id})
+    return create_access_token({"sub": str(admin.id)})
 
 
 @pytest.fixture
@@ -61,8 +86,6 @@ async def channel():
         model_mapping={"gpt-4": "gpt-4o"},
         model_pricing={"gpt-4o": {"prompt": 2.5, "completion": 10.0}},
         priority=10,
-        weight=1,
-        is_enabled=True,
         timeout=60,
     )
 
@@ -74,10 +97,8 @@ async def api_key():
         name="test-key",
         key_hash=hash_api_key(raw_key),
         key_prefix=raw_key[:8],
-        quota_total=Decimal("10.000000"),
-        quota_used=Decimal("0"),
+        quota_total=Decimal("10"),
         concurrent_limit=5,
-        allowed_models=[],
     ), raw_key
 
 
@@ -85,32 +106,39 @@ async def api_key():
 async def model_price():
     return await ModelPrice.create(
         model="gpt-4o",
-        prompt_price=Decimal("2.500000"),
-        completion_price=Decimal("10.000000"),
+        prompt_price=Decimal("2.5"),
+        completion_price=Decimal("10"),
     )
-
-
-_mock_redis = AsyncMock()
-_mock_redis.eval = AsyncMock(return_value=1)
 
 
 @pytest.fixture(autouse=True)
 def mock_redis():
-    with patch("app.dependencies.get_redis", return_value=_mock_redis):
-        with patch("app.services.concurrency.get_redis", return_value=_mock_redis):
-            yield _mock_redis
+    fake = FakeRedis()
+    targets = [
+        "app.dependencies.get_redis",
+        "app.services.concurrency.get_redis",
+        "app.services.rate_limit.get_redis",
+        "app.services.sticky_session.get_redis",
+        "app.services.channel_health.get_redis",
+    ]
+    with patch(targets[0], return_value=fake), \
+         patch(targets[1], return_value=fake), \
+         patch(targets[2], return_value=fake), \
+         patch(targets[3], return_value=fake), \
+         patch(targets[4], return_value=fake):
+        yield fake
 
 
 @pytest.fixture
 def app():
-    application = create_app()
-    return application
+    return create_app()
 
 
 @pytest.fixture
 async def client(app):
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as ac:
         yield ac
 
 

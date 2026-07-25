@@ -1,4 +1,5 @@
 import uuid
+import re
 
 from starlette.types import ASGIApp, Receive, Scope, Send
 
@@ -13,7 +14,12 @@ class RequestIDMiddleware:
             return
 
         headers = dict(scope.get("headers", []))
-        request_id = headers.get(b"x-request-id", b"").decode() or str(uuid.uuid4())
+        supplied = headers.get(b"x-request-id", b"").decode(errors="ignore")
+        request_id = (
+            supplied
+            if re.fullmatch(r"[A-Za-z0-9._:-]{1,36}", supplied)
+            else str(uuid.uuid4())
+        )
         scope.setdefault("state", {})["request_id"] = request_id
 
         async def send_with_request_id(message):

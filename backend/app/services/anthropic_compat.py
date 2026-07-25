@@ -2,6 +2,15 @@ import json
 import uuid
 from collections.abc import AsyncIterator
 
+
+def _openai_cached_tokens(usage: dict) -> int:
+    details = usage.get("prompt_tokens_details") or {}
+    return details.get(
+        "cached_tokens",
+        usage.get("prompt_cache_hit_tokens", 0),
+    ) or 0
+
+
 # ── Anthropic → OpenAI helpers ──
 
 
@@ -149,6 +158,8 @@ def anthropic_to_openai_request(body: dict) -> dict:
         result["top_p"] = body["top_p"]
     if body.get("stop_sequences"):
         result["stop"] = body["stop_sequences"]
+    if body.get("thinking") is not None:
+        result["thinking"] = body["thinking"]
     if body.get("tools"):
         tools = _convert_anthropic_tools(body["tools"])
         if tools:
@@ -157,6 +168,8 @@ def anthropic_to_openai_request(body: dict) -> dict:
         choice = _convert_anthropic_tool_choice(body["tool_choice"])
         if choice is not None:
             result["tool_choice"] = choice
+        if body["tool_choice"].get("disable_parallel_tool_use") is True:
+            result["parallel_tool_calls"] = False
     if body.get("stream"):
         result["stream"] = True
         # 让 OpenAI 兼容上游在流末回吐 usage，否则计费/日志拿不到 token 数
@@ -202,7 +215,7 @@ def openai_to_anthropic_response(openai_resp: dict, model: str) -> dict:
         "input_tokens": usage.get("prompt_tokens", 0),
         "output_tokens": usage.get("completion_tokens", 0),
     }
-    cache_read = (usage.get("prompt_tokens_details") or {}).get("cached_tokens", 0)
+    cache_read = _openai_cached_tokens(usage)
     if cache_read:
         anthropic_usage["cache_read_input_tokens"] = cache_read
 
@@ -277,7 +290,7 @@ async def openai_stream_to_anthropic_stream(
         if usage:
             input_tokens = usage.get("prompt_tokens", input_tokens)
             output_tokens = usage.get("completion_tokens", output_tokens)
-            cached_tokens = (usage.get("prompt_tokens_details") or {}).get("cached_tokens", cached_tokens)
+            cached_tokens = _openai_cached_tokens(usage) or cached_tokens
 
         choices = chunk.get("choices", [])
         if not choices:

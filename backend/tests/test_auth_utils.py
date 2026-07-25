@@ -1,4 +1,4 @@
-import pytest
+from starlette.requests import Request
 
 from app.services.auth import (
     create_access_token,
@@ -6,10 +6,8 @@ from app.services.auth import (
     hash_password,
     verify_password,
 )
+from app.utils.ip_check import get_client_ip
 from app.utils.key_generator import generate_api_key
-
-pytestmark = pytest.mark.asyncio
-
 
 def test_password_hash_verify():
     plain = "test-password-123"
@@ -52,3 +50,14 @@ def test_generate_api_key_custom_prefix():
     key = generate_api_key(prefix="five-", length=32)
     assert key.startswith("five-")
     assert len(key) == 37
+
+
+def test_client_ip_does_not_trust_forwarded_header():
+    request = Request({
+        "type": "http",
+        "method": "GET",
+        "path": "/",
+        "headers": [(b"x-forwarded-for", b"203.0.113.99")],
+        "client": ("10.0.0.8", 12345),
+    })
+    assert get_client_ip(request) == "10.0.0.8"

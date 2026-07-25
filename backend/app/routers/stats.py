@@ -13,6 +13,18 @@ from app.services.auth import require_permission
 router = APIRouter(prefix="/api/stats", tags=["stats"])
 
 
+def _sql_parts(conn):
+    """聚合查询同时兼容生产 MySQL 与测试 SQLite。"""
+    sqlite = conn.capabilities.dialect == "sqlite"
+    return (
+        "?" if sqlite else "%s",
+        "strftime('%Y-%m-%d', created_at)" if sqlite
+        else "DATE_FORMAT(created_at, '%%Y-%%m-%%d')",
+        "strftime('%Y-%m-%d %H:%M', created_at)" if sqlite
+        else "DATE_FORMAT(created_at, '%%Y-%%m-%%d %%H:%%i')",
+    )
+
+
 @router.get("/overview", response_model=StatsOverview)
 async def overview(_: User = require_permission("stat:read")):
     now = datetime.now(timezone.utc)
@@ -53,18 +65,19 @@ async def usage(
     from tortoise import connections
 
     conn = connections.get("default")
+    ph, day_expr, _ = _sql_parts(conn)
     rows = await conn.execute_query_dict(
-        """
+        f"""
         SELECT
-            DATE_FORMAT(created_at, '%%Y-%%m-%%d') as `date`,
+            {day_expr} as `date`,
             COALESCE(SUM(prompt_tokens), 0) as prompt_tokens,
             COALESCE(SUM(completion_tokens), 0) as completion_tokens,
             COALESCE(SUM(total_tokens), 0) as total_tokens,
             COUNT(*) as request_count,
             COALESCE(SUM(cost), 0) as cost
         FROM request_logs
-        WHERE created_at >= %s
-        GROUP BY DATE_FORMAT(created_at, '%%Y-%%m-%%d')
+        WHERE created_at >= {ph}
+        GROUP BY {day_expr}
         ORDER BY `date`
         """,
         [start],
@@ -134,15 +147,16 @@ async def error_rate(
     from tortoise import connections
 
     conn = connections.get("default")
+    ph, day_expr, _ = _sql_parts(conn)
     rows = await conn.execute_query_dict(
-        """
+        f"""
         SELECT
-            DATE_FORMAT(created_at, '%%Y-%%m-%%d') as `date`,
+            {day_expr} as `date`,
             COUNT(*) as total,
             SUM(CASE WHEN status_code >= 400 THEN 1 ELSE 0 END) as errors
         FROM request_logs
-        WHERE created_at >= %s
-        GROUP BY DATE_FORMAT(created_at, '%%Y-%%m-%%d')
+        WHERE created_at >= {ph}
+        GROUP BY {day_expr}
         ORDER BY `date`
         """,
         [start],
@@ -160,10 +174,11 @@ async def latency(
     from tortoise import connections
 
     conn = connections.get("default")
+    ph, day_expr, _ = _sql_parts(conn)
 
     # 整体百分位
     rows = await conn.execute_query_dict(
-        "SELECT latency_ms FROM request_logs WHERE created_at >= %s AND status_code > 0 ORDER BY latency_ms",
+        f"SELECT latency_ms FROM request_logs WHERE created_at >= {ph} AND status_code > 0 ORDER BY latency_ms",
         [start],
     )
     if not rows:
@@ -177,10 +192,10 @@ async def latency(
 
     # 按天趋势
     daily_rows = await conn.execute_query_dict(
-        """
-        SELECT DATE_FORMAT(created_at, '%%Y-%%m-%%d') as `date`, latency_ms
+        f"""
+        SELECT {day_expr} as `date`, latency_ms
         FROM request_logs
-        WHERE created_at >= %s AND status_code > 0
+        WHERE created_at >= {ph} AND status_code > 0
         ORDER BY `date`, latency_ms
         """,
         [start],
@@ -212,10 +227,13 @@ async def throughput(
     from tortoise import connections
 
     conn = connections.get("default")
+    ph, _, minute_expr = _sql_parts(conn)
 
     # 最近 60 秒的请求数和 Token 总量
     current = await conn.execute_query_dict(
-        "SELECT COUNT(*) as cnt, COALESCE(SUM(total_tokens), 0) as tokens FROM request_logs WHERE created_at >= NOW() - INTERVAL 60 SECOND"
+        f"SELECT COUNT(*) as cnt, COALESCE(SUM(total_tokens), 0) as tokens "
+        f"FROM request_logs WHERE created_at >= {ph}",
+        [datetime.now(timezone.utc) - timedelta(seconds=60)],
     )
     current_cnt = current[0]["cnt"] if current else 0
     current_tokens = int(current[0]["tokens"]) if current else 0
@@ -223,12 +241,12 @@ async def throughput(
     # 选定天数内按分钟聚合的峰值
     start = datetime.now(timezone.utc) - timedelta(days=days)
     peak = await conn.execute_query_dict(
-        """
+        f"""
         SELECT MAX(cnt) as peak_rpm FROM (
             SELECT COUNT(*) as cnt
             FROM request_logs
-            WHERE created_at >= %s
-            GROUP BY DATE_FORMAT(created_at, '%%Y-%%m-%%d %%H:%%i')
+            WHERE created_at >= {ph}
+            GROUP BY {minute_expr}
         ) sub
         """,
         [start],

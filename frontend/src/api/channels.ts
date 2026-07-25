@@ -33,7 +33,7 @@ export const channelsApi = {
     const { data } = await client.post(`/channels/${id}/fetch-models`)
     return data
   },
-  fetchModelsPreview: async (body: { provider: string; base_url: string; api_key: string }) => {
+  fetchModelsPreview: async (body: { provider: string; base_url: string; api_key?: string }) => {
     const { data } = await client.post('/channels/fetch-models-preview', body)
     return data
   },

@@ -1,7 +1,7 @@
 import json
 import time
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 from app.models import APIKey, ModelPrice
@@ -10,7 +10,12 @@ from app.schemas.openai import ChatCompletionRequest, CompletionRequest, Embeddi
 from app.services.auth import verify_api_key
 from app.services.concurrency import ConcurrencyExceeded, concurrency_limiter
 from app.services.pre_checks import get_effective_allowed_models, openai_error, run_pre_checks
-from app.services.proxy import execute_with_failover, extract_openai_usage, stream_with_failover
+from app.services.proxy import (
+    execute_with_failover,
+    extract_openai_usage,
+    log_rejected_request,
+    stream_with_failover,
+)
 from app.services.sticky_session import get_sticky_channel, make_session_key
 from app.utils.ip_check import get_client_ip
 
@@ -25,22 +30,47 @@ def _openai_error_event(e: Exception) -> str:
 
 async def _proxy_endpoint(request: Request, body, endpoint: str, api_key: APIKey):
     """chat/completions/embeddings 共享的编排入口。"""
-    await run_pre_checks(api_key, body.model)
-
-    body_dict = body.model_dump()
-    session_key = make_session_key(api_key.id, request.headers, body_dict)
-    sticky_channel_id = await get_sticky_channel(session_key)
-
-    candidates = await resolve_candidates(
-        body.model, preferred_protocol="openai", sticky_channel_id=sticky_channel_id,
-    )
     request_id = getattr(request.state, "request_id", "")
     ip = get_client_ip(request)
     start_time = time.monotonic()
 
     try:
-        await concurrency_limiter.acquire(api_key.id, api_key.concurrent_limit)
+        await run_pre_checks(api_key, body.model)
+
+        body_dict = body.model_dump()
+        session_key = make_session_key(api_key.id, request.headers, body_dict)
+        sticky_channel_id = await get_sticky_channel(session_key)
+
+        candidates = await resolve_candidates(
+            body.model, preferred_protocol="openai",
+            sticky_channel_id=sticky_channel_id,
+        )
+        if endpoint != "/v1/chat/completions":
+            candidates = [
+                candidate for candidate in candidates
+                if candidate[0].provider == "openai"
+            ]
+            if not candidates:
+                openai_error(
+                    404, "invalid_request_error", "model_not_found",
+                    f"No OpenAI-compatible channel supports {endpoint}",
+                )
+    except HTTPException as exc:
+        await log_rejected_request(
+            api_key, request_id, endpoint, body.model, exc.status_code,
+            start_time, ip, str(exc.detail),
+        )
+        raise
+
+    try:
+        concurrency_lease_id = await concurrency_limiter.acquire(
+            api_key.id, api_key.concurrent_limit
+        )
     except ConcurrencyExceeded:
+        await log_rejected_request(
+            api_key, request_id, endpoint, body.model, 429,
+            start_time, ip, "Too many concurrent requests",
+        )
         openai_error(429, "rate_limit_error", "concurrent_limit", "Too many concurrent requests")
 
     if getattr(body, "stream", False):
@@ -58,6 +88,7 @@ async def _proxy_endpoint(request: Request, body, endpoint: str, api_key: APIKey
             stream_with_failover(
                 candidates, _stream_fn, api_key, endpoint, body.model,
                 request_id, start_time, ip, _openai_error_event,
+                concurrency_lease_id,
                 session_key=session_key,
             ),
             media_type="text/event-stream",
@@ -71,6 +102,7 @@ async def _proxy_endpoint(request: Request, body, endpoint: str, api_key: APIKey
     return await execute_with_failover(
         candidates, _send_fn, api_key, endpoint, body.model,
         request_id, start_time, ip, openai_error,
+        concurrency_lease_id,
         session_key=session_key,
     )
 
@@ -106,7 +138,7 @@ async def embeddings(
 async def list_models(api_key: APIKey = Depends(verify_api_key)):
     models = await list_available_models()
     effective_models = await get_effective_allowed_models(api_key)
-    if effective_models:
+    if effective_models is not None:
         allowed_set = set(effective_models)
         models = [m for m in models if m["id"] in allowed_set]
     return {"object": "list", "data": models}
@@ -121,7 +153,7 @@ async def get_key_info(api_key: APIKey = Depends(verify_api_key)):
 
     models = await list_available_models()
     effective_models = await get_effective_allowed_models(api_key)
-    if effective_models:
+    if effective_models is not None:
         models = [m for m in models if m["id"] in effective_models]
     model_ids = [m["id"] for m in models]
 
@@ -140,4 +172,6 @@ async def get_key_info(api_key: APIKey = Depends(verify_api_key)):
         "quota_remaining": remaining,
         "models": model_ids,
         "model_prices": model_prices,
+        "model_prices_source": "global_defaults",
+        "channel_overrides_may_apply": True,
     }

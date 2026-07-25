@@ -1,15 +1,18 @@
 import { createRouter, createWebHistory } from 'vue-router'
+import { firstAllowedPath, navigationItems } from '@/config/navigation'
+import type { NavigationName } from '@/config/navigation'
 import { useAuthStore } from '@/stores/auth'
 
-const routePermissions: Record<string, string> = {
-  '/channels': 'channel:read',
-  '/models': 'channel:read',
-  '/keys': 'key:read',
-  '/model-groups': 'model_group:read',
-  '/model-prices': 'model_price:read',
-  '/logs': 'log:read',
-  '/admins': 'user:read',
-  '/roles': 'role:read',
+const viewComponents: Record<NavigationName, () => Promise<unknown>> = {
+  Dashboard: () => import('@/views/Dashboard.vue'),
+  Channels: () => import('@/views/Channels.vue'),
+  Models: () => import('@/views/Models.vue'),
+  ApiKeys: () => import('@/views/ApiKeys.vue'),
+  ModelGroups: () => import('@/views/ModelGroups.vue'),
+  ModelPrices: () => import('@/views/ModelPrices.vue'),
+  Logs: () => import('@/views/Logs.vue'),
+  Admins: () => import('@/views/Admins.vue'),
+  Roles: () => import('@/views/Roles.vue'),
 }
 
 const router = createRouter({
@@ -24,31 +27,50 @@ const router = createRouter({
       path: '/',
       component: () => import('@/layouts/AdminLayout.vue'),
       children: [
-        { path: '', name: 'Dashboard', component: () => import('@/views/Dashboard.vue') },
-        { path: 'channels', name: 'Channels', component: () => import('@/views/Channels.vue') },
-        { path: 'models', name: 'Models', component: () => import('@/views/Models.vue') },
-        { path: 'keys', name: 'ApiKeys', component: () => import('@/views/ApiKeys.vue') },
-        { path: 'model-groups', name: 'ModelGroups', component: () => import('@/views/ModelGroups.vue') },
-        { path: 'model-prices', name: 'ModelPrices', component: () => import('@/views/ModelPrices.vue') },
-        { path: 'logs', name: 'Logs', component: () => import('@/views/Logs.vue') },
-        { path: 'admins', name: 'Admins', component: () => import('@/views/Admins.vue') },
-        { path: 'roles', name: 'Roles', component: () => import('@/views/Roles.vue') },
+        ...navigationItems.map(item => ({
+          path: item.path === '/' ? '' : item.path.slice(1),
+          name: item.name,
+          component: viewComponents[item.name],
+          meta: {
+            title: item.title,
+            permission: item.permission,
+          },
+        })),
+        {
+          path: 'forbidden',
+          name: 'AccessDenied',
+          component: () => import('@/views/AccessDenied.vue'),
+          meta: { title: 'Access Denied' },
+        },
       ],
     },
   ],
 })
 
-router.beforeEach((to) => {
+router.beforeEach(async (to) => {
   const auth = useAuthStore()
-  if (to.name !== 'Login' && !auth.token) {
+
+  if (!auth.token) {
+    if (to.name === 'Login') return
     return { name: 'Login' }
   }
-  if (to.name === 'Login' && auth.token) {
-    return { name: 'Dashboard' }
+
+  try {
+    await auth.ensureProfile()
+  } catch {
+    return { name: 'Login' }
   }
-  const requiredPerm = routePermissions[to.path]
-  if (requiredPerm && auth.permissions.length > 0 && !auth.hasPermission(requiredPerm)) {
-    return { name: 'Dashboard' }
+
+  const fallback = firstAllowedPath(auth.hasPermission)
+  if (to.name === 'Login') {
+    return fallback ?? { name: 'AccessDenied' }
+  }
+
+  const requiredPermission = to.meta.permission as string | undefined
+  if (requiredPermission && !auth.hasPermission(requiredPermission)) {
+    return fallback && fallback !== to.path
+      ? fallback
+      : { name: 'AccessDenied' }
   }
 })
 

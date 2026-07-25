@@ -8,7 +8,42 @@ BACKEND_PORT=5002
 FRONTEND_PORT=5001
 SERVICES=(backend frontend)
 
+install_deps() {
+    command -v python3 >/dev/null 2>&1 || {
+        echo "ERROR: 未找到 python3（需要 Python 3.11+）" >&2
+        exit 1
+    }
+    command -v npm >/dev/null 2>&1 || {
+        echo "ERROR: 未找到 npm（需要 Node.js 20+）" >&2
+        exit 1
+    }
+
+    if [ ! -x .venv/bin/python ]; then
+        echo "==> Creating Python virtual environment..."
+        python3 -m venv .venv
+    fi
+
+    echo "==> Installing backend dependencies..."
+    (
+        cd backend
+        ../.venv/bin/python -m pip install -r requirements.txt
+    )
+
+    echo "==> Installing frontend dependencies..."
+    npm --prefix frontend install
+
+    echo "==> Dependencies installed."
+}
+
+check_deps() {
+    if [ ! -x .venv/bin/uvicorn ] || [ ! -x frontend/node_modules/.bin/vite ]; then
+        echo "ERROR: 项目依赖尚未安装，请先运行：./service.sh install" >&2
+        exit 1
+    fi
+}
+
 start() {
+    check_deps
     mkdir -p data/mysql data/redis "$PID_DIR" "$LOG_DIR"
 
     # 1. MySQL + Redis
@@ -28,7 +63,9 @@ start() {
     fuser -k "${BACKEND_PORT}/tcp" 2>/dev/null || true
     sleep 0.5
     cd backend
-    nohup uvicorn app.main:app --reload --host 0.0.0.0 --port "${BACKEND_PORT}" > "../${LOG_DIR}/backend.log" 2>&1 &
+    echo "==> Applying database migrations..."
+    ../.venv/bin/aerich upgrade
+    nohup ../.venv/bin/uvicorn app.main:app --reload --host 0.0.0.0 --port "${BACKEND_PORT}" > "../${LOG_DIR}/backend.log" 2>&1 &
     echo $! > "../${PID_DIR}/backend.pid"
     cd ..
 
@@ -37,11 +74,16 @@ start() {
     fuser -k "${FRONTEND_PORT}/tcp" 2>/dev/null || true
     sleep 0.5
     cd frontend
-    nohup npx vite --port "${FRONTEND_PORT}" --host 0.0.0.0 --strictPort > "../${LOG_DIR}/frontend.log" 2>&1 &
+    nohup ./node_modules/.bin/vite --port "${FRONTEND_PORT}" --host 0.0.0.0 --strictPort > "../${LOG_DIR}/frontend.log" 2>&1 &
     echo $! > "../${PID_DIR}/frontend.pid"
     cd ..
 
     sleep 3
+    if ! curl -fsS --max-time 2 "http://127.0.0.1:${BACKEND_PORT}/docs" >/dev/null ||
+       ! curl -fsS --max-time 2 "http://127.0.0.1:${FRONTEND_PORT}" >/dev/null; then
+        echo "ERROR: 服务启动后未通过访问检查，请查看 ./service.sh logs" >&2
+        exit 1
+    fi
     echo ""
     echo "  Frontend: http://localhost:${FRONTEND_PORT}"
     echo "  Backend:  http://localhost:${BACKEND_PORT}"
@@ -83,13 +125,19 @@ restart() {
 }
 
 status() {
+    local ports=("$BACKEND_PORT" "$FRONTEND_PORT")
+    local paths=("/docs" "")
+    local index=0
     for svc in "${SERVICES[@]}"; do
         pid_file="$PID_DIR/$svc.pid"
-        if [ -f "$pid_file" ] && kill -0 "$(cat "$pid_file")" 2>/dev/null; then
+        if [ -f "$pid_file" ] &&
+           kill -0 "$(cat "$pid_file")" 2>/dev/null &&
+           curl -fsS --max-time 2 "http://127.0.0.1:${ports[$index]}${paths[$index]}" >/dev/null; then
             echo "  $svc: running (pid $(cat "$pid_file"))"
         else
             echo "  $svc: stopped"
         fi
+        index=$((index + 1))
     done
     echo "==> Docker services:"
     docker compose ps mysql redis
@@ -106,8 +154,9 @@ logs() {
 
 usage() {
     cat <<EOF
-Usage: ./service.sh {start|stop|restart|status|logs [backend|frontend]}
+Usage: ./service.sh {install|start|stop|restart|status|logs [backend|frontend]}
 
+  install   创建 .venv 并安装后端、前端依赖
   start     启动 MySQL/Redis + 后端(:${BACKEND_PORT}) + 前端(:${FRONTEND_PORT})
   stop      停止后端/前端并关闭 MySQL/Redis
   restart   先 stop 再 start
@@ -118,6 +167,7 @@ EOF
 
 cmd="${1:-}"
 case "$cmd" in
+    install) install_deps ;;
     start)   start ;;
     stop)    stop ;;
     restart) restart ;;

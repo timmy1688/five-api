@@ -6,7 +6,7 @@
         <p>Configure per-model token pricing for cost tracking</p>
       </div>
       <div v-if="auth.hasPermission('model_price:write')" style="display: flex; gap: 8px">
-        <el-button @click="syncDefaults" :loading="syncing">Sync Defaults</el-button>
+        <el-button @click="syncDefaults" :loading="syncing">Sync Prices</el-button>
         <el-button type="primary" @click="openCreate">Add Price</el-button>
       </div>
     </div>
@@ -15,8 +15,8 @@
       <template #header>
         <div style="display: flex; align-items: center; gap: 8px; padding: 0 4px">
           <el-icon color="#f59e0b" :size="18"><WarningFilled /></el-icon>
-          <span style="font-weight: 600; font-size: 14px">未设置价格的模型（{{ unpricedModels.length }}）</span>
-          <span style="font-size: 12px; color: #94a3b8">以下模型已在渠道中配置但尚未设置价格，请求将无法计费</span>
+          <span style="font-weight: 600; font-size: 14px">Unpriced Models ({{ unpricedModels.length }})</span>
+          <span style="font-size: 12px; color: #94a3b8">These channel models have no price and will be billed at $0.</span>
         </div>
       </template>
       <div class="unpriced-list" style="padding: 4px 20px 16px">
@@ -27,7 +27,7 @@
               <span v-for="ch in item.channels" :key="ch" class="channel-tag">{{ ch }}</span>
             </span>
           </div>
-          <el-button v-if="auth.hasPermission('model_price:write')" text type="primary" size="small" @click="quickAdd(item.model)">添加价格</el-button>
+          <el-button v-if="auth.hasPermission('model_price:write')" text type="primary" size="small" @click="quickAdd(item.model)">Add Price</el-button>
         </div>
       </div>
     </el-card>
@@ -84,15 +84,15 @@
         </el-form-item>
         <el-form-item label="Input ($/1M tokens)">
           <el-input-number v-model="form.prompt_price" :min="0" :precision="4" :step="0.1" style="width: 100%" />
-          <div class="form-hint">输入 token 单价（每百万 token 美元价格）</div>
+          <div class="form-hint">Input token price in USD per million tokens</div>
         </el-form-item>
         <el-form-item label="Output ($/1M tokens)">
           <el-input-number v-model="form.completion_price" :min="0" :precision="4" :step="0.1" style="width: 100%" />
-          <div class="form-hint">输出 token 单价</div>
+          <div class="form-hint">Output token price in USD per million tokens</div>
         </el-form-item>
         <el-form-item label="Cached ($/1M tokens)">
           <el-input-number v-model="form.cached_price" :min="0" :precision="4" :step="0.1" style="width: 100%" />
-          <div class="form-hint">缓存命中 token 单价，通常远低于 Prompt 价格（Anthropic ~10%，OpenAI ~50%）</div>
+          <div class="form-hint">Cached input price, usually lower than the prompt price</div>
         </el-form-item>
       </el-form>
       <template #footer>
@@ -107,7 +107,7 @@
 import { ref, onMounted } from 'vue'
 import { modelPricesApi } from '@/api/model_prices'
 import { useAuthStore } from '@/stores/auth'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { WarningFilled } from '@element-plus/icons-vue'
 
 const auth = useAuthStore()
@@ -204,10 +204,19 @@ async function toggleActive(row: any) {
 }
 
 async function syncDefaults() {
+  try {
+    await ElMessageBox.confirm(
+      'This adds missing models and refreshes built-in prices. Custom models, status, and channel pricing stay unchanged.',
+      'Sync Prices',
+      { confirmButtonText: 'Sync', cancelButtonText: 'Cancel', type: 'info' },
+    )
+  } catch {
+    return
+  }
   syncing.value = true
   try {
-    const res = await modelPricesApi.syncDefaults()
-    ElMessage.success(`${res.created} new model prices imported`)
+    const res = await modelPricesApi.syncDefaults(true)
+    ElMessage.success(`Catalog ${res.catalog_version}: ${res.created} added, ${res.updated} updated`)
     await load()
     await loadUnpriced()
   } catch {

@@ -5,6 +5,8 @@ from app.models import User, Channel
 from app.schemas.channel import ChannelCreate, ChannelResponse, ChannelUpdate
 from app.services.auth import get_current_admin, require_permission
 from app.services.channel_health import force_recover, get_health_status, record_failure, record_success
+from app.utils.secrets import decrypt_secret, encrypt_secret, mask_secret
+from app.utils.upstream_url import upstream_url
 
 router = APIRouter(prefix="/api/channels", tags=["channels"])
 
@@ -15,7 +17,7 @@ def _to_response(ch: Channel) -> ChannelResponse:
         name=ch.name,
         provider=ch.provider,
         base_url=ch.base_url,
-        api_key=ch.api_key,
+        api_key=mask_secret(ch.api_key),
         models=ch.models,
         model_mapping=ch.model_mapping,
         model_pricing=ch.model_pricing or {},
@@ -42,7 +44,9 @@ async def list_channels(
 
 @router.post("", response_model=ChannelResponse, status_code=status.HTTP_201_CREATED)
 async def create_channel(body: ChannelCreate, _: User = require_permission("channel:write")):
-    ch = await Channel.create(**body.model_dump())
+    data = body.model_dump()
+    data["api_key"] = encrypt_secret(data["api_key"])
+    ch = await Channel.create(**data)
     return _to_response(ch)
 
 
@@ -58,13 +62,13 @@ async def channels_health(_: User = require_permission("channel:read")):
 @router.post("/fetch-models-preview")
 async def fetch_models_preview(
     body: dict,
-    _: User = require_permission("channel:read"),
+    _: User = require_permission("channel:write"),
 ):
     provider = body.get("provider", "")
     base_url = body.get("base_url", "")
     api_key = body.get("api_key", "")
-    if not base_url or not api_key:
-        raise HTTPException(status_code=400, detail="base_url and api_key are required")
+    if not base_url:
+        raise HTTPException(status_code=400, detail="base_url is required")
     return await _fetch_models_from_upstream(provider, base_url, api_key)
 
 
@@ -84,6 +88,10 @@ async def update_channel(channel_id: int, body: ChannelUpdate, _: User = require
     if ch is None:
         raise HTTPException(status_code=404, detail="Channel not found")
     update_data = body.model_dump(exclude_unset=True)
+    if update_data.get("api_key"):
+        update_data["api_key"] = encrypt_secret(update_data["api_key"])
+    else:
+        update_data.pop("api_key", None)
     if update_data:
         await Channel.filter(id=channel_id).update(**update_data)
         ch = await Channel.get(id=channel_id)
@@ -106,20 +114,29 @@ async def test_channel(channel_id: int, _: User = require_permission("channel:re
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             if ch.provider == "anthropic":
-                url = f"{ch.base_url.rstrip('/')}/v1/messages"
+                url = upstream_url(ch.base_url, "/v1/messages")
+                api_key = decrypt_secret(ch.api_key)
                 headers = {
-                    "x-api-key": ch.api_key,
                     "anthropic-version": "2023-06-01",
                     "Content-Type": "application/json",
                 }
+                if api_key:
+                    headers["x-api-key"] = api_key
                 resp = await client.post(
                     url,
                     headers=headers,
-                    json={"model": "claude-3-haiku-20240307", "max_tokens": 1, "messages": [{"role": "user", "content": "hi"}]},
+                    json={
+                        "model": ch.model_mapping.get(
+                            (ch.models or [""])[0], (ch.models or [""])[0]
+                        ),
+                        "max_tokens": 1,
+                        "messages": [{"role": "user", "content": "hi"}],
+                    },
                 )
             else:
-                url = _models_url(ch.base_url)
-                headers = {"Authorization": f"Bearer {ch.api_key}"}
+                url = upstream_url(ch.base_url, "/v1/models")
+                api_key = decrypt_secret(ch.api_key)
+                headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
                 resp = await client.get(url, headers=headers)
         success = resp.status_code < 400
         if success:
@@ -142,13 +159,11 @@ async def recover_channel(channel_id: int, _: User = require_permission("channel
 
 
 ANTHROPIC_MODELS = [
-    "claude-opus-4-7", "claude-opus-4-7-20260416",
-    "claude-opus-4-6", "claude-opus-4-6-20250610",
-    "claude-sonnet-4-6", "claude-sonnet-4-6-20250819",
+    "claude-fable-5", "claude-opus-5", "claude-sonnet-5",
+    "claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6",
+    "claude-opus-4-5-20251101",
+    "claude-sonnet-4-6", "claude-sonnet-4-5-20250929",
     "claude-haiku-4-5", "claude-haiku-4-5-20251001",
-    "claude-opus-4-20250514", "claude-sonnet-4-20250514",
-    "claude-3.5-sonnet-20241022", "claude-3.5-haiku-20241022",
-    "claude-3-opus-20240229",
 ]
 
 
@@ -157,14 +172,9 @@ async def fetch_models(channel_id: int, _: User = require_permission("channel:re
     ch = await Channel.get_or_none(id=channel_id)
     if ch is None:
         raise HTTPException(status_code=404, detail="Channel not found")
-    return await _fetch_models_from_upstream(ch.provider, ch.base_url, ch.api_key)
-
-
-def _models_url(base_url: str) -> str:
-    base = base_url.rstrip("/")
-    if base.endswith(("/v1", "/v1beta/openai", "/compatible-mode/v1")):
-        return f"{base}/models"
-    return f"{base}/v1/models"
+    return await _fetch_models_from_upstream(
+        ch.provider, ch.base_url, decrypt_secret(ch.api_key)
+    )
 
 
 async def _fetch_models_from_upstream(provider: str, base_url: str, api_key: str):
@@ -172,11 +182,12 @@ async def _fetch_models_from_upstream(provider: str, base_url: str, api_key: str
         return {"models": ANTHROPIC_MODELS}
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
-            url = _models_url(base_url)
+            url = upstream_url(base_url, "/v1/models")
             headers: dict[str, str] = {
                 "Content-Type": "application/json",
-                "Authorization": f"Bearer {api_key}",
             }
+            if api_key:
+                headers["Authorization"] = f"Bearer {api_key}"
             resp = await client.get(url, headers=headers)
             resp.raise_for_status()
             data = resp.json()

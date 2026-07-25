@@ -4,9 +4,9 @@ from fastapi import Request
 
 
 def get_client_ip(request: Request) -> str:
-    forwarded = request.headers.get("X-Forwarded-For")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
+    # Uvicorn rewrites request.client only for proxies explicitly trusted by its
+    # forwarded-allow-ips setting. Reading X-Forwarded-For here would let direct
+    # clients spoof an allowed address.
     return request.client.host if request.client else ""
 
 

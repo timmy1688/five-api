@@ -30,17 +30,17 @@ export ANTHROPIC_API_KEY=sk-your-gateway-key
 - **Cached 价格** — 缓存命中 token（通常是 prompt 价格的 10%~50%）
 - **Completion 价格** — 输出 token
 
-自动识别各提供商的缓存命中字段（Anthropic 的 `cache_read_input_tokens`、OpenAI 的 `prompt_tokens_details.cached_tokens`），费用精确到美元小数点后 6 位。内置 **57 个**主流模型价格，一键导入。支持渠道级定价覆盖。
+自动识别各提供商的缓存命中字段（Anthropic 的 `cache_read_input_tokens`、OpenAI 的 `prompt_tokens_details.cached_tokens`、DeepSeek 的 `prompt_cache_hit_tokens`），费用精确到美元小数点后 6 位。内置 **80+** 主流模型价格，可一键新增并刷新。支持渠道级定价覆盖。
 
 ### 智能故障转移 + 自动熔断
 
 同一模型配置多个渠道时，按**优先级分层 + 权重加权随机**选择。上游 5xx / 超时 / 网络错误时自动切换下一个渠道，对客户端透明。流式请求在尚未发送数据时也支持故障转移。
 
-后台定期**主动健康探测**所有渠道，连续失败自动熔断（阈值可配置），避免将请求发送到已知故障的渠道。支持管理后台手动恢复。
+连续失败会自动熔断（阈值可配置），后台只探测已隔离渠道以尝试恢复，避免健康检查持续产生费用。上游 429 会进入短暂冷却，支持管理后台手动恢复。
 
 ### 完整的 RBAC 权限管理
 
-基于角色的细粒度权限控制，覆盖 8 大资源（渠道、Key、模型分组、定价、日志、统计、用户、角色）共 **16 个权限点**。内置 Super Admin（全权限）和 Viewer（只读）两个角色，支持自建角色自由组合权限。
+基于角色的细粒度权限控制，覆盖 8 大资源（渠道、Key、模型分组、定价、日志、统计、用户、角色）共 **15 个权限点**。内置 Super Admin（全权限）和 Viewer（只读）两个角色，支持自建角色自由组合权限。
 
 前端三层权限控制：菜单显隐 → 按钮显隐 → 路由守卫，后端是唯一安全屏障。
 
@@ -82,21 +82,22 @@ Five API 的做法：上游 Key 只存在网关里，每个人拿到的是网关
 
 | Provider | 说明 |
 |----------|------|
-| **OpenAI** | GPT-5.x / GPT-4.x / o 系列推理模型，透传 |
-| **Anthropic** | Claude 4.x / 3.x，原生直通 + Beta 特性 |
+| **OpenAI** | GPT-5.6 / GPT-5.x / GPT-4.x / o 系列推理模型，透传 |
+| **Anthropic** | Claude 5 / 4.x，原生直通 + Beta 特性 |
 | **Google Gemini** | Gemini 3.x / 2.x / 1.5，OpenAI 兼容端点（`provider=openai`） |
 | **Alibaba Qwen** | 通义千问全系列，DashScope 兼容端点（`provider=openai`） |
 | **DeepSeek** | 通过 OpenAI 兼容端点或 Anthropic 端点接入 |
+| **vLLM / 自建模型** | OpenAI 兼容模式，支持无鉴权的本地端点 |
 
-支持任何 OpenAI 兼容的第三方中转站。
+支持任何 OpenAI 兼容的第三方中转站和自建推理服务。
 
 ### 代理端点
 
 | 端点 | 说明 |
 |------|------|
 | `POST /v1/chat/completions` | OpenAI Chat Completions（含流式） |
-| `POST /v1/completions` | OpenAI Legacy Completions |
-| `POST /v1/embeddings` | 向量嵌入 |
+| `POST /v1/completions` | OpenAI Legacy Completions（仅 OpenAI 兼容渠道） |
+| `POST /v1/embeddings` | 向量嵌入（仅 OpenAI 兼容渠道） |
 | `POST /v1/messages` | Anthropic Messages（含流式） |
 | `GET /v1/models` | 当前 Key 可用模型列表 |
 | `GET /v1/me` | Key 配额 / 可用模型 / 模型定价自查 |
@@ -107,22 +108,24 @@ Five API 的做法：上游 Key 只存在网关里，每个人拿到的是网关
 
 - **USD 配额** — 每个 Key 独立额度，-1 表示无限
 - **月度自动重置** — 配置每月重置日（1~31），自动重置已用额度
-- **并发限制** — Redis 原子计数，120s 安全自动释放
+- **并发限制** — Redis 原子租约；长请求自动续租，进程异常后租约自动过期
 - **RPM 限速** — Redis + Lua 脚本原子限流
-- **模型分组** — 创建命名的模型集合，批量分配给多个 Key，统一管理
+- **模型分组** — 创建命名的模型集合，批量分配给多个 Key；空分组拒绝全部模型，使用中的分组禁止删除
 - **模型白名单** — 直接在 Key 上指定允许的模型（模型分组优先）
-- **IP 白名单** — 支持 CIDR 子网表示法
+- **IP 白名单** — 支持 CIDR；只接受 Uvicorn 明确信任的反向代理所提供的客户端地址
 - **过期时间** — 到期自动失效
-- **安全存储** — SHA-256 哈希存储，明文仅创建时返回一次
+- **安全存储** — 网关 Key 只存 SHA-256 哈希、仅创建时显示一次；上游渠道 Key 使用首次启动自动生成的持久密钥加密并始终脱敏展示
 
 ### 路由与故障转移
 
 - **优先级 + 权重** — 高优先级渠道先选，同级按权重加权随机
 - **协议优先路由** — 根据请求协议自动匹配最优渠道
-- **自动故障转移** — 5xx / 超时 / 网络错误自动切换备选渠道
+- **渠道内重试** — 5xx / 超时 / 网络错误先按 `max_retries` 重试
+- **自动故障转移** — 渠道重试耗尽后自动切换备选渠道
+- **429 冷却** — 被限流渠道短暂退出候选，避免连续击穿
 - **流式故障转移** — 未发送数据前仍可切换渠道
 - **自动熔断** — 连续失败达阈值后自动隔离（阈值可配置）
-- **主动健康探测** — 后台定期检测所有渠道状态
+- **恢复探测** — 后台只检测已熔断或冷却的渠道
 - **手动恢复** — 管理后台一键恢复被熔断的渠道
 - **模型别名映射** — 渠道级模型名映射（如 `gpt-4` → `gpt-4o`）
 
@@ -130,9 +133,11 @@ Five API 的做法：上游 Key 只存在网关里，每个人拿到的是网关
 
 - **三级定价** — Prompt / Completion / Cached 分别定价
 - **定价优先级** — 渠道级覆盖 → 全局价格表 → $0（不阻止请求）
-- **内置 57 个模型价格** — 一键导入，覆盖 OpenAI / Claude / Gemini / Qwen / DeepSeek
+- **内置 80+ 模型价格** — 一键新增并刷新，覆盖 OpenAI / Claude / Gemini / Qwen / DeepSeek / Grok / Mistral
 - **未定价模型检测** — 自动发现缺少定价的模型
 - **原子扣费** — F() 表达式确保并发安全
+
+配额是按响应实际用量扣费的软上限：单请求扣费和并发累计不会丢失，但多个已放行请求同时结束时，最终金额可能小幅超过上限。这样无需预估或冻结 token，保持网关实现精简。
 
 ### 可观测性
 
@@ -145,7 +150,7 @@ Five API 的做法：上游 Key 只存在网关里，每个人拿到的是网关
   - 错误率趋势
   - 延迟 P50 / P95 / P99
   - 实时吞吐量（QPS / RPM / TPM + 历史峰值）
-- **请求日志** — 完整记录每次请求的模型、Token、费用、延迟、状态码、IP
+- **请求日志** — 记录上游请求及认证成功后的网关拒绝，并标记是否发生渠道故障转移
 - **日志自动清理** — 可配置保留天数（默认 90 天），后台自动批量清理
 
 ### 管理后台
@@ -168,7 +173,7 @@ Vue 3 + Element Plus 构建的现代化管理界面：
 
 ```bash
 cp .env.example .env
-vi .env  # 改 SECRET_KEY 和密码
+vi .env  # 修改数据库和初始管理员密码
 
 docker compose up -d
 
@@ -179,7 +184,8 @@ docker compose up -d
 ### 本地开发
 
 ```bash
-docker compose up -d mysql redis  # 只启动依赖
+# 首次运行或依赖更新后
+./service.sh install
 
 ./service.sh start
 # 前端: http://localhost:5001
@@ -187,6 +193,12 @@ docker compose up -d mysql redis  # 只启动依赖
 # 日志: ./service.sh logs   (或 logs/backend.log, logs/frontend.log)
 # 停止: ./service.sh stop   重启: ./service.sh restart
 ```
+
+`install` 会创建项目根目录下的 `.venv`，通过 `backend/requirements.txt`
+安装后端依赖，并执行 `npm install`。Python 依赖只维护这一份文件；
+以后依赖有变化时重新运行一次即可。
+`start` 只使用项目本地的 `.venv/bin/uvicorn` 和
+`frontend/node_modules/.bin/vite`；如果依赖未安装，会提示先执行 `install`。
 
 ## 使用
 
@@ -199,12 +211,22 @@ docker compose up -d mysql redis  # 只启动依赖
 | `openai` | OpenAI 及兼容中转 | `https://api.openai.com` |
 | `openai` | Google Gemini | `https://generativelanguage.googleapis.com/v1beta/openai` |
 | `openai` | 通义千问 | `https://dashscope.aliyuncs.com/compatible-mode/v1` |
+| `openai` | 本地 vLLM | `http://127.0.0.1:8000/v1` |
 | `anthropic` | Anthropic Claude | `https://api.anthropic.com` |
 | `anthropic` | DeepSeek（Claude Code 推荐） | `https://api.deepseek.com/anthropic` |
 
+自建 vLLM 无需新增 provider：选择 **OpenAI Compatible**，填写服务根地址或以
+`/v1` 结尾的地址，并手动填写模型名；若 vLLM 未启用 `--api-key`，API Key
+留空即可。Five API 会正确归一化路径，不会重复拼接 `/v1`。
+
 **2. 创建 Key** — 设置 USD 配额和并发数，复制生成的 `sk-xxx`（仅显示一次）
 
-**3. 导入价格** — Model Pricing → Sync Defaults，一键导入 57 个主流模型价格
+**3. 同步价格** — Model Pricing → 同步最新价格，新增缺失模型并刷新内置模型价格；自定义模型、启用状态和渠道级覆盖不会改变
+
+内置表使用每百万 token 的标准 USD 价格。Qwen 等存在地区价或上下文分档的模型采用全局部署首档价格；实际渠道价格不同时，请在渠道中设置覆盖价格。目录版本记录在
+`backend/app/services/pricing.py` 的 `MODEL_PRICE_CATALOG_VERSION`。
+Models 页面按渠道显示最终生效价格；多个渠道价格不同时显示 `Varies`。
+渠道显式配置为 0 时按免费渠道计费，不会回退到全局价格。
 
 **4. 接入**
 
@@ -265,6 +287,7 @@ backend/
     schemas/       # Pydantic 请求/响应模型
     middleware/    # Request ID 中间件
     utils/         # 工具函数（Key 生成/IP 检查）
+  migrations/      # Aerich 数据库迁移（随代码提交）
 frontend/
   src/
     views/         # 页面（Dashboard/Channels/Keys/Groups/Prices/Models/Logs/Roles/Admins）
@@ -283,12 +306,21 @@ frontend/
 
 详细架构文档见 [CLAUDE.md](CLAUDE.md)。
 
+## 数据库迁移
+
+`./service.sh start` 和后端 Docker 容器都会在启动前自动执行 `aerich upgrade`。修改 ORM 模型后，在 `backend/` 目录生成并检查迁移：
+
+```bash
+../.venv/bin/aerich migrate --name describe_change
+../.venv/bin/aerich upgrade
+```
+
+迁移文件必须随代码提交；应用启动时不再使用 `generate_schemas` 自动改表。
+
 ## 环境变量
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `SECRET_KEY` | `change-me` | JWT 密钥，**必须修改** |
-| `JWT_EXPIRE_MINUTES` | `1440` | JWT 过期时间（分钟） |
 | `INIT_ADMIN_USERNAME` | `admin` | 初始管理员用户名 |
 | `INIT_ADMIN_PASSWORD` | `admin123` | 初始管理员密码 |
 | `MYSQL_HOST` | `127.0.0.1` | MySQL 地址 |
@@ -301,7 +333,17 @@ frontend/
 | `FRONTEND_PORT` | `80` | 前端端口（Docker） |
 
 完整列表见 [.env.example](.env.example)。
+JWT 使用固定的 HS256/24 小时策略。签名及渠道加密密钥会在首次启动时自动生成到
+`data/.secret_key`，后续启动复用，无需加入 `.env`。
 
 ## License
 
-MIT
+本项目采用 [MIT License](LICENSE)，允许使用、修改、分发和商用，但须保留版权及许可声明。
+
+## 法律风险与免责声明
+
+Five API 是通用 API 网关，不提供或代理承诺任何模型服务。使用者须自行遵守所在地法律法规、上游厂商条款以及隐私、数据安全和知识产权要求，并对部署安全、密钥、用户数据和使用行为负责。
+
+费用由上游 usage 和配置价格估算，可能与供应商最终账单不同；配额为响应后扣费的软上限，并发请求可能造成小幅超额。请同时在上游账户设置预算、告警和硬限制。本软件按“原样”提供，不保证可用性、计费结果或模型输出，也不构成法律意见。
+
+完整说明见 [法律风险与免责声明](DISCLAIMER.md)。

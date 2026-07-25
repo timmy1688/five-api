@@ -31,6 +31,7 @@ class LogResponse(BaseModel):
     latency_ms: int
     error_message: str
     ip_address: str
+    failed_over: bool
     created_at: datetime
 
 
@@ -61,6 +62,7 @@ def _to_log(r: RequestLog) -> LogResponse:
         latency_ms=r.latency_ms,
         error_message=r.error_message,
         ip_address=r.ip_address,
+        failed_over=r.failed_over,
         created_at=r.created_at,
     )
 
@@ -70,6 +72,7 @@ async def list_logs(
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=100),
     api_key_id: int | None = None,
+    api_key_name: str | None = Query(None, max_length=100),
     model: str | None = None,
     status_code: int | None = None,
     start_date: datetime | None = None,
@@ -79,6 +82,8 @@ async def list_logs(
     qs = RequestLog.all()
     if api_key_id is not None:
         qs = qs.filter(api_key_id=api_key_id)
+    if api_key_name and (key_name := api_key_name.strip()):
+        qs = qs.filter(api_key_name__icontains=key_name)
     if model:
         qs = qs.filter(model_requested=model)
     if status_code is not None:

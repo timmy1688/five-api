@@ -2,8 +2,9 @@ from decimal import Decimal
 from unittest.mock import AsyncMock, patch
 
 import pytest
+import httpx
 
-from app.models import APIKey, Channel, ModelPrice
+from app.models import APIKey, Channel, ModelGroup, ModelPrice, RequestLog
 from app.services.auth import hash_api_key
 from tests.conftest import auth_header
 
@@ -73,6 +74,74 @@ async def test_chat_completions_non_stream(client):
     assert api_key.quota_used > Decimal("0")
 
 
+async def test_channel_retry_before_failover(client):
+    ch, _, raw_key = await _setup_proxy_env()
+    ch.max_retries = 1
+    await ch.save()
+    mock_provider = AsyncMock()
+    mock_provider.send_request = AsyncMock(
+        side_effect=[httpx.ReadTimeout("timeout"), MOCK_COMPLETION_RESPONSE]
+    )
+    mock_provider.apply_model_mapping = lambda model: model
+    mock_provider.close = AsyncMock()
+
+    with patch(
+        "app.routers.openai_proxy.resolve_candidates",
+        return_value=[(ch, lambda _: mock_provider)],
+    ):
+        resp = await client.post(
+            "/v1/chat/completions",
+            json={"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}]},
+            headers=auth_header(raw_key),
+        )
+
+    assert resp.status_code == 200
+    assert mock_provider.send_request.await_count == 2
+
+
+async def test_cross_channel_failover_is_logged(client):
+    first, _, raw_key = await _setup_proxy_env()
+    first.max_retries = 0
+    await first.save()
+    second = await Channel.create(
+        name="proxy-fallback",
+        provider="openai",
+        base_url="https://fallback.test",
+        api_key="sk-upstream-2",
+        models=["gpt-4o"],
+        max_retries=0,
+    )
+    failing = AsyncMock()
+    failing.send_request = AsyncMock(side_effect=httpx.ConnectError("down"))
+    failing.apply_model_mapping = lambda model: model
+    failing.close = AsyncMock()
+    working = AsyncMock()
+    working.send_request = AsyncMock(return_value=MOCK_COMPLETION_RESPONSE)
+    working.apply_model_mapping = lambda model: model
+    working.close = AsyncMock()
+
+    with patch(
+        "app.routers.openai_proxy.resolve_candidates",
+        return_value=[
+            (first, lambda _: failing),
+            (second, lambda _: working),
+        ],
+    ):
+        resp = await client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "gpt-4o",
+                "messages": [{"role": "user", "content": "hi"}],
+            },
+            headers=auth_header(raw_key),
+        )
+
+    assert resp.status_code == 200
+    log = await RequestLog.get(request_id=resp.headers["x-request-id"])
+    assert log.channel_id == second.id
+    assert log.failed_over is True
+
+
 async def test_chat_completions_quota_exceeded(client):
     raw_key = "sk-quotaexceeded123"
     await APIKey.create(
@@ -92,6 +161,9 @@ async def test_chat_completions_quota_exceeded(client):
     body = resp.json()
     error = body.get("error") or body.get("detail", {}).get("error", {})
     assert "quota" in error.get("message", "").lower()
+    log = await RequestLog.get(request_id=resp.headers["x-request-id"])
+    assert log.status_code == 429
+    assert log.channel_id is None
 
 
 async def test_chat_completions_model_not_allowed(client):
@@ -113,6 +185,39 @@ async def test_chat_completions_model_not_allowed(client):
     resp = await client.post(
         "/v1/chat/completions",
         json={"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}]},
+        headers=auth_header(raw_key),
+    )
+    assert resp.status_code == 403
+
+
+async def test_empty_model_group_denies_all_models(client):
+    group = await ModelGroup.create(name="empty-group", models=[])
+    raw_key = "sk-emptygroup123"
+    await APIKey.create(
+        name="empty-group-key",
+        key_hash=hash_api_key(raw_key),
+        key_prefix=raw_key[:8],
+        quota_total=Decimal("-1"),
+        model_group_id=group.id,
+    )
+    await Channel.create(
+        name="empty-group-ch",
+        provider="openai",
+        base_url="https://api.openai.com",
+        api_key="sk-up",
+        models=["gpt-4o"],
+    )
+
+    models = await client.get("/v1/models", headers=auth_header(raw_key))
+    assert models.status_code == 200
+    assert models.json()["data"] == []
+
+    resp = await client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "gpt-4o",
+            "messages": [{"role": "user", "content": "hi"}],
+        },
         headers=auth_header(raw_key),
     )
     assert resp.status_code == 403
@@ -220,6 +325,29 @@ async def test_embeddings_non_stream(client):
         )
     assert resp.status_code == 200
     assert resp.json()["data"][0]["embedding"] == [0.1, 0.2]
+
+
+async def test_embeddings_rejects_anthropic_only_channel(client):
+    await Channel.create(
+        name="anthropic-embed",
+        provider="anthropic",
+        base_url="https://api.anthropic.com",
+        api_key="sk-ant",
+        models=["embedding-lookalike"],
+    )
+    raw_key = "sk-anthropicembed"
+    await APIKey.create(
+        name="anthropic-embed-key",
+        key_hash=hash_api_key(raw_key),
+        key_prefix=raw_key[:8],
+        quota_total=Decimal("-1"),
+    )
+    resp = await client.post(
+        "/v1/embeddings",
+        json={"model": "embedding-lookalike", "input": "hello"},
+        headers=auth_header(raw_key),
+    )
+    assert resp.status_code == 404
 
 
 async def test_no_channel_for_model(client):

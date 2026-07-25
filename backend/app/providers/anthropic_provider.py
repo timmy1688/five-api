@@ -99,7 +99,7 @@ def _convert_openai_tool_choice(tc):
     if tc == "required":
         return {"type": "any"}
     if tc == "none":
-        return {"type": "none"}
+        return None
     if isinstance(tc, dict) and tc.get("type") == "function":
         name = (tc.get("function") or {}).get("name")
         if name:
@@ -125,7 +125,7 @@ class AnthropicProvider(BaseProvider):
 
     def _anthropic_headers(self, extra_headers: dict[str, str] | None = None) -> dict[str, str]:
         headers = {
-            "x-api-key": self.channel.api_key,
+            "x-api-key": self.api_key,
             "anthropic-version": "2023-06-01",
             "Content-Type": "application/json",
         }
@@ -186,7 +186,7 @@ class AnthropicProvider(BaseProvider):
             body["top_p"] = openai_request["top_p"]
         if openai_request.get("stop"):
             body["stop_sequences"] = openai_request["stop"] if isinstance(openai_request["stop"], list) else [openai_request["stop"]]
-        if openai_request.get("tools"):
+        if openai_request.get("tools") and openai_request.get("tool_choice") != "none":
             tools = _convert_openai_tools(openai_request["tools"])
             if tools:
                 body["tools"] = tools
@@ -194,11 +194,14 @@ class AnthropicProvider(BaseProvider):
             choice = _convert_openai_tool_choice(openai_request["tool_choice"])
             if choice is not None:
                 body["tool_choice"] = choice
+        if openai_request.get("parallel_tool_calls") is False and "tools" in body:
+            choice = body.setdefault("tool_choice", {"type": "auto"})
+            choice["disable_parallel_tool_use"] = True
         if openai_request.get("stream"):
             body["stream"] = True
 
         headers = {
-            "x-api-key": self.channel.api_key,
+            "x-api-key": self.api_key,
             "anthropic-version": "2023-06-01",
             "Content-Type": "application/json",
         }

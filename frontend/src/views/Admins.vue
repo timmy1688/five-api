@@ -44,7 +44,7 @@
           <el-input v-model="form.username" :disabled="!!editingId" />
         </el-form-item>
         <el-form-item label="Password">
-          <el-input v-model="form.password" type="password" show-password :placeholder="editingId ? '留空不修改' : ''" />
+          <el-input v-model="form.password" type="password" show-password :placeholder="editingId ? 'Leave blank to keep unchanged' : ''" />
         </el-form-item>
         <el-form-item label="Role">
           <el-select v-model="form.role_id" style="width: 100%">

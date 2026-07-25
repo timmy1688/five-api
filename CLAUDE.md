@@ -18,7 +18,7 @@ Five API 是一个自托管的 AI API 网关，对外暴露 OpenAI 兼容接口�
 
 ```bash
 cd /opt/five-api
-cp .env.example .env && vi .env    # 修改密码和密钥
+cp .env.example .env && vi .env    # 修改数据库和初始管理员密码
 docker compose up -d
 docker compose logs -f backend     # 查看日志
 ```
@@ -28,18 +28,26 @@ docker compose logs -f backend     # 查看日志
 ### 本地开发
 
 ```bash
+# 首次运行或依赖更新后
+./service.sh install
+
 # 方法 A：一键启动
 ./service.sh start      # 前端 :5001  后端 :5002
 ./service.sh stop       # 停止
 ./service.sh restart    # 重启
 ./service.sh status     # 查看状态
-./service.sh logs       # 跟踪日志
+./service.sh logs       # 跟踪日志（也可指定 backend / frontend）
 
 # 方法 B：手动启动
 docker compose up -d mysql redis
-cd backend && cp .env.example .env && pip install -e ".[dev]" && uvicorn app.main:app --reload --port 5002
+cp .env.example .env
+cd backend && ../.venv/bin/aerich upgrade && ../.venv/bin/uvicorn app.main:app --reload --port 5002
 cd frontend && npm install && npx vite --port 5001
 ```
+
+`install` 会创建根目录 `.venv` 并安装后端、前端依赖。依赖文件更新后重新
+执行一次即可。`start` 使用项目本地的 uvicorn 和 Vite，依赖未安装时会提示
+先执行 `./service.sh install`。
 
 前端 Vite dev server 已配置代理，`/api` 和 `/v1` 请求自动转发到 `http://127.0.0.1:5002`。
 
@@ -112,8 +120,8 @@ cd frontend && npm install && npx vite --port 5001
 │   │       └── ip_check.py          #   IP 解析与白名单匹配
 │   ├── migrations/                  # 数据库迁移文件
 │   ├── pyproject.toml
+│   ├── requirements.txt             # 唯一 Python 依赖清单（运行 + 测试）
 │   ├── Dockerfile
-│   └── .env.example
 ├── frontend/
 │   ├── src/
 │   │   ├── main.ts
@@ -155,9 +163,9 @@ cd frontend && npm install && npx vite --port 5001
 2. **API Key 认证** → SHA-256 哈希查表，检查启用/过期状态
 3. **前置检查** `run_pre_checks()` → 配额检查 → 模型权限检查 → RPM 限流
 4. **渠道选择** `resolve_candidates()` → 协议优先（匹配协议的渠道排前面）→ 按 priority 分层 + weight 加权随机 → 粘性会话渠道提前 → 返回候选列表
-5. **并发限制** `concurrency_limiter.acquire()` → Redis 原子计数
+5. **并发限制** `concurrency_limiter.acquire()` → Redis 原子租约（请求级 lease ID，自动续租和过期回收）
 6. **代理编排** → 下面详述
-7. **后置处理** `_bill_and_log()` → 计费扣费 + 写日志 + 释放并发 + 关闭连接
+7. **后置处理** `_bill_and_log()` → 计费扣费 + 写日志 + 释放并发；上游 HTTP 连接由共享连接池复用
 
 ### 协议优先路由（`providers/registry.py`）
 
@@ -165,6 +173,7 @@ cd frontend && npm install && npx vite --port 5001
 
 - `/v1/messages` 路由传入 `preferred_protocol="anthropic"` → anthropic 渠道优先（passthrough）
 - `/v1/chat/completions` 路由传入 `preferred_protocol="openai"` → openai 渠道优先
+- `/v1/completions`、`/v1/embeddings` 不做跨协议转换，只允许 `openai` 渠道
 
 **渠道只有两种线协议**，`provider` 字段即协议：
 - **`openai`**：OpenAI 及所有 OpenAI 兼容端点（官方、第三方中转、Gemini、Qwen 等）——统一透传
@@ -357,13 +366,14 @@ async def create(body: ..., user: User = require_permission("channel:write")):
 | name | varchar(128) | 显示名 |
 | provider | varchar(32) | 线协议：`openai`（含所有 OpenAI 兼容端点）/ `anthropic` |
 | base_url | varchar(512) | 上游 API 地址 |
-| api_key | varchar(512) | 上游密钥 |
+| api_key | varchar(512) | 使用首次启动自动生成的持久密钥加密存储，管理 API 仅返回脱敏值 |
 | models | JSON | 支持的模型列表 |
 | model_mapping | JSON | 别名映射 `{"gpt-4": "gpt-4o"}` |
 | model_pricing | JSON | 渠道级定价覆盖（$/1M tokens） |
 | priority | int | 高优先级渠道先被选中 |
 | weight | int | 同优先级按权重加权随机 |
 | is_enabled | bool | |
+| max_retries | int | 同渠道重试次数，默认 1 |
 | timeout | int | 超时秒数 |
 
 ### api_keys
@@ -378,8 +388,8 @@ async def create(body: ..., user: User = require_permission("channel:write")):
 | quota_used | decimal(16,6) | 已消耗金额 |
 | concurrent_limit | int | 最大并发数，默认 5 |
 | rpm_limit | int | 每分钟最大请求数，-1 = 不限制 |
-| allowed_models | JSON | 模型白名单，空 = 全部允许 |
-| model_group_id | int FK NULL | 关联模型分组，优先于 allowed_models |
+| allowed_models | JSON | 模型白名单，未关联模型组时空 = 全部允许 |
+| model_group_id | int FK NULL | 关联模型分组，优先于 allowed_models；空组/失效引用均拒绝全部模型 |
 | allowed_ips | JSON | IP 白名单，空 = 不限制 |
 | is_enabled | bool | |
 | quota_reset_day | smallint | 每月自动重置日（1~31） |
@@ -417,6 +427,7 @@ async def create(body: ..., user: User = require_permission("channel:write")):
 | prompt_tokens / completion_tokens / cached_tokens | int | token 计数 |
 | cost | decimal(16,6) | 本次费用 USD |
 | is_stream | bool | |
+| failed_over | bool | 是否切换过渠道 |
 | status_code / latency_ms / error_message / ip_address | | |
 
 ### 计费
@@ -425,9 +436,13 @@ async def create(body: ..., user: User = require_permission("channel:write")):
 cost = ((prompt - cached) × prompt_price + cached × cached_price + completion × completion_price) / 1M
 ```
 
-定价优先级：Channel `model_pricing` → 全局 `model_prices` 表（查价用 `model_actual`，即经 `model_mapping` 后的真实上游模型名）。扣减使用 `F()` 原子操作。
+定价优先级：Channel `model_pricing` → 全局 `model_prices` 表（查价用 `model_actual`，即经 `model_mapping` 后的真实上游模型名）。渠道显式配置 `0` 是有效覆盖，不回退全局价格。扣减使用 `F()` 原子操作。
 
-内置价格表（`services/pricing.py` `DEFAULT_MODEL_PRICES`）含 ~49 个主流模型，可通过管理后台 "Sync Defaults" 一键导入。
+配额按上游响应中的实际用量后扣，是软上限。检查和扣费本身并发安全，但多个请求在达到上限前已同时放行时，最终用量允许小幅超额；若要严格硬上限，需要引入请求前额度预留与响应后结算机制，当前精简实现不做额度账本。
+
+内置价格表（`services/pricing.py` `DEFAULT_MODEL_PRICES`）含 80+ 个主流模型，版本由
+`MODEL_PRICE_CATALOG_VERSION` 标记。管理后台“同步最新价格”会新增缺失项并刷新内置
+模型价格，不修改自定义模型、启用状态或渠道级覆盖。
 
 #### 跨协议计费口径统一（重要）
 
@@ -436,6 +451,7 @@ cost = ((prompt - cached) × prompt_price + cached × cached_price + completion 
 | | prompt/input 是否含缓存 | 缓存字段 |
 |--|--|--|
 | OpenAI | **含** | `prompt_tokens_details.cached_tokens` |
+| DeepSeek（OpenAI 兼容） | **含** | `prompt_cache_hit_tokens` |
 | Anthropic | **不含** | `cache_read_input_tokens`（读）、`cache_creation_input_tokens`（写） |
 
 因此凡是从 **Anthropic 上游** 取 usage 的路径，都必须折算成 OpenAI 口径，否则 `prompt - cached` 会把非缓存 token 也减掉导致**少计费**：
@@ -549,8 +565,6 @@ export ANTHROPIC_API_KEY=sk-your-five-api-key
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `SECRET_KEY` | `change-me` | JWT 签名密钥，**必须修改** |
-| `JWT_EXPIRE_MINUTES` | `1440` | JWT 过期（分钟） |
 | `MYSQL_HOST/PORT/USER/PASSWORD/DATABASE` | `127.0.0.1`/`3306`/`five`/`five_password`/`five_api` | |
 | `REDIS_URL` | `redis://127.0.0.1:6379/0` | |
 | `INIT_ADMIN_USERNAME/PASSWORD` | `admin`/`admin123` | 首次启动创建（Super Admin 角色） |
@@ -558,6 +572,10 @@ export ANTHROPIC_API_KEY=sk-your-five-api-key
 | `STICKY_SESSION_TTL` | `900` | 会话→渠道绑定的 Redis 过期秒数 |
 
 Docker Compose 额外: `MYSQL_ROOT_PASSWORD`、`BACKEND_PORT`(8000)、`FRONTEND_PORT`(80)、`REDIS_PORT`(6379)
+
+JWT 算法固定为 HS256、有效期固定为 24 小时。应用签名及渠道加密密钥首次启动自动
+生成并持久化为 `data/.secret_key`；Docker 将项目 `data/` 挂载到容器 `/data`，
+不需要配置 `SECRET_KEY`、`JWT_ALGORITHM` 或 `JWT_EXPIRE_MINUTES`。
 
 ---
 
@@ -575,12 +593,15 @@ Docker Compose 额外: `MYSQL_ROOT_PASSWORD`、`BACKEND_PORT`(8000)、`FRONTEND_
 | `openai` | Google Gemini（OpenAI 兼容端点） | `https://generativelanguage.googleapis.com/v1beta/openai` |
 | `openai` | 通义千问（DashScope 兼容端点） | `https://dashscope.aliyuncs.com/compatible-mode/v1` |
 | `openai` | DeepSeek OpenAI 端点 | `https://api.deepseek.com` |
+| `openai` | 自建 vLLM | `http://127.0.0.1:8000/v1` |
 | `anthropic` | Anthropic 官方 Claude | `https://api.anthropic.com` |
 | `anthropic` | DeepSeek Anthropic 端点（推荐 Claude Code） | `https://api.deepseek.com/anthropic` |
 
 同一模型可以同时配置 OpenAI 和 Anthropic 两种协议的渠道，系统会根据请求来源协议自动优先匹配（见协议优先路由）。
 
-> **`provider` 按端点协议填，不是按厂商填**：厂商若提供 Anthropic 兼容端点（如 DeepSeek、千问），应建 `provider=anthropic` 的渠道，才能走 passthrough 保留 tool_use；填成 `provider=openai` 会走转换路径丢失 tool_use。
+> **`provider` 按端点协议填，不是按厂商填**：Anthropic 端点选 `anthropic` 可保留供应商 Beta 字段；OpenAI 端点选 `openai`，工具调用会在两种协议间自动转换。
+>
+> vLLM 等自建 OpenAI 兼容服务直接使用 `provider=openai`。`base_url` 可填服务根地址或以 `/v1` 结尾的地址；未启用上游鉴权时 `api_key` 可留空。
 
 #### 示例：DeepSeek 同模型双协议
 
@@ -588,8 +609,8 @@ DeepSeek 同时提供 OpenAI 端点（`/v1/chat/completions`）和 Anthropic 端
 
 | 渠道 | provider | base_url | models |
 |------|----------|----------|--------|
-| DeepSeek-OpenAI | `openai` | `https://api.deepseek.com` | `deepseek-chat`、`deepseek-reasoner` |
-| DeepSeek-Anthropic | `anthropic` | `https://api.deepseek.com/anthropic` | `deepseek-chat`、`deepseek-reasoner` |
+| DeepSeek-OpenAI | `openai` | `https://api.deepseek.com` | `deepseek-v4-flash`、`deepseek-v4-pro` |
+| DeepSeek-Anthropic | `anthropic` | `https://api.deepseek.com/anthropic` | `deepseek-v4-flash`、`deepseek-v4-pro` |
 
 路由行为：
 - 客户端走 `/v1/chat/completions`（OpenAI SDK） → 优先命中 **DeepSeek-OpenAI** 渠道，透传。
@@ -601,7 +622,7 @@ Claude Code 直连时，配 `provider=anthropic` 的那条渠道即可：
 ```bash
 export ANTHROPIC_BASE_URL=http://your-gateway:8000
 export ANTHROPIC_API_KEY=sk-your-five-api-key
-# 请求模型名用 deepseek-chat / deepseek-reasoner
+# 请求模型名用 deepseek-v4-flash / deepseek-v4-pro
 ```
 
 ### 2. 创建 API Key
@@ -610,16 +631,16 @@ API Keys → Create Key：设置名称、USD 配额（-1=无限）、并发数�
 
 ### 3. 模型分组（可选）
 
-Model Groups → 创建分组（如 "基础模型"）→ 添加模型列表 → 在 Key 编辑中关联分组。分组优先于 Key 上的 allowed_models。
+Model Groups → 创建分组（如 "基础模型"）→ 添加模型列表 → 在 Key 编辑中关联分组。分组优先于 Key 上的 allowed_models；空组会拒绝全部模型，已被 Key 使用的分组不能删除。
 
 ### 4. 配置定价
 
-Model Pricing → **Sync Defaults** 一键导入内置价格。也可手动添加或在渠道编辑中设置渠道级覆盖价格。
+Model Pricing → **同步最新价格** 一键新增并刷新内置价格。也可手动添加，或在渠道编辑中设置地区价、长上下文分档等渠道级覆盖价格。
 
 ### 5. 权限管理（可选）
 
-Permissions → Roles：创建自定义角色，勾选需要的权限。
-Permissions → Authorization：创建管理员账号并分配角色。
+Roles & Permissions：创建自定义角色，勾选需要的权限。
+Admins：创建管理员账号并分配角色。管理员不能禁用、删除或修改自己的角色，系统也会保留至少一个启用的 Super Admin。
 
 ### 6. 调用 API
 
@@ -677,7 +698,7 @@ resp = client.chat.completions.create(model="gpt-4o", messages=[{"role": "user",
 - 所有 list 接口返回 `{"total": N, "items": [...]}`
 - 错误响应：OpenAI 路由用 `openai_error()`，Anthropic 路由用 `anthropic_error()`
 - 认证：代理路由用 `verify_api_key`，管理路由用 `require_permission("xxx:read/write")`，仅需登录的端点用 `get_current_admin`
-- 数据库变更必须附带迁移文件（`migrations/` 按序号命名）
+- 数据库变更后在 `backend/` 执行 `../.venv/bin/aerich migrate --name describe_change`，检查并提交 `migrations/`；启动前统一执行 `aerich upgrade`
 - 函数职责单一，优先早返回减少嵌套
 - 注释解释"为什么"而非"做了什么"
 
@@ -685,8 +706,10 @@ resp = client.chat.completions.create(model="gpt-4o", messages=[{"role": "user",
 
 - Element Plus 组件自动导入，`<script setup>` 中需编程式使用时显式 import
 - API 模块在 `src/api/`，基于统一 Axios client（`baseURL: '/api'`，自动附加 JWT、401 跳转登录）
-- 权限控制：菜单用 `auth.hasPermission('xxx:read')`，按钮用 `auth.hasPermission('xxx:write')`
-- 新增页面：`views/Xxx.vue` → `router/index.ts` 添加路由和权限映射 → `AdminLayout.vue` 添加菜单项
+- 页面导航统一维护在 `src/config/navigation.ts`；路由、标题和菜单由该配置生成，避免三份权限映射漂移
+- 路由守卫先通过 `auth.ensureProfile()` 加载权限，再按 route meta 做 fail-closed 检查；无任何可访问页面时进入 Access Denied
+- 页面内写操作按钮用 `auth.hasPermission('xxx:write')` 控制显示，后端 `require_permission()` 始终是最终授权边界
+- 新增管理页面：`views/Xxx.vue` → 在 `config/navigation.ts` 添加菜单项 → 在 `router/index.ts` 的 `viewComponents` 注册懒加载组件
 
 ---
 
@@ -700,6 +723,9 @@ resp = client.chat.completions.create(model="gpt-4o", messages=[{"role": "user",
 | frontend | 80 | npm build → Nginx（SPA + 反代 + SSE 支持） |
 
 Nginx 要点：`/v1/` 反代关闭 `proxy_buffering` 以支持 SSE，300s 超时。
+IP 白名单读取 `request.client`；部署反向代理时只能通过 Uvicorn
+`--forwarded-allow-ips` 信任明确的代理网段，不能在应用层直接相信任意
+`X-Forwarded-For`。Docker 镜像默认仅信任 loopback 与 Docker 私网段。
 
 ---
 

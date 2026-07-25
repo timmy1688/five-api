@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
-from app.models import User, ModelGroup
+from app.models import APIKey, User, ModelGroup
 from app.schemas.model_group import ModelGroupCreate, ModelGroupResponse, ModelGroupUpdate
 from app.services.auth import require_permission
 
@@ -69,6 +69,12 @@ async def update_model_group(group_id: int, body: ModelGroupUpdate, _: User = re
 
 @router.delete("/{group_id}")
 async def delete_model_group(group_id: int, _: User = require_permission("model_group:write")):
+    key_count = await APIKey.filter(model_group_id=group_id).count()
+    if key_count:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Model group is assigned to {key_count} API key(s)",
+        )
     deleted = await ModelGroup.filter(id=group_id).delete()
     if not deleted:
         raise HTTPException(status_code=404, detail="Model group not found")

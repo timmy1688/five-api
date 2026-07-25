@@ -17,8 +17,8 @@ export const modelPricesApi = {
     const { data } = await client.delete(`/model-prices/${id}`)
     return data
   },
-  syncDefaults: async () => {
-    const { data } = await client.post('/model-prices/sync-defaults')
+  syncDefaults: async (overwrite = false) => {
+    const { data } = await client.post('/model-prices/sync-defaults', null, { params: { overwrite } })
     return data
   },
   unpriced: async () => {

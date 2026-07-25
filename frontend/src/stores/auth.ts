@@ -7,12 +7,20 @@ export const useAuthStore = defineStore('auth', () => {
   const username = ref('')
   const roleName = ref('')
   const permissions = ref<string[]>([])
+  const profileLoaded = ref(false)
+  let profileRequest: Promise<void> | null = null
 
   async function login(user: string, password: string) {
     const res = await authApi.login(user, password)
     token.value = res.access_token
-    username.value = user
     localStorage.setItem('token', res.access_token)
+    profileLoaded.value = false
+    try {
+      await ensureProfile()
+    } catch (error) {
+      logout()
+      throw error
+    }
   }
 
   function logout() {
@@ -20,6 +28,8 @@ export const useAuthStore = defineStore('auth', () => {
     username.value = ''
     roleName.value = ''
     permissions.value = []
+    profileLoaded.value = false
+    profileRequest = null
     localStorage.removeItem('token')
   }
 
@@ -28,6 +38,17 @@ export const useAuthStore = defineStore('auth', () => {
     username.value = res.username
     roleName.value = res.role_name || ''
     permissions.value = res.permissions || []
+    profileLoaded.value = true
+  }
+
+  async function ensureProfile() {
+    if (profileLoaded.value) return
+    if (!profileRequest) {
+      profileRequest = fetchMe().finally(() => {
+        profileRequest = null
+      })
+    }
+    await profileRequest
   }
 
   function hasPermission(perm: string): boolean {
@@ -38,5 +59,17 @@ export const useAuthStore = defineStore('auth', () => {
     return perms.some(p => permissions.value.includes(p))
   }
 
-  return { token, username, roleName, permissions, login, logout, fetchMe, hasPermission, hasAnyPermission }
+  return {
+    token,
+    username,
+    roleName,
+    permissions,
+    profileLoaded,
+    login,
+    logout,
+    fetchMe,
+    ensureProfile,
+    hasPermission,
+    hasAnyPermission,
+  }
 })

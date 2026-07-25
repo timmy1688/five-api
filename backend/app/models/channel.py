@@ -11,7 +11,6 @@ class Channel(Model):
     models = fields.JSONField(default=list)
     model_mapping = fields.JSONField(default=dict)
     model_pricing = fields.JSONField(default=dict)
-    group = fields.CharField(max_length=64, default="")
     priority = fields.IntField(default=0)
     weight = fields.IntField(default=1)
     is_enabled = fields.BooleanField(default=True)

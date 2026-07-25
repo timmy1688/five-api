@@ -3,7 +3,7 @@
     <div class="page-header">
       <div>
         <h3>Models</h3>
-        <p>All models available across connected channels</p>
+        <p>Available models and pricing across all channels</p>
       </div>
       <el-input
         v-model="search"
@@ -15,25 +15,25 @@
     </div>
 
     <el-row :gutter="12" style="margin-bottom: 16px">
-      <el-col :span="6">
+      <el-col :xs="12" :md="6">
         <el-card shadow="never" class="summary-card">
           <div class="summary-value">{{ items.length }}</div>
           <div class="summary-label">Total Models</div>
         </el-card>
       </el-col>
-      <el-col :span="6">
+      <el-col :xs="12" :md="6">
         <el-card shadow="never" class="summary-card">
           <div class="summary-value">{{ pricedCount }}</div>
           <div class="summary-label">Priced</div>
         </el-card>
       </el-col>
-      <el-col :span="6">
+      <el-col :xs="12" :md="6">
         <el-card shadow="never" class="summary-card">
           <div class="summary-value" :style="{ color: unpricedCount > 0 ? '#f59e0b' : '#10b981' }">{{ unpricedCount }}</div>
           <div class="summary-label">Unpriced</div>
         </el-card>
       </el-col>
-      <el-col :span="6">
+      <el-col :xs="12" :md="6">
         <el-card shadow="never" class="summary-card">
           <div class="summary-value">{{ providerSet.size }}</div>
           <div class="summary-label">Providers</div>
@@ -52,24 +52,34 @@
         <el-table-column prop="channel_count" label="Channels" width="100" align="center" sortable />
         <el-table-column label="Channel Names" min-width="200">
           <template #default="{ row }">
-            <el-tag v-for="ch in row.channels" :key="ch.id" size="small" type="info" style="margin: 2px">{{ ch.name }}</el-tag>
+            <el-tooltip
+              v-for="ch in row.channels"
+              :key="ch.id"
+              :content="channelPriceLabel(ch)"
+              placement="top"
+            >
+              <el-tag size="small" type="info" style="margin: 2px">{{ ch.name }}</el-tag>
+            </el-tooltip>
           </template>
         </el-table-column>
         <el-table-column label="Input ($/1M)" width="120" align="right" sortable :sort-method="sortByPrompt">
           <template #default="{ row }">
-            <span v-if="row.pricing" style="font-weight: 500">{{ row.pricing.prompt }}</span>
+            <el-tag v-if="row.pricing_varies" size="small">Varies</el-tag>
+            <span v-else-if="row.pricing" style="font-weight: 500">{{ row.pricing.prompt }}</span>
             <el-tag v-else size="small" type="warning">N/A</el-tag>
           </template>
         </el-table-column>
         <el-table-column label="Output ($/1M)" width="120" align="right" sortable :sort-method="sortByCompletion">
           <template #default="{ row }">
-            <span v-if="row.pricing" style="font-weight: 500">{{ row.pricing.completion }}</span>
+            <el-tag v-if="row.pricing_varies" size="small">Varies</el-tag>
+            <span v-else-if="row.pricing" style="font-weight: 500">{{ row.pricing.completion }}</span>
             <el-tag v-else size="small" type="warning">N/A</el-tag>
           </template>
         </el-table-column>
         <el-table-column label="Cached ($/1M)" width="120" align="right">
           <template #default="{ row }">
-            <span v-if="row.pricing" :style="{ fontWeight: 500, color: row.pricing.cached > 0 ? '#f59e0b' : '#cbd5e1' }">{{ row.pricing.cached }}</span>
+            <el-tag v-if="row.pricing_varies" size="small">Varies</el-tag>
+            <span v-else-if="row.pricing" :style="{ fontWeight: 500, color: row.pricing.cached > 0 ? '#f59e0b' : '#cbd5e1' }">{{ row.pricing.cached }}</span>
             <span v-else>-</span>
           </template>
         </el-table-column>
@@ -88,8 +98,8 @@ const loading = ref(false)
 const search = ref('')
 const filtered = ref<any[]>([])
 
-const pricedCount = computed(() => items.value.filter(m => m.pricing).length)
-const unpricedCount = computed(() => items.value.filter(m => !m.pricing).length)
+const pricedCount = computed(() => items.value.filter(m => m.has_pricing).length)
+const unpricedCount = computed(() => items.value.filter(m => !m.has_pricing).length)
 const providerSet = computed(() => {
   const s = new Set<string>()
   items.value.forEach(m => m.providers.forEach((p: string) => s.add(p)))
@@ -107,6 +117,12 @@ function sortByPrompt(a: any, b: any) {
 
 function sortByCompletion(a: any, b: any) {
   return (a.pricing?.completion ?? -1) - (b.pricing?.completion ?? -1)
+}
+
+function channelPriceLabel(channel: any) {
+  if (!channel.pricing) return `${channel.name}: unpriced`
+  const p = channel.pricing
+  return `${channel.name}: $${p.prompt} input / $${p.completion} output / $${p.cached} cached (${channel.pricing_source})`
 }
 
 async function load() {
@@ -129,6 +145,10 @@ onMounted(load)
 .summary-card :deep(.el-card__body) {
   text-align: center;
   padding: 16px;
+}
+
+.summary-card {
+  margin-bottom: 12px;
 }
 
 .summary-value {

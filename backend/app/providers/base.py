@@ -4,15 +4,41 @@ from collections.abc import AsyncIterator
 import httpx
 
 from app.models import Channel
+from app.utils.secrets import decrypt_secret
+
+_http_clients: dict[tuple[str, int], httpx.AsyncClient] = {}
+
+
+def _shared_http_client(channel: Channel) -> httpx.AsyncClient:
+    base_url = channel.base_url.rstrip("/")
+    key = (base_url, channel.timeout)
+    client = _http_clients.get(key)
+    if client is None or client.is_closed:
+        client = httpx.AsyncClient(
+            base_url=base_url,
+            timeout=httpx.Timeout(float(channel.timeout), connect=10.0),
+            limits=httpx.Limits(
+                max_connections=200,
+                max_keepalive_connections=50,
+                keepalive_expiry=30,
+            ),
+        )
+        _http_clients[key] = client
+    return client
+
+
+async def close_http_clients() -> None:
+    clients = list(_http_clients.values())
+    _http_clients.clear()
+    for client in clients:
+        await client.aclose()
 
 
 class BaseProvider(ABC):
     def __init__(self, channel: Channel):
         self.channel = channel
-        self.client = httpx.AsyncClient(
-            base_url=channel.base_url.rstrip("/"),
-            timeout=httpx.Timeout(float(channel.timeout), connect=10.0),
-        )
+        self.api_key = decrypt_secret(channel.api_key)
+        self.client = _shared_http_client(channel)
 
     @abstractmethod
     def transform_request(self, openai_request: dict, endpoint: str) -> tuple[str, dict, dict]:
@@ -47,4 +73,5 @@ class BaseProvider(ABC):
             await resp.aclose()
 
     async def close(self):
-        await self.client.aclose()
+        # Clients are shared per upstream and closed during application shutdown.
+        return None

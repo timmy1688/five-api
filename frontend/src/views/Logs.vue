@@ -3,7 +3,7 @@
     <div class="page-header">
       <div>
         <h3>Request Logs</h3>
-        <p>Monitor API requests, token usage and costs</p>
+        <p>Inspect API requests, token usage, costs, and errors</p>
       </div>
       <el-popconfirm v-if="auth.hasPermission('log:write')" title="Delete logs older than 90 days?" @confirm="cleanupLogs">
         <template #reference>
@@ -17,8 +17,14 @@
         <el-form-item label="Model">
           <el-input v-model="filters.model" placeholder="gpt-4o" clearable style="width: 150px" />
         </el-form-item>
-        <el-form-item label="Key ID">
-          <el-input v-model.number="filters.api_key_id" placeholder="All" clearable style="width: 100px" />
+        <el-form-item label="Key">
+          <el-input
+            v-model="filters.api_key_name"
+            placeholder="Search key name"
+            clearable
+            style="width: 180px"
+            @keyup.enter="search"
+          />
         </el-form-item>
         <el-form-item label="Status">
           <el-select v-model="filters.status_code" clearable placeholder="All" style="width: 100px">
@@ -78,6 +84,12 @@
             <el-tag :type="row.status_code === 200 ? 'success' : 'danger'" size="small" round>{{ row.status_code }}</el-tag>
           </template>
         </el-table-column>
+        <el-table-column label="Failover" width="82" align="center">
+          <template #default="{ row }">
+            <el-tag v-if="row.failed_over" size="small" type="warning">Yes</el-tag>
+            <span v-else>-</span>
+          </template>
+        </el-table-column>
       </el-table>
 
       <el-pagination
@@ -108,6 +120,7 @@
             <el-descriptions-item label="Status">
               <el-tag :type="detail.status_code === 200 ? 'success' : 'danger'" size="small" round>{{ detail.status_code }}</el-tag>
             </el-descriptions-item>
+            <el-descriptions-item label="Failover">{{ detail.failed_over ? 'Yes' : 'No' }}</el-descriptions-item>
             <el-descriptions-item label="Latency">{{ detail.latency_ms }}ms</el-descriptions-item>
             <el-descriptions-item label="IP">{{ detail.ip_address }}</el-descriptions-item>
             <el-descriptions-item label="Time">{{ detail.created_at }}</el-descriptions-item>
@@ -187,7 +200,7 @@ const dateRange = ref<[Date, Date] | null>(null)
 
 const filters = ref({
   model: '',
-  api_key_id: undefined as number | string | undefined,
+  api_key_name: '',
   status_code: undefined as number | undefined,
 })
 
@@ -200,9 +213,7 @@ async function load() {
   try {
     const params: any = { page: page.value, size: 20 }
     if (filters.value.model) params.model = filters.value.model
-    if (filters.value.api_key_id != null && filters.value.api_key_id !== '') {
-      params.api_key_id = Number(filters.value.api_key_id)
-    }
+    if (filters.value.api_key_name.trim()) params.api_key_name = filters.value.api_key_name.trim()
     if (filters.value.status_code != null) params.status_code = filters.value.status_code
     if (dateRange.value) {
       params.start_date = dayjs(dateRange.value[0]).format('YYYY-MM-DDTHH:mm:ss')

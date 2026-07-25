@@ -50,9 +50,11 @@ async def lifespan(app: FastAPI):
     async with RegisterTortoise(
         app,
         config=TORTOISE_ORM,
-        generate_schemas=True,
+        generate_schemas=False,
         add_exception_handlers=True,
     ):
+        from app.utils.secrets import encrypt_plaintext_channel_keys
+        await encrypt_plaintext_channel_keys()
         await init_roles()
         await init_admin()
         from app.services.quota import quota_reset_loop
@@ -70,6 +72,9 @@ async def lifespan(app: FastAPI):
         health_task.cancel()
         cleanup_task.cancel()
     from app.dependencies import close_redis
+    from app.providers.base import close_http_clients
+
+    await close_http_clients()
     await close_redis()
 
 

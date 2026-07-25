@@ -2,14 +2,15 @@ from decimal import Decimal
 
 import pytest
 
-from app.models import Admin, APIKey, Channel, ModelPrice, RequestLog
-from app.services.auth import hash_api_key, hash_password
+from app.models import APIKey, Channel, ModelPrice, RequestLog
+from app.services.auth import hash_api_key
+from tests.conftest import create_admin
 
 pytestmark = pytest.mark.asyncio
 
 
 async def test_admin_create():
-    admin = await Admin.create(username="admin_m1", hashed_password=hash_password("pw"))
+    admin = await create_admin("admin_m1")
     assert admin.id is not None
     assert admin.is_active is True
 

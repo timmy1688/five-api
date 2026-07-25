@@ -1,9 +1,11 @@
+from decimal import Decimal
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.models import User, Channel, ModelPrice
 from app.schemas.model_price import ModelPriceCreate, ModelPriceResponse, ModelPriceUpdate
 from app.services.auth import require_permission
-from app.services.pricing import DEFAULT_MODEL_PRICES
+from app.services.pricing import DEFAULT_MODEL_PRICES, MODEL_PRICE_CATALOG_VERSION
 
 router = APIRouter(prefix="/api/model-prices", tags=["model-prices"])
 
@@ -64,8 +66,11 @@ async def get_unpriced_models(_: User = require_permission("model_price:read")):
 
 
 @router.post("/sync-defaults")
-async def sync_defaults(_: User = require_permission("model_price:write")):
-    created = 0
+async def sync_defaults(
+    overwrite: bool = Query(False),
+    _: User = require_permission("model_price:write"),
+):
+    created = updated = unchanged = 0
     for model, prices in DEFAULT_MODEL_PRICES.items():
         existing = await ModelPrice.get_or_none(model=model)
         if not existing:
@@ -76,7 +81,36 @@ async def sync_defaults(_: User = require_permission("model_price:write")):
                 cached_price=prices.get("cached", 0),
             )
             created += 1
-    return {"message": f"Synced {created} new model prices", "created": created}
+            continue
+
+        values = (
+            Decimal(str(prices["prompt"])),
+            Decimal(str(prices["completion"])),
+            Decimal(str(prices.get("cached", 0))),
+        )
+        current = (
+            existing.prompt_price,
+            existing.completion_price,
+            existing.cached_price,
+        )
+        if overwrite and current != values:
+            await ModelPrice.filter(id=existing.id).update(
+                prompt_price=values[0],
+                completion_price=values[1],
+                cached_price=values[2],
+            )
+            updated += 1
+        else:
+            unchanged += 1
+
+    return {
+        "message": "Default model prices synced",
+        "created": created,
+        "updated": updated,
+        "unchanged": unchanged,
+        "total": len(DEFAULT_MODEL_PRICES),
+        "catalog_version": MODEL_PRICE_CATALOG_VERSION,
+    }
 
 
 @router.post("", response_model=ModelPriceResponse, status_code=status.HTTP_201_CREATED)

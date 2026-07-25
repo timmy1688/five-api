@@ -29,6 +29,7 @@ async def save_request_log(
     latency_ms: int = 0,
     error_message: str = "",
     ip_address: str = "",
+    failed_over: bool = False,
 ) -> None:
     await RequestLog.create(
         request_id=request_id,
@@ -50,6 +51,7 @@ async def save_request_log(
         latency_ms=latency_ms,
         error_message=error_message,
         ip_address=ip_address,
+        failed_over=failed_over,
     )
 
     record_request_metrics(
