@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field
 
 from app.models import APIKey, RequestLog, RequestLogAudit, User
 from app.services.ai_audit import MIN_CHARS, _mark, _verdict, build_excerpt
+from app.services.audit import saved_transcript
 from app.services.content_filter import keyword_was_hit
 from app.services.auth import require_permission
 from app.services.settings_service import ai_audit_config
@@ -32,6 +33,7 @@ class AuditRequestItem(BaseModel):
     ai_review: str
     keyword_hit: bool
     excerpt: str
+    saved: str
 
 
 class AuditReviewBody(BaseModel):
@@ -106,6 +108,7 @@ async def list_requests(
             ai_review=log.ai_review,
             keyword_hit=keyword_was_hit(log.security_hit),
             excerpt=_excerpt(audits.get(log.id, "")),
+            saved=saved_transcript(audits.get(log.id, "")),
         )
         for log in logs
     ]

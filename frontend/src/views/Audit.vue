@@ -117,7 +117,10 @@
                   <el-tag :type="verdictTag(row.ai_review)" size="small">{{ verdictLabel(row.ai_review) || t('audit.reportUnreviewed') }}</el-tag>
                 </div>
                 <p class="verdict-line">{{ verdictDetail(row.ai_review) || t('audit.reportUnreviewed') }}</p>
-                <pre class="excerpt">{{ row.excerpt || t('audit.noExcerpt') }}</pre>
+                <pre class="excerpt" :class="{ open: isOpen(row.request_id) }">{{ rowText(row) }}</pre>
+                <button v-if="canExpand(row)" type="button" class="expand" @click="toggleOpen(row.request_id)">
+                  {{ isOpen(row.request_id) ? t('audit.collapse') : t('audit.expand') }}
+                </button>
               </section>
             </div>
             <p v-if="!reportVisible && requests.length > 1" class="case-count sample-note">
@@ -126,6 +129,7 @@
           </article>
           <section v-if="requests.length" ref="listBox" class="request-list">
             <h4>{{ t('audit.requestsHeading') }}</h4>
+            <p class="case-count">{{ t('audit.savedHint') }}</p>
             <section
               v-for="(row, index) in requests"
               :key="row.request_id"
@@ -144,7 +148,10 @@
                 <el-tag v-else :type="verdictTag(row.ai_review)" size="small">{{ verdictLabel(row.ai_review) || t('audit.reportUnreviewed') }}</el-tag>
               </div>
               <p class="verdict-line">{{ rowVerdictLine(row) }}</p>
-              <pre class="excerpt">{{ row.excerpt || t('audit.noExcerpt') }}</pre>
+              <pre class="excerpt" :class="{ open: isOpen(row.request_id) }">{{ rowText(row) }}</pre>
+              <button v-if="canExpand(row)" type="button" class="expand" @click="toggleOpen(row.request_id)">
+                {{ isOpen(row.request_id) ? t('audit.collapse') : t('audit.expand') }}
+              </button>
             </section>
           </section>
         </template>
@@ -188,6 +195,7 @@ const people = ref<any[]>([])
 const keyQuery = ref('')
 const requests = ref<any[]>([])
 const selectedId = ref<number | null>(null)
+const openRows = ref<Record<string, boolean>>({})
 
 const selectedPerson = computed(() => people.value.find(person => person.api_key_id === selectedId.value) || null)
 const shownRequests = computed(() => [...requests.value].sort((a, b) => concernRank(a.ai_review) - concernRank(b.ai_review)))
@@ -258,7 +266,7 @@ const reportText = computed(() => {
     lines.push(
       `${index + 1}. ${formatTime(row.created_at)}  ${row.model_requested}  ${row.status_code}  ${verdict}${keyword}`,
       detail,
-      row.excerpt || t('audit.noExcerpt'),
+      rowText(row),
       '',
     )
   })
@@ -390,8 +398,24 @@ async function loadPeople() {
   }
 }
 
+function rowText(row: any) {
+  return String(row?.saved || row?.excerpt || t('audit.noExcerpt'))
+}
+
+function canExpand(row: any) {
+  return rowText(row).length > 280
+}
+
+function isOpen(id: string) {
+  return !!openRows.value[id]
+}
+
+function toggleOpen(id: string) {
+  openRows.value = { ...openRows.value, [id]: !openRows.value[id] }
+}
+
 function excerptPreview(row: any) {
-  const text = String(row?.excerpt || '').replace(/\s+/g, ' ').trim()
+  const text = String(row?.excerpt || row?.saved || '').replace(/\s+/g, ' ').trim()
   if (!text) return t('audit.noExcerpt')
   return text.length > 80 ? `${text.slice(0, 80)}…` : text
 }
@@ -844,12 +868,26 @@ onMounted(async () => {
 
 .excerpt {
   margin: 0;
-  max-height: 96px;
+  max-height: 220px;
   overflow: auto;
   white-space: pre-wrap;
   font-size: 12px;
   line-height: 1.5;
   color: #1d2129;
+}
+
+.excerpt.open {
+  max-height: none;
+}
+
+.expand {
+  margin-top: 6px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #3b5bfd;
+  font-size: 12px;
+  cursor: pointer;
 }
 
 .review-result {

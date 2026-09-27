@@ -1,6 +1,6 @@
 """AI 审计由审计页按人选中后才调用，不跟在每次请求后面。
 
-送去模型的内容是：系统提示最多 400 字，加上最后一条用户消息最多 1200 字。
+送去模型的内容是：系统提示开头最多 400 字，加上最后一条用户消息末尾最多 1200 字。
 更早的对话、图片和模型回复都不送。审计页会把这个 Key 保存过的请求全部送审。
 结论只要一行 JSON。思考模式会把输出额度用完，正文变成空，所以先关掉思考。
 上游不接受这个参数时，再用更大的额度重试一次。
@@ -42,6 +42,14 @@ def _clip(text: str, limit: int) -> str:
     if len(text) <= limit:
         return text
     return text[:limit]
+
+
+def _clip_tail(text: str, limit: int) -> str:
+    """最后一条用户消息留末尾。长提示的真实问题通常在后面。"""
+    text = " ".join(text.split())
+    if len(text) <= limit:
+        return text
+    return text[-limit:]
 
 
 def _parts_from(value: Any, parts: list[str]) -> None:
@@ -93,7 +101,7 @@ def build_excerpt(body: dict | None) -> str:
         return ""
     system = _text_of(body.get("system")) or _last_role_text(body, "system")
     system = _clip(system, SYSTEM_CHARS)
-    user = _clip(_last_user_text(body), USER_CHARS)
+    user = _clip_tail(_last_user_text(body), USER_CHARS)
     lines = []
     if system:
         lines.append(f"system:\n{system}")
