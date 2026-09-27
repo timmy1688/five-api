@@ -34,7 +34,10 @@ async def record_failure(channel_id: int) -> None:
     count = await r.incr(fail_key)
     if count == 1:
         await r.expire(fail_key, FAIL_TTL)
-    if count >= settings.CHANNEL_HEALTH_THRESHOLD:
+    from app.services.settings_service import gateway_config
+
+    threshold = (await gateway_config())["channel_health_threshold"]
+    if count >= threshold:
         await r.set(f"{DISABLED_KEY_PREFIX}{channel_id}", str(int(time.time())))
         logger.warning("Channel %d disabled after %d consecutive failures", channel_id, count)
 
@@ -110,8 +113,13 @@ async def health_check_loop() -> None:
     """后台循环：只探测已熔断/冷却的渠道，避免健康检查产生持续费用。"""
     from app.models import Channel
 
-    interval = settings.CHANNEL_HEALTH_CHECK_INTERVAL
     while True:
+        try:
+            from app.services.settings_service import gateway_config
+
+            interval = (await gateway_config())["channel_health_check_interval"]
+        except Exception:
+            interval = settings.CHANNEL_HEALTH_CHECK_INTERVAL
         await asyncio.sleep(interval)
         try:
             channels = await Channel.filter(is_enabled=True)

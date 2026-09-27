@@ -17,6 +17,15 @@ from app.providers.base import BaseProvider
 from app.services.channel_health import record_failure, record_rate_limit, record_success
 from app.services.concurrency import concurrency_limiter
 from app.services.failover import is_retryable_error, upstream_status
+from app.services.audit import AuditBuffer, security_exempt
+from app.services.content_filter import (
+    collect_response_hits,
+    format_hits,
+    open_response_scanner,
+    remember_hit,
+    visible_sse_text,
+)
+from app.services.error_detail import describe_upstream_failure, gateway_failure
 from app.services.logging_service import save_request_log
 from app.services.pricing import calculate_cost
 from app.services.quota import deduct_quota
@@ -34,6 +43,14 @@ async def _quiet(awaitable, operation: str):
         return None
 
 
+def _first_count(*values) -> int:
+    """First reported count. None means the field is absent, 0 is a real zero."""
+    for value in values:
+        if value is not None:
+            return int(value or 0)
+    return 0
+
+
 def extract_openai_usage(data: dict) -> dict:
     """从 OpenAI 格式响应/chunk 中提取 usage。"""
     usage = data.get("usage") or {}
@@ -47,6 +64,13 @@ def extract_openai_usage(data: dict) -> dict:
             "cached_tokens",
             usage.get("prompt_cache_hit_tokens", 0),
         ),
+        # A write is its own bucket when the upstream reports one. DeepSeek
+        # has no write field, so the count stays 0 and the write price is unused.
+        "cache_write_tokens": _first_count(
+            usage.get("cache_write_tokens"),
+            prompt_details.get("cache_write_tokens"),
+            usage.get("cache_creation_input_tokens"),
+        ),
     }
 
 
@@ -55,6 +79,7 @@ async def _bill_and_log(
     prompt_tokens: int,
     completion_tokens: int,
     cached_tokens: int,
+    cache_write_tokens: int,
     channel: Channel | None,
     api_key: APIKey,
     request_id: str,
@@ -65,16 +90,22 @@ async def _bill_and_log(
     start_time: float,
     ip: str,
     error_message: str = "",
+    error_origin: str = "",
+    upstream_status_code: int = 0,
+    upstream_error: str = "",
     failed_over: bool = False,
+    audit: AuditBuffer | None = None,
+    security_hit: str = "",
 ):
     """计费 + 扣费 + 写日志。"""
     latency_ms = int((time.monotonic() - start_time) * 1000)
     cost = Decimal(0)
     try:
-        if prompt_tokens > 0 or completion_tokens > 0:
+        if prompt_tokens > 0 or completion_tokens > 0 or cached_tokens > 0 or cache_write_tokens > 0:
             cost = await calculate_cost(
                 model_actual, prompt_tokens, completion_tokens, channel,
                 cached_tokens=cached_tokens,
+                cache_write_tokens=cache_write_tokens,
             )
             if cost > 0:
                 await deduct_quota(api_key.id, cost)
@@ -95,13 +126,19 @@ async def _bill_and_log(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             cached_tokens=cached_tokens,
+            cache_write_tokens=cache_write_tokens,
             cost=cost,
             is_stream=is_stream,
             status_code=status_code,
             latency_ms=latency_ms,
             error_message=error_message,
+            error_origin=error_origin,
+            upstream_status_code=upstream_status_code,
+            upstream_error=upstream_error,
             ip_address=ip,
             failed_over=failed_over,
+            audit_request=audit.request_text if audit else "",
+            security_hit=security_hit,
         )
     except Exception:
         logger.exception("request logging failed for request %s", request_id)
@@ -116,12 +153,17 @@ async def log_rejected_request(
     start_time: float,
     ip: str,
     error_message: str,
+    audit: AuditBuffer | None = None,
+    security_hit: str = "",
 ) -> None:
     """Record an authenticated request rejected before reaching an upstream."""
+    failure = gateway_failure(error_message)
     await _bill_and_log(
-        model, 0, 0, 0, None, api_key, request_id, endpoint, model,
+        model, 0, 0, 0, 0, None, api_key, request_id, endpoint, model,
         is_stream=False, status_code=status_code, start_time=start_time, ip=ip,
-        error_message=error_message,
+        audit=audit,
+        security_hit=security_hit,
+        **failure,
     )
 
 
@@ -137,6 +179,8 @@ async def execute_with_failover(
     format_error: Callable,
     concurrency_lease_id: str,
     session_key: str | None = None,
+    audit: AuditBuffer | None = None,
+    security_hits: list[str] | None = None,
 ) -> Any:
     """非流式通用编排：故障转移 → 计费 → 日志。
 
@@ -170,12 +214,19 @@ async def execute_with_failover(
                 prompt_tokens = usage.get("prompt_tokens", 0)
                 completion_tokens = usage.get("completion_tokens", 0)
                 cached_tokens = usage.get("cached_tokens", 0)
+                cache_write_tokens = usage.get("cache_write_tokens", 0)
 
+                hits = security_hits if security_hits is not None else []
+                for label in await collect_response_hits(response, exempt=security_exempt(api_key)):
+                    remember_hit(hits, label)
                 await _bill_and_log(
-                    model_actual, prompt_tokens, completion_tokens, cached_tokens,
+                    model_actual, prompt_tokens, completion_tokens, cached_tokens, cache_write_tokens,
                     channel, api_key, request_id, endpoint, model_requested,
-                    is_stream=False, status_code=200, start_time=start_time, ip=ip,
+                    is_stream=False, status_code=200,
+                    start_time=start_time, ip=ip,
                     failed_over=i > 0,
+                    audit=audit,
+                    security_hit=format_hits(hits),
                 )
                 await _quiet(record_success(channel.id), "health reset")
                 await _quiet(bind_sticky_channel(session_key, channel.id), "sticky binding")
@@ -189,12 +240,15 @@ async def execute_with_failover(
 
                 model_actual = provider.apply_model_mapping(model_requested)
                 status_code = upstream_status(e) or 502
+                failure = describe_upstream_failure(e, channel.base_url)
                 await _bill_and_log(
-                    model_actual, 0, 0, 0,
+                    model_actual, 0, 0, 0, 0,
                     channel, api_key, request_id, endpoint, model_requested,
                     is_stream=False, status_code=status_code, start_time=start_time, ip=ip,
-                    error_message=str(e),
                     failed_over=i > 0,
+                    audit=audit,
+                    security_hit=format_hits(security_hits),
+                    **failure,
                 )
                 format_error(status_code, "api_error", "upstream_error", f"Upstream error: {e}")
             finally:
@@ -218,6 +272,8 @@ async def stream_with_failover(
     format_error_event: Callable,
     concurrency_lease_id: str,
     session_key: str | None = None,
+    audit: AuditBuffer | None = None,
+    security_hits: list[str] | None = None,
 ) -> AsyncIterator[str]:
     """流式通用编排：故障转移 → 逐行 yield → 计费 → 日志。
 
@@ -229,13 +285,19 @@ async def stream_with_failover(
     prompt_tokens = 0
     completion_tokens = 0
     cached_tokens = 0
+    cache_write_tokens = 0
     status_code = 200
     error_msg = ""
+    error_origin = ""
+    upstream_status_code = 0
+    upstream_error = ""
     channel: Channel | None = None
     provider: BaseProvider | None = None
     model_actual = model_requested
     data_yielded = False
     failed_over = False
+    hits = security_hits if security_hits is not None else []
+    scanner = await open_response_scanner(exempt=security_exempt(api_key))
 
     try:
         last_error: Exception | None = None
@@ -254,6 +316,9 @@ async def stream_with_failover(
                                 prompt_tokens = usage.get("prompt_tokens", prompt_tokens)
                                 completion_tokens = usage.get("completion_tokens", completion_tokens)
                                 cached_tokens = usage.get("cached_tokens", cached_tokens)
+                                cache_write_tokens = usage.get("cache_write_tokens", cache_write_tokens)
+                            if scanner is not None:
+                                remember_hit(hits, scanner.feed(visible_sse_text(line)))
                             yield line
                         break
                     except Exception as exc:
@@ -291,7 +356,14 @@ async def stream_with_failover(
 
     except Exception as e:
         status_code = upstream_status(e) or 502
-        error_msg = str(e)
+        if channel is not None:
+            failure = describe_upstream_failure(e, channel.base_url)
+        else:
+            failure = gateway_failure(str(e))
+        error_msg = failure["error_message"]
+        error_origin = failure["error_origin"]
+        upstream_status_code = failure["upstream_status_code"]
+        upstream_error = failure["upstream_error"]
         yield format_error_event(e)
     finally:
         await _quiet(
@@ -299,11 +371,16 @@ async def stream_with_failover(
             "concurrency release",
         )
         await _bill_and_log(
-            model_actual, prompt_tokens, completion_tokens, cached_tokens,
+            model_actual, prompt_tokens, completion_tokens, cached_tokens, cache_write_tokens,
             channel, api_key, request_id, endpoint, model_requested,
             is_stream=True, status_code=status_code, start_time=start_time, ip=ip,
             error_message=error_msg,
+            error_origin=error_origin,
+            upstream_status_code=upstream_status_code,
+            upstream_error=upstream_error,
             failed_over=failed_over,
+            audit=audit,
+            security_hit=format_hits(hits),
         )
         if provider:
             await _quiet(provider.close(), "provider close")

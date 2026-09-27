@@ -8,7 +8,7 @@ from app.models import APIKey, Channel, ModelGroup, ModelPrice, Role, User
 from app.services.auth import create_access_token, hash_api_key, hash_password
 from tests.conftest import auth_header, create_admin
 
-pytestmark = pytest.mark.asyncio
+pytestmark = [pytest.mark.asyncio, pytest.mark.regression]
 
 
 # ── auth ────────────────────────────────────────────────────
@@ -390,7 +390,10 @@ async def test_model_price_sync_updates_only_builtin_prices(client):
     await custom.refresh_from_db()
     assert builtin.prompt_price == Decimal("0.05")
     assert builtin.completion_price == Decimal("0.4")
+    assert builtin.cache_write_price == Decimal("0.05")
     assert builtin.is_active is False
+    claude = await ModelPrice.get(model="claude-sonnet-4-6")
+    assert claude.cache_write_price == Decimal("3.0")
     assert custom.prompt_price == Decimal("0.25")
 
 
@@ -514,8 +517,11 @@ async def test_logs_get_by_request_id(client):
 async def test_logs_not_found(client):
     admin = await create_admin("log404", "pw")
     token = create_access_token({"sub": str(admin.id)})
-    resp = await client.get("/api/logs/nonexistent", headers=auth_header(token))
+    headers = auth_header(token)
+    resp = await client.get("/api/logs/nonexistent", headers=headers)
     assert resp.status_code == 404
+    audit = await client.get("/api/logs/nonexistent/audit", headers=headers)
+    assert audit.status_code == 404
 
 
 # ── stats ───────────────────────────────────────────────────
@@ -553,6 +559,47 @@ async def test_stats_by_key(client):
 
 
 # ── unauthenticated access ──────────────────────────────────
+
+async def test_gateway_settings_round_trip(client):
+    admin = await create_admin("gwsettings", "pw")
+    headers = auth_header(create_access_token({"sub": str(admin.id)}))
+    current = await client.get("/api/settings", headers=headers)
+    assert current.status_code == 200
+    assert current.json()["log_retention_days"] == 90
+    assert current.json()["sticky_session_enabled"] is True
+
+    body = {
+        "log_retention_days": 14,
+        "channel_health_threshold": 5,
+        "channel_health_check_interval": 120,
+        "sticky_session_enabled": False,
+        "sticky_session_ttl": 600,
+    }
+    saved = await client.put("/api/settings", json=body, headers=headers)
+    assert saved.status_code == 200
+    assert saved.json() == body
+    again = await client.get("/api/settings", headers=headers)
+    assert again.json()["log_retention_days"] == 14
+
+    rejected = await client.put(
+        "/api/settings",
+        json={**body, "log_retention_days": -1},
+        headers=headers,
+    )
+    assert rejected.status_code == 422
+
+    reader_role = await Role.create(name="settings-reader", permissions=["setting:read"])
+    reader = await User.create(
+        username="settings-reader",
+        hashed_password=hash_password("pw"),
+        role=reader_role,
+    )
+    reader_headers = auth_header(create_access_token({"sub": str(reader.id)}))
+    denied = await client.put("/api/settings", json=body, headers=reader_headers)
+    assert denied.status_code == 403
+    visible = await client.get("/api/settings", headers=reader_headers)
+    assert visible.status_code == 200
+
 
 async def test_admin_endpoints_require_auth(client):
     endpoints = [

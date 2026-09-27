@@ -57,10 +57,18 @@ class FakeRedis:
 
 @pytest.fixture(autouse=True)
 async def setup_db():
+    from app.services.content_filter import clear_filter_cache
+    from app.services.settings_service import clear_settings_cache
+
+    clear_settings_cache()
+    clear_filter_cache()
     await Tortoise.init(config=TEST_TORTOISE_ORM)
     await Tortoise.generate_schemas()
     yield
     from app.providers.base import close_http_clients
+    from app.services.ai_audit import drain_ai_reviews
+
+    await drain_ai_reviews()
     await close_http_clients()
     await Tortoise._drop_databases()
 

@@ -2,12 +2,12 @@
   <div class="access-denied">
     <el-result
       icon="warning"
-      title="No Accessible Pages"
-      sub-title="Your role does not currently include permission to view any page."
+      :title="t('denied.title')"
+      :sub-title="t('denied.subtitle')"
     >
       <template #extra>
         <el-button type="primary" @click="auth.logout(); router.push('/login')">
-          Sign Out
+          {{ t('denied.signOut') }}
         </el-button>
       </template>
     </el-result>
@@ -17,9 +17,11 @@
 <script setup lang="ts">
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import { useI18n } from '@/i18n'
 
 const router = useRouter()
 const auth = useAuthStore()
+const { t } = useI18n()
 </script>
 
 <style scoped>

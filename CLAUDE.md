@@ -23,7 +23,7 @@ docker compose up -d
 docker compose logs -f backend     # 查看日志
 ```
 
-启动后：前端 `http://localhost:80`、后端 API `http://localhost:8000`、默认管理员 `admin` / `admin123`（Super Admin 角色）
+启动后管理后台和 API 都在 `http://localhost`（容器内 8000，默认映射到宿主机 80），默认管理员 `admin` / `admin123`（Super Admin 角色）
 
 ### 本地开发
 
@@ -179,7 +179,7 @@ cd frontend && npm install && npx vite --port 5001
 - **`openai`**：OpenAI 及所有 OpenAI 兼容端点（官方、第三方中转、Gemini、Qwen 等）——统一透传
 - **`anthropic`**：Anthropic 原生协议（`/v1/messages`）
 
-匹配协议的渠道整体排在不匹配的前面，各组内维持 priority + weight 排序。不匹配的渠道保留作为故障转移备选。
+候选只保留协议匹配的渠道，组内按 priority + weight 排序。不匹配的渠道不参与故障转移，避免把请求送进跨协议转换。
 
 > ⚠️ **`provider` 表示"线协议"，不是"厂商"。** 协议族由 `provider` 推断，Anthropic passthrough 也靠 `provider == "anthropic"` 判定。因此按**端点协议**而非厂商来建渠道：
 > - 厂商的 OpenAI 兼容端点（含 Gemini / Qwen 中转）→ `provider=openai`（透传）
@@ -196,7 +196,7 @@ cd frontend && npm install && npx vite --port 5001
 - **路由注入**：路由查出 `sticky_channel_id` 传给 `resolve_candidates()`，`_promote_sticky()` 把它提到候选列表最前——**仅当该渠道仍是健康候选时**；否则保持正常排序，绑定自然回退。
 - **协议优先高于跨协议粘性**：若粘性渠道属于 **非** preferred 协议组、而 preferred 协议组仍有健康渠道，则 `_promote_sticky()` **忽略粘性**、回到协议优先排序。这避免了「preferred 协议渠道临时故障 → fallback 到跨协议渠道 → 恢复后仍被粘性长期卡住」的问题。粘性渠道属于 preferred 组、或 preferred 组无健康渠道（真需 fallback）时才提升。
 - **回写时机**：`proxy.py` 的 `execute_with_failover` / `stream_with_failover` 在 `record_success()` 后调用 `bind_sticky_channel()`，故障转移到新渠道时会重新绑定。结合上一条：preferred 渠道恢复后，下一次请求即按协议优先走回该渠道并把粘性重绑过去，实现自愈——无需手动清 Redis 或等 TTL 过期。
-- **关闭**：`STICKY_SESSION_ENABLED=false` 时 `make_session_key()` 直接返回 None，管线零开销。
+- **关闭**：系统设置或 `STICKY_SESSION_ENABLED=false` 时 `make_session_key()` 直接返回 None。未在后台保存过时用环境变量。
 - 仅对含 `messages` 的会话生效（chat/messages）；`embeddings` / 传统 `completions` 不产生指纹。
 
 ### 代理编排（`services/proxy.py`）
@@ -228,8 +228,8 @@ async def _send_fn(provider, channel):
 | 条件 | 路径 | 说明 |
 |------|------|------|
 | `/v1/messages` + provider=`anthropic` | **Passthrough** | 原样透传，支持 tool_use/thinking/streaming 全部特性 |
-| `/v1/messages` + provider=`openai` | **Conversion（方向 A）** | `anthropic_compat.py`：Anthropic→OpenAI 请求、OpenAI→Anthropic 响应/流 |
-| `/v1/chat/completions` + provider=`anthropic` | **Conversion（方向 B）** | `anthropic_provider.py`：OpenAI→Anthropic 请求、Anthropic→OpenAI 响应/流 |
+| `/v1/chat/completions` + provider=`openai` | **Passthrough** | OpenAI 兼容请求原样转发 |
+| 协议不一致 | **不转发** | 返回没有可用渠道。`anthropic_compat.py` 里的转换函数不在请求路径上 |
 
 ### 跨协议工具转换（tool-aware conversion）
 
@@ -252,7 +252,7 @@ async def _send_fn(provider, channel):
 
 管理后台使用基于角色的细粒度权限控制。
 
-**权限定义**（15 个，格式 `资源:动作`）：
+**权限定义**（19 个，格式 `资源:动作`）：
 
 | 资源 | read | write |
 |------|------|-------|
@@ -264,13 +264,15 @@ async def _send_fn(provider, channel):
 | stat | 查看统计 | — |
 | user | 查看管理员 | 创建/编辑/删除管理员 |
 | role | 查看角色 | 创建/编辑/删除角色 |
+| security | 查看安全策略和审计摘录 | 修改关键词、密钥扫描、推理审计，并在审计页审查选中的请求 |
+| setting | 查看系统设置 | 修改日志保留、粘性会话和渠道熔断参数 |
 
 **预置角色**（内置不可删改）：
 
 | 角色 | 权限 |
 |------|------|
-| Super Admin | 全部 15 个权限 |
-| Viewer | 所有 `*:read` 权限（8 个） |
+| Super Admin | 全部 19 个权限 |
+| Viewer | 所有 `*:read` 权限（10 个） |
 
 管理员可自建角色，自由组合权限。
 
@@ -392,6 +394,7 @@ async def create(body: ..., user: User = require_permission("channel:write")):
 | model_group_id | int FK NULL | 关联模型分组，优先于 allowed_models；空组/失效引用均拒绝全部模型 |
 | allowed_ips | JSON | IP 白名单，空 = 不限制 |
 | is_enabled | bool | |
+| audit_policy | varchar(16) | `on` 跟随系统的关键词、密钥扫描、AI 审查和请求保存；`off` 全部跳过 |
 | quota_reset_day | smallint | 每月自动重置日（1~31） |
 | expires_at | datetime | null = 永不过期 |
 
@@ -412,7 +415,8 @@ async def create(body: ..., user: User = require_permission("channel:write")):
 | model | varchar(64) UNIQUE | 模型名 |
 | prompt_price | decimal(16,6) | $/1M tokens |
 | completion_price | decimal(16,6) | $/1M tokens |
-| cached_price | decimal(16,6) | 缓存命中价 $/1M tokens |
+| cached_price | decimal(16,6) | 缓存读取价 $/1M tokens |
+| cache_write_price | decimal(16,6) | 保留字段，计费不读。同步内置价格时写成与输入价相同。缓存写入按输入价计 |
 | is_active | bool | |
 
 ### request_logs（请求日志）
@@ -428,12 +432,20 @@ async def create(body: ..., user: User = require_permission("channel:write")):
 | cost | decimal(16,6) | 本次费用 USD |
 | is_stream | bool | |
 | failed_over | bool | 是否切换过渠道 |
-| status_code / latency_ms / error_message / ip_address | | |
+| has_audit | bool | 是否另存了推理正文。列表和统计只读这个标记 |
+| ai_review | varchar(32) | 事后 AI 审查结论。空表示未审查，`clear` 通过，`flagged:类别` 存疑，`unavailable` 审查失败，`skipped` 队列满了跳过 |
+| security_hit | varchar(128) | 关键词名或密钥模式名，逗号分隔。命中只做标记，不改变状态码，也不写入密钥原文 |
+| audit_request | text | 在 `request_log_audits`，按日志 id 一对一。只存请求，不存回复。日志详情不返回这段，`GET /api/logs/{request_id}/audit` 单独读取 |
+| error_origin | varchar(16) | `gateway` 网关拒绝 / `official` 官网 / `reseller` 渠道商；成功为空 |
+| upstream_status_code | int | 上游 HTTP 状态，网关拒绝时为 0 |
+| upstream_error | text | 上游原始报错摘录 |
+| status_code / latency_ms / error_message / ip_address | | status_code 与 error_message 是返回客户端的下游结果 |
 
 ### 计费
 
 ```
-cost = ((prompt - cached) × prompt_price + cached × cached_price + completion × completion_price) / 1M
+cost = (fresh × prompt_price + cache_read × cached_price + completion × completion_price) / 1M
+fresh = prompt - cache_read
 ```
 
 定价优先级：Channel `model_pricing` → 全局 `model_prices` 表（查价用 `model_actual`，即经 `model_mapping` 后的真实上游模型名）。渠道显式配置 `0` 是有效覆盖，不回退全局价格。扣减使用 `F()` 原子操作。
@@ -454,11 +466,12 @@ cost = ((prompt - cached) × prompt_price + cached × cached_price + completion 
 | DeepSeek（OpenAI 兼容） | **含** | `prompt_cache_hit_tokens` |
 | Anthropic | **不含** | `cache_read_input_tokens`（读）、`cache_creation_input_tokens`（写） |
 
-因此凡是从 **Anthropic 上游** 取 usage 的路径，都必须折算成 OpenAI 口径，否则 `prompt - cached` 会把非缓存 token 也减掉导致**少计费**：
+因此凡是从 **Anthropic 上游** 取 usage 的路径，都必须把读取和写入补进 `prompt_tokens`。计费只把读取按缓存价扣，写入留在输入价里。漏加写入会少计：
 
 ```
 prompt_tokens = input_tokens + cache_read_input_tokens + cache_creation_input_tokens
-cached_tokens = cache_read_input_tokens          # cache_creation 暂按 prompt_price 计（无专门 cache-write 价）
+cached_tokens = cache_read_input_tokens
+cache_write_tokens = cache_creation_input_tokens
 ```
 
 归一化位置共 4 处（改动需同步维护）：
@@ -538,7 +551,18 @@ export ANTHROPIC_API_KEY=sk-your-five-api-key
 | GET/PUT/DELETE | `/api/model-prices/{id}` | model_price:read / model_price:write | 定价详情/更新/删除 |
 | POST | `/api/model-prices/sync-defaults` | model_price:write | 导入内置价格 |
 | GET | `/api/model-prices/unpriced` | model_price:read | 未定价模型 |
-| GET | `/api/logs` | log:read | 日志列表（分页+过滤） |
+| GET/PUT | `/api/security` | security:read / security:write | 关键词标记开关，读取时一并返回密钥扫描、推理审计和 AI 审计。关键词和密钥命中只写日志标记，不中断请求 |
+| GET/PUT | `/api/settings` | setting:read / setting:write | 日志保留天数、粘性会话和渠道熔断。未保存过时返回环境变量默认值 |
+| PUT | `/api/security/inference-audit` | security:write | 推理审计总开关。只保存开启审计的 Key 的请求正文 |
+| PUT | `/api/security/secret-scan` | security:write | 固定密钥模式扫描 |
+| PUT | `/api/security/ai-audit` | security:write | 打开审计页使用的审查模型。不在每次请求后自动调用 |
+| GET | `/api/audit/keys` | security:read | 有已保存请求的 Key |
+| GET | `/api/audit/keys/{id}/requests` | security:read | 该 Key 的审查摘录。只有系统提示和最后一条用户消息 |
+| POST | `/api/audit/review` | security:write | 审查选中的请求，一次最多 5 条 |
+| POST/PUT/DELETE | `/api/security/keywords` | security:write | 敏感词增删改 |
+| GET | `/api/logs` | log:read | 日志列表（分页+过滤，含 error_origin） |
+| GET | `/api/logs/{request_id}` | log:read | 日志详情，不含请求正文 |
+| GET | `/api/logs/{request_id}/audit` | log:read | 单独读取已保存的请求正文 |
 | POST | `/api/logs/cleanup` | log:write | 清理过期日志 |
 | GET | `/api/stats/overview` | stat:read | 总览统计 |
 | GET | `/api/stats/usage` | stat:read | 时序用量 |
@@ -568,10 +592,13 @@ export ANTHROPIC_API_KEY=sk-your-five-api-key
 | `MYSQL_HOST/PORT/USER/PASSWORD/DATABASE` | `127.0.0.1`/`3306`/`five`/`five_password`/`five_api` | |
 | `REDIS_URL` | `redis://127.0.0.1:6379/0` | |
 | `INIT_ADMIN_USERNAME/PASSWORD` | `admin`/`admin123` | 首次启动创建（Super Admin 角色） |
-| `STICKY_SESSION_ENABLED` | `true` | 粘性会话开关 |
-| `STICKY_SESSION_TTL` | `900` | 会话→渠道绑定的 Redis 过期秒数 |
+| `STICKY_SESSION_ENABLED` | `true` | 粘性会话默认开关。后台系统设置保存后以保存值为准 |
+| `STICKY_SESSION_TTL` | `900` | 会话绑定默认秒数。后台保存后以保存值为准 |
+| `LOG_RETENTION_DAYS` | `90` | 日志保留默认天数。后台保存后以保存值为准 |
+| `CHANNEL_HEALTH_THRESHOLD` | `3` | 连续失败熔断默认次数。后台保存后以保存值为准 |
+| `CHANNEL_HEALTH_CHECK_INTERVAL` | `60` | 熔断探测默认间隔秒数。后台保存后以保存值为准 |
 
-Docker Compose 额外: `MYSQL_ROOT_PASSWORD`、`BACKEND_PORT`(8000)、`FRONTEND_PORT`(80)、`REDIS_PORT`(6379)
+Docker Compose 额外: `MYSQL_ROOT_PASSWORD`、`HTTP_PORT`(80)、`REDIS_PORT`(6379)
 
 JWT 算法固定为 HS256、有效期固定为 24 小时。应用签名及渠道加密密钥首次启动自动
 生成并持久化为 `data/.secret_key`；Docker 将项目 `data/` 挂载到容器 `/data`，
@@ -615,7 +642,7 @@ DeepSeek 同时提供 OpenAI 端点（`/v1/chat/completions`）和 Anthropic 端
 路由行为：
 - 客户端走 `/v1/chat/completions`（OpenAI SDK） → 优先命中 **DeepSeek-OpenAI** 渠道，透传。
 - 客户端走 `/v1/messages`（Claude Code / Anthropic SDK） → 优先命中 **DeepSeek-Anthropic** 渠道，passthrough，保留 tool_use / thinking。
-- 若首选协议的渠道全部故障，另一条渠道作为故障转移备选（跨协议时自动走转换路径）。
+- 某一协议的渠道全部不可用时，不会改走另一条协议。客户端要调用该模型，需要有同协议渠道。
 
 Claude Code 直连时，配 `provider=anthropic` 的那条渠道即可：
 
@@ -719,10 +746,9 @@ resp = client.chat.completions.create(model="gpt-4o", messages=[{"role": "user",
 |------|------|------|
 | mysql | 3306 | MySQL 8.0，数据持久化到 named volume |
 | redis | 6379 | 并发限制 + RPM 限流 |
-| backend | 8000 | FastAPI，等待 mysql/redis healthy |
-| frontend | 80 | npm build → Nginx（SPA + 反代 + SSE 支持） |
+| gateway | 80 → 8000 | 单个镜像：前端静态文件由 FastAPI 提供，API 与 SSE 走同一进程 |
 
-Nginx 要点：`/v1/` 反代关闭 `proxy_buffering` 以支持 SSE，300s 超时。
+管理后台和 `/v1` 由同一个 Uvicorn 进程提供，不再单独跑 Nginx。SSE 不经过应用内缓冲。
 IP 白名单读取 `request.client`；部署反向代理时只能通过 Uvicorn
 `--forwarded-allow-ips` 信任明确的代理网段，不能在应用层直接相信任意
 `X-Forwarded-For`。Docker 镜像默认仅信任 loopback 与 Docker 私网段。
@@ -733,7 +759,7 @@ IP 白名单读取 `request.client`；部署反向代理时只能通过 Uvicorn
 
 **首次启动没有管理员？** 检查 `.env` 中 `INIT_ADMIN_USERNAME/PASSWORD`，应用启动时 admins 表为空则自动创建（Super Admin 角色）。同时自动创建预置角色（Super Admin、Viewer）。
 
-**流式响应不工作？** 确认 Nginx 配置了 `proxy_buffering off`，所有中间反代层都关闭了 response buffering。
+**流式响应不工作？** 默认部署由网关进程直接输出 SSE。如果前面又加了 Nginx 或其他反代，需要关闭响应缓冲（Nginx 的 `proxy_buffering off`）。
 
 **Token 计费不准确？** 非流式直接用上游 `usage`；流式从 SSE 事件中提取。上游未返回 usage 时 tokens 记为 0、cost 为 $0。定价查找：Channel `model_pricing` → 全局 `model_prices` 表。注意跨协议口径统一：Anthropic 的 `input_tokens` 不含缓存，取用时须补齐为 `input + cache_read + cache_creation`（详见「跨协议计费口径统一」）。流式走 Anthropic→openai 转换时依赖 `stream_options.include_usage`，否则上游不吐 usage 会记 0。
 
@@ -743,4 +769,4 @@ IP 白名单读取 `request.client`；部署反向代理时只能通过 Uvicorn
 
 **权限不够？** 403 Permission denied — 当前管理员的角色缺少所需权限。联系 Super Admin 调整角色权限或分配其他角色。
 
-**同一模型两个渠道如何路由？** 系统根据请求协议自动优先匹配：`/v1/messages` 优先走 Anthropic 渠道，`/v1/chat/completions` 优先走 OpenAI 兼容渠道。不匹配的渠道作为故障转移备选。
+**同一模型两个渠道如何路由？** `/v1/messages` 只走 Anthropic 渠道，`/v1/chat/completions` 只走 OpenAI 兼容渠道。另一协议的渠道不会被选中。

@@ -25,6 +25,7 @@ class APIKeyCreate(BaseModel):
     model_group_id: int | None = None
     quota_reset_day: int | None = Field(None, ge=1, le=31)
     expires_at: datetime | None = None
+    audit_policy: str = "on"
 
     @field_validator("allowed_ips", mode="before")
     @classmethod
@@ -45,6 +46,13 @@ class APIKeyCreate(BaseModel):
             raise ValueError("rpm_limit must be -1 or at least 1")
         return v
 
+    @field_validator("audit_policy")
+    @classmethod
+    def validate_policy(cls, v):
+        if v not in {"on", "off"}:
+            raise ValueError("audit_policy must be on or off")
+        return v
+
 
 class APIKeyUpdate(BaseModel):
     name: str | None = Field(None, min_length=1, max_length=128)
@@ -55,6 +63,7 @@ class APIKeyUpdate(BaseModel):
     allowed_ips: list[str] | None = None
     model_group_id: int | None = None
     is_enabled: bool | None = None
+    audit_policy: str | None = None
     quota_reset_day: int | None = Field(None, ge=1, le=31)
     expires_at: datetime | None = None
 
@@ -77,6 +86,13 @@ class APIKeyUpdate(BaseModel):
             raise ValueError("rpm_limit must be -1 or at least 1")
         return v
 
+    @field_validator("audit_policy")
+    @classmethod
+    def validate_policy(cls, v):
+        if v is not None and v not in {"on", "off"}:
+            raise ValueError("audit_policy must be on or off")
+        return v
+
 
 class APIKeyResponse(BaseModel):
     id: int
@@ -92,6 +108,7 @@ class APIKeyResponse(BaseModel):
     model_group_id: int | None
     model_group_name: str | None = None
     is_enabled: bool
+    audit_policy: str
     quota_reset_day: int | None
     quota_last_reset_at: datetime | None
     expires_at: datetime | None

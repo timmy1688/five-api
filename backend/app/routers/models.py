@@ -13,7 +13,11 @@ async def list_models(_: User = require_permission("channel:read")):
         "id", "name", "provider", "models", "model_mapping", "model_pricing",
     )
     prices = {
-        mp.model: {"prompt": float(mp.prompt_price), "completion": float(mp.completion_price), "cached": float(mp.cached_price)}
+        mp.model: {
+            "prompt": float(mp.prompt_price),
+            "completion": float(mp.completion_price),
+            "cached": float(mp.cached_price),
+        }
         for mp in await ModelPrice.filter(is_active=True)
     }
 

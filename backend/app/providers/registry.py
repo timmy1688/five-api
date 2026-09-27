@@ -75,11 +75,11 @@ async def resolve_candidates(
     preferred_protocol: str | None = None,
     sticky_channel_id: int | None = None,
 ) -> list[tuple[Channel, type[BaseProvider]]]:
-    """返回所有支持该模型的候选渠道。
+    """返回支持该模型、且协议匹配的候选渠道。
 
-    排序：协议匹配的渠道整体排在前面，各组内按 priority 降序 + weight 加权随机。
-    不匹配的渠道保留作为故障转移备选。
-    若传入 sticky_channel_id 且该渠道仍健康，则将其提到最前（粘性会话）。
+    只在同一种线协议内做故障转移。跨协议转换会丢掉 thinking、tool_use 和 Beta
+    字段，不作为备选。各组内按 priority 降序 + weight 加权随机。
+    若传入 sticky_channel_id 且该渠道仍在候选里，则将其提到最前。
     """
     from app.services.channel_health import is_channel_healthy
 
@@ -92,6 +92,8 @@ async def resolve_candidates(
 
     channels = await Channel.filter(is_enabled=True)
     candidates = [ch for ch in channels if model in (ch.models or [])]
+    if preferred_providers is not None:
+        candidates = [ch for ch in candidates if ch.provider in preferred_providers]
 
     # 过滤掉被熔断的渠道
     healthy_candidates = []
@@ -115,13 +117,7 @@ async def resolve_candidates(
             },
         )
 
-    # 按协议匹配分成两组，各组内按 priority 分层 + weight 加权随机
-    if preferred_providers:
-        matched = [ch for ch in healthy_candidates if ch.provider in preferred_providers]
-        unmatched = [ch for ch in healthy_candidates if ch.provider not in preferred_providers]
-        groups = [matched, unmatched]
-    else:
-        groups = [healthy_candidates]
+    groups = [healthy_candidates]
 
     result: list[tuple[Channel, type[BaseProvider]]] = []
     for group in groups:

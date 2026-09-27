@@ -2,29 +2,29 @@
   <div>
     <div class="page-header">
       <div>
-        <h3>API Keys</h3>
-        <p>Manage gateway keys, quotas, and model access</p>
+        <h3>{{ t('nav.keys') }}</h3>
+        <p>{{ t('keys.subtitle') }}</p>
       </div>
-      <el-button v-if="auth.hasPermission('key:write')" type="primary" @click="openCreate">Create Key</el-button>
+      <el-button v-if="auth.hasPermission('key:write')" type="primary" @click="openCreate">{{ t('keys.create') }}</el-button>
     </div>
 
     <el-card shadow="never">
       <el-table :data="keys" v-loading="loading" stripe>
-        <el-table-column prop="id" label="ID" width="60" />
-        <el-table-column prop="name" label="Name" min-width="100" show-overflow-tooltip />
-        <el-table-column label="Key" min-width="300">
+        <el-table-column prop="id" :label="t('common.id')" width="60" />
+        <el-table-column prop="name" :label="t('common.name')" min-width="100" show-overflow-tooltip />
+        <el-table-column :label="t('nav.keys')" min-width="300">
           <template #default="{ row }">
             <div class="key-cell">
               <code class="key-text">{{ row.key_prefix }}••••••••••••••••••••</code>
             </div>
           </template>
         </el-table-column>
-        <el-table-column label="Quota (USD)" min-width="220">
+        <el-table-column :label="t('keys.quota')" min-width="220">
           <template #default="{ row }">
             <template v-if="row.quota_total === -1">
               <div style="font-size: 13px">
-                <span>Used: <b>${{ row.quota_used.toFixed(4) }}</b></span>
-                <span style="margin-left: 8px; color: #94a3b8">/ Unlimited</span>
+                <span>{{ t('keys.used') }}: <b>${{ row.quota_used.toFixed(4) }}</b></span>
+                <span style="margin-left: 8px; color: #94a3b8">/ {{ t('common.unlimited') }}</span>
               </div>
             </template>
             <template v-else>
@@ -35,50 +35,59 @@
               />
               <div style="font-size: 12px; color: #64748b; margin-top: 2px">
                 ${{ row.quota_used.toFixed(4) }} / ${{ row.quota_total.toFixed(2) }}
-                <span style="margin-left: 6px; color: #10b981">Remain: ${{ row.quota_remaining.toFixed(4) }}</span>
+                <span style="margin-left: 6px; color: #10b981">{{ t('keys.remain') }}: ${{ row.quota_remaining.toFixed(4) }}</span>
               </div>
             </template>
           </template>
         </el-table-column>
-        <el-table-column label="Reset" width="64" align="center">
+        <el-table-column :label="t('keys.reset')" width="64" align="center">
           <template #default="{ row }">
             <el-tag v-if="row.quota_reset_day" size="small" type="info">D{{ row.quota_reset_day }}</el-tag>
             <span v-else style="color: #c0c4cc">-</span>
           </template>
         </el-table-column>
-        <el-table-column label="Group" min-width="100">
+        <el-table-column :label="t('keys.group')" min-width="100">
           <template #default="{ row }">
             <el-tag v-if="row.model_group_name" size="small" type="success">{{ row.model_group_name }}</el-tag>
-            <el-tag v-else size="small" type="info">Default</el-tag>
+            <el-tag v-else size="small" type="info">{{ t('keys.defaultGroup') }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="concurrent_limit" label="Concur." width="72" align="center" />
-        <el-table-column label="RPM" width="72" align="center">
+        <el-table-column prop="concurrent_limit" :label="t('keys.concurrency')" width="72" align="center" />
+        <el-table-column :label="t('keys.rpm')" width="72" align="center">
           <template #default="{ row }">
             <span v-if="row.rpm_limit === -1" style="color: #c0c4cc">-</span>
             <span v-else>{{ row.rpm_limit }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="Enabled" width="76" align="center">
+        <el-table-column :label="t('keys.audit')" width="76" align="center">
+          <template #default="{ row }">
+            <el-switch
+              :model-value="row.audit_policy !== 'off'"
+              :disabled="!auth.hasPermission('key:write')"
+              @change="(value: boolean) => changePolicy(row, value)"
+            />
+          </template>
+        </el-table-column>
+        <el-table-column :label="t('common.enabled')" width="76" align="center">
           <template #default="{ row }">
             <el-switch v-model="row.is_enabled" :disabled="!auth.hasPermission('key:write')" @change="toggleEnabled(row)" />
           </template>
         </el-table-column>
-        <el-table-column v-if="auth.hasPermission('key:write')" label="Actions" width="250" fixed="right">
+        <el-table-column v-if="auth.hasPermission('key:write')" :label="t('common.actions')" width="250" fixed="right">
           <template #default="{ row }">
-            <el-button text type="info" size="small" @click="showDetail(row)">View</el-button>
-            <el-button text type="primary" size="small" @click="openEdit(row)">Edit</el-button>
-            <el-button text size="small" @click="resetQuota(row.id)">Reset</el-button>
-            <el-popconfirm title="Delete this key?" @confirm="handleDelete(row.id)">
+            <el-button text type="info" size="small" @click="showDetail(row)">{{ t('common.view') }}</el-button>
+            <el-button text type="primary" size="small" @click="openEdit(row)">{{ t('common.edit') }}</el-button>
+            <el-button text size="small" @click="resetQuota(row.id)">{{ t('keys.reset') }}</el-button>
+            <el-popconfirm :title="t('keys.deleteConfirm')" @confirm="handleDelete(row.id)">
               <template #reference>
-                <el-button text type="danger" size="small">Delete</el-button>
+                <el-button text type="danger" size="small">{{ t('common.delete') }}</el-button>
               </template>
             </el-popconfirm>
           </template>
         </el-table-column>
-        <el-table-column v-else label="Actions" width="80" fixed="right">
+        <el-table-column v-else :label="t('common.actions')" width="80" fixed="right">
           <template #default="{ row }">
-            <el-button text type="info" size="small" @click="showDetail(row)">View</el-button>
+            <el-button text type="info" size="small" @click="showDetail(row)">{{ t('common.view') }}</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -95,135 +104,143 @@
     </el-card>
 
     <!-- Create / Edit Dialog -->
-    <el-dialog v-model="dialogVisible" :title="editingId ? 'Edit Key' : 'Create Key'" width="520px">
+    <el-dialog v-model="dialogVisible" :title="editingId ? t('keys.edit') : t('keys.create')" width="520px">
       <el-form :model="form" label-width="140px">
-        <el-form-item label="Name">
+        <el-form-item :label="t('common.name')">
           <el-input v-model="form.name" />
         </el-form-item>
-        <el-form-item label="Quota (USD)">
+        <el-form-item :label="t('keys.quota')">
           <el-input-number v-model="form.quota_total" :min="-1" :precision="2" :step="1" style="width: 100%" />
-          <div style="font-size: 12px; color: #909399">-1 = unlimited</div>
+          <div style="font-size: 12px; color: #909399">{{ t('keys.unlimitedHint') }}</div>
         </el-form-item>
-        <el-form-item label="Reset Day">
-          <el-select v-model="form.quota_reset_day" clearable placeholder="No auto-reset" style="width: 100%">
-            <el-option label="No auto-reset" :value="null" />
-            <el-option v-for="d in 31" :key="d" :label="`Day ${d}`" :value="d" />
+        <el-form-item :label="t('keys.resetDay')">
+          <el-select v-model="form.quota_reset_day" clearable :placeholder="t('keys.noReset')" style="width: 100%">
+            <el-option :label="t('keys.noReset')" :value="null" />
+            <el-option v-for="d in 31" :key="d" :label="t('keys.day', { day: d })" :value="d" />
           </el-select>
-          <div style="font-size: 12px; color: #909399">Monthly reset day. Used quota resets to 0 on this day.</div>
+          <div style="font-size: 12px; color: #909399">{{ t('keys.resetHint') }}</div>
         </el-form-item>
-        <el-form-item label="Concurrency">
+        <el-form-item :label="t('keys.concurrencyLabel')">
           <el-input-number v-model="form.concurrent_limit" :min="1" :max="100" />
         </el-form-item>
-        <el-form-item label="RPM Limit">
+        <el-form-item :label="t('keys.rpmLabel')">
           <el-input-number v-model="form.rpm_limit" :min="-1" :step="10" style="width: 100%" />
-          <div style="font-size: 12px; color: #909399">Requests per minute. -1 = unlimited</div>
+          <div style="font-size: 12px; color: #909399">{{ t('keys.rpmHint') }}</div>
         </el-form-item>
-        <el-form-item label="Allowed Models">
-          <el-select v-model="form.allowed_models" multiple filterable allow-create style="width: 100%" placeholder="Empty = all models" :disabled="!!form.model_group_id">
+        <el-form-item :label="t('keys.allowedModels')">
+          <el-select v-model="form.allowed_models" multiple filterable allow-create style="width: 100%" :placeholder="t('keys.allowedModelsPlaceholder')" :disabled="!!form.model_group_id">
             <el-option v-for="m in availableModels" :key="m" :label="m" :value="m" />
           </el-select>
         </el-form-item>
-        <el-form-item label="Model Group">
-          <el-select v-model="form.model_group_id" clearable placeholder="No group (use Allowed Models above)" style="width: 100%" @change="onModelGroupChange">
+        <el-form-item :label="t('keys.modelGroup')">
+          <el-select v-model="form.model_group_id" clearable :placeholder="t('keys.noGroup')" style="width: 100%" @change="onModelGroupChange">
             <el-option v-for="g in modelGroups" :key="g.id" :label="g.name" :value="g.id">
               <span>{{ g.name }}</span>
-              <span style="float: right; color: #94a3b8; font-size: 12px">{{ g.models.length }} models</span>
+              <span style="float: right; color: #94a3b8; font-size: 12px">{{ t('keys.modelCount', { count: g.models.length }) }}</span>
             </el-option>
           </el-select>
-          <div style="font-size: 12px; color: #909399">Selecting a model group overrides Allowed Models above.</div>
+          <div style="font-size: 12px; color: #909399">{{ t('keys.groupHint') }}</div>
         </el-form-item>
-        <el-form-item label="Allowed IPs">
-          <el-select v-model="form.allowed_ips" multiple filterable allow-create style="width: 100%" placeholder="Empty = all IPs allowed">
+        <el-form-item :label="t('keys.auditLabel')">
+          <el-switch
+            :model-value="form.audit_policy !== 'off'"
+            @change="(value: boolean) => { form.audit_policy = value ? 'on' : 'off' }"
+          />
+          <div style="font-size: 12px; color: #909399">{{ t('keys.auditHint') }}</div>
+        </el-form-item>
+        <el-form-item :label="t('keys.allowedIps')">
+          <el-select v-model="form.allowed_ips" multiple filterable allow-create style="width: 100%" :placeholder="t('keys.ipPlaceholder')">
           </el-select>
-          <div style="font-size: 12px; color: #909399">IP addresses or CIDR ranges (e.g. 192.168.1.100, 10.0.0.0/24). Empty = no restriction.</div>
+          <div style="font-size: 12px; color: #909399">{{ t('keys.ipHint') }}</div>
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="dialogVisible = false">Cancel</el-button>
-        <el-button type="primary" :loading="saving" @click="handleSave">Save</el-button>
+        <el-button @click="dialogVisible = false">{{ t('common.cancel') }}</el-button>
+        <el-button type="primary" :loading="saving" @click="handleSave">{{ t('common.save') }}</el-button>
       </template>
     </el-dialog>
 
     <!-- Show Key Dialog -->
-    <el-dialog v-model="showKeyDialog" title="API Key Created" width="500px" :close-on-click-modal="false">
-      <el-alert type="warning" :closable="false" style="margin-bottom: 16px">
-        This key will only be shown once. Please copy it now.
-      </el-alert>
+    <el-dialog v-model="showKeyDialog" :title="t('keys.createdTitle')" width="500px" :close-on-click-modal="false">
+      <el-alert type="warning" :closable="false" style="margin-bottom: 16px" :title="t('keys.createdHint')" />
       <el-input :model-value="newKey" readonly>
         <template #append>
-          <el-button @click="copyKey">Copy</el-button>
+          <el-button @click="copyKey">{{ t('keys.copy') }}</el-button>
         </template>
       </el-input>
     </el-dialog>
 
     <!-- Detail Drawer -->
-    <el-drawer v-model="detailVisible" title="Key Detail" size="520px">
+    <el-drawer v-model="detailVisible" :title="t('keys.detail')" size="520px">
       <template v-if="detailRow">
         <el-descriptions :column="1" border>
-          <el-descriptions-item label="ID">{{ detailRow.id }}</el-descriptions-item>
-          <el-descriptions-item label="Name">{{ detailRow.name }}</el-descriptions-item>
-          <el-descriptions-item label="Key Prefix">
+          <el-descriptions-item :label="t('common.id')">{{ detailRow.id }}</el-descriptions-item>
+          <el-descriptions-item :label="t('common.name')">{{ detailRow.name }}</el-descriptions-item>
+          <el-descriptions-item :label="t('keys.prefix')">
             <code>{{ detailRow.key_prefix }}...</code>
           </el-descriptions-item>
-          <el-descriptions-item label="Enabled">
-            <el-tag :type="detailRow.is_enabled ? 'success' : 'info'" size="small" round>{{ detailRow.is_enabled ? 'Yes' : 'No' }}</el-tag>
+          <el-descriptions-item :label="t('common.enabled')">
+            <el-tag :type="detailRow.is_enabled ? 'success' : 'info'" size="small" round>{{ detailRow.is_enabled ? t('common.yes') : t('common.no') }}</el-tag>
           </el-descriptions-item>
-          <el-descriptions-item label="Expires">
-            {{ detailRow.expires_at ? formatTime(detailRow.expires_at) : 'Never' }}
+          <el-descriptions-item :label="t('keys.auditLabel')">
+            {{ detailRow.audit_policy === 'off' ? t('keys.auditOff') : t('keys.auditOn') }}
           </el-descriptions-item>
-          <el-descriptions-item label="Created">{{ formatTime(detailRow.created_at) }}</el-descriptions-item>
+          <el-descriptions-item :label="t('keys.expires')">
+            {{ detailRow.expires_at ? formatTime(detailRow.expires_at) : t('common.never') }}
+          </el-descriptions-item>
+          <el-descriptions-item :label="t('common.created')">{{ formatTime(detailRow.created_at) }}</el-descriptions-item>
         </el-descriptions>
 
-        <div class="detail-section-title">Quota</div>
+        <div class="detail-section-title">{{ t('keys.quotaSection') }}</div>
         <div class="detail-grid">
           <div class="detail-card">
-            <div class="detail-card-label">Total</div>
-            <div class="detail-card-value">{{ detailRow.quota_total === -1 ? 'Unlimited' : '$' + detailRow.quota_total.toFixed(2) }}</div>
+            <div class="detail-card-label">{{ t('channels.total') }}</div>
+            <div class="detail-card-value">{{ detailRow.quota_total === -1 ? t('common.unlimited') : '$' + detailRow.quota_total.toFixed(2) }}</div>
           </div>
           <div class="detail-card">
-            <div class="detail-card-label">Used</div>
+            <div class="detail-card-label">{{ t('keys.used') }}</div>
             <div class="detail-card-value" style="color: #6366f1">${{ detailRow.quota_used.toFixed(4) }}</div>
           </div>
           <div class="detail-card">
-            <div class="detail-card-label">Remaining</div>
-            <div class="detail-card-value" style="color: #10b981">{{ detailRow.quota_remaining === -1 ? 'Unlimited' : '$' + detailRow.quota_remaining.toFixed(4) }}</div>
+            <div class="detail-card-label">{{ t('keys.remain') }}</div>
+            <div class="detail-card-value" style="color: #10b981">{{ detailRow.quota_remaining === -1 ? t('common.unlimited') : '$' + detailRow.quota_remaining.toFixed(4) }}</div>
           </div>
           <div class="detail-card">
-            <div class="detail-card-label">Reset Day</div>
-            <div class="detail-card-value">{{ detailRow.quota_reset_day ? 'Day ' + detailRow.quota_reset_day : '-' }}</div>
+            <div class="detail-card-label">{{ t('keys.resetDay') }}</div>
+            <div class="detail-card-value">{{ detailRow.quota_reset_day ? t('keys.day', { day: detailRow.quota_reset_day }) : '-' }}</div>
           </div>
         </div>
 
-        <div class="detail-section-title">Limits</div>
+        <div class="detail-section-title">{{ t('keys.limits') }}</div>
         <div class="detail-grid">
           <div class="detail-card">
-            <div class="detail-card-label">Concurrency</div>
+            <div class="detail-card-label">{{ t('keys.concurrencyLabel') }}</div>
             <div class="detail-card-value">{{ detailRow.concurrent_limit }}</div>
           </div>
           <div class="detail-card">
-            <div class="detail-card-label">RPM</div>
-            <div class="detail-card-value">{{ detailRow.rpm_limit === -1 ? 'Unlimited' : detailRow.rpm_limit }}</div>
+            <div class="detail-card-label">{{ t('keys.rpm') }}</div>
+            <div class="detail-card-value">{{ detailRow.rpm_limit === -1 ? t('common.unlimited') : detailRow.rpm_limit }}</div>
           </div>
         </div>
 
-        <div class="detail-section-title">Model Group</div>
+        <div class="detail-section-title">{{ t('keys.modelGroup') }}</div>
         <div style="margin-bottom: 16px">
           <el-tag v-if="detailRow.model_group_name" size="small" type="success">{{ detailRow.model_group_name }}</el-tag>
-          <span v-else style="color: #94a3b8; font-size: 13px">No group (using Allowed Models)</span>
+          <span v-else style="color: #94a3b8; font-size: 13px">{{ t('keys.noGroupDetail') }}</span>
         </div>
 
-        <div class="detail-section-title">Allowed Models</div>
-        <div v-if="detailRow.model_group_name" style="color: #94a3b8; font-size: 13px; margin-bottom: 16px">Overridden by Model Group</div>
+        <div class="detail-section-title">{{ t('keys.allowedModels') }}</div>
+        <div v-if="detailRow.model_group_name" style="color: #94a3b8; font-size: 13px; margin-bottom: 16px">{{ t('keys.overridden') }}</div>
         <div v-else-if="detailRow.allowed_models.length > 0" style="display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 16px">
           <el-tag v-for="m in detailRow.allowed_models" :key="m" size="small">{{ m }}</el-tag>
         </div>
-        <div v-else style="color: #94a3b8; font-size: 13px; margin-bottom: 16px">All models allowed</div>
+        <div v-else style="color: #94a3b8; font-size: 13px; margin-bottom: 16px">{{ t('keys.allModels') }}</div>
 
-        <div class="detail-section-title">Allowed IPs</div>
+        <div class="detail-section-title">{{ t('keys.allowedIps') }}</div>
         <div v-if="detailRow.allowed_ips && detailRow.allowed_ips.length > 0" style="display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 16px">
           <el-tag v-for="ip in detailRow.allowed_ips" :key="ip" size="small" type="info">{{ ip }}</el-tag>
         </div>
-        <div v-else style="color: #94a3b8; font-size: 13px; margin-bottom: 16px">No IP restriction</div>
+        <div v-else style="color: #94a3b8; font-size: 13px; margin-bottom: 16px">{{ t('keys.noIp') }}</div>
       </template>
     </el-drawer>
   </div>
@@ -235,6 +252,9 @@ import { keysApi } from '@/api/keys'
 import { modelGroupsApi } from '@/api/model_groups'
 import { modelsApi } from '@/api/models'
 import { useAuthStore } from '@/stores/auth'
+import { useI18n } from '@/i18n'
+
+const { t } = useI18n()
 import { ElMessage } from 'element-plus'
 import dayjs from 'dayjs'
 
@@ -266,9 +286,9 @@ function showDetail(row: any) {
 async function copyText(text: string) {
   try {
     await navigator.clipboard.writeText(text)
-    ElMessage.success('Copied')
+    ElMessage.success(t('common.copied'))
   } catch {
-    ElMessage.error('Copy failed')
+    ElMessage.error(t('common.copyFailed'))
   }
 }
 
@@ -278,6 +298,7 @@ const emptyForm = () => ({
   allowed_ips: [] as string[],
   model_group_id: null as number | null,
   quota_reset_day: null as number | null,
+  audit_policy: 'on',
 })
 const form = ref(emptyForm())
 
@@ -294,7 +315,7 @@ async function load() {
     keys.value = res.items
     total.value = res.total
   } catch {
-    ElMessage.error('Failed to load keys')
+    ElMessage.error(t('keys.loadFailed'))
   } finally {
     loading.value = false
   }
@@ -317,6 +338,7 @@ function openEdit(row: any) {
     allowed_ips: [...(row.allowed_ips || [])],
     model_group_id: row.model_group_id ?? null,
     quota_reset_day: row.quota_reset_day ?? null,
+    audit_policy: row.audit_policy === 'off' ? 'off' : 'on',
   }
   dialogVisible.value = true
 }
@@ -326,7 +348,7 @@ async function handleSave() {
   try {
     if (editingId.value) {
       await keysApi.update(editingId.value, form.value)
-      ElMessage.success('Updated')
+      ElMessage.success(t('common.updated'))
     } else {
       const res = await keysApi.create(form.value)
       newKey.value = res.key
@@ -335,7 +357,7 @@ async function handleSave() {
     dialogVisible.value = false
     await load()
   } catch {
-    ElMessage.error('Save failed')
+    ElMessage.error(t('common.saveFailed'))
   } finally {
     saving.value = false
   }
@@ -344,10 +366,10 @@ async function handleSave() {
 async function handleDelete(id: number) {
   try {
     await keysApi.remove(id)
-    ElMessage.success('Deleted')
+    ElMessage.success(t('common.deleted'))
     await load()
   } catch {
-    ElMessage.error('Delete failed')
+    ElMessage.error(t('common.deleteFailed'))
   }
 }
 
@@ -356,26 +378,37 @@ async function toggleEnabled(row: any) {
     await keysApi.update(row.id, { is_enabled: row.is_enabled })
   } catch {
     row.is_enabled = !row.is_enabled
-    ElMessage.error('Update failed')
+    ElMessage.error(t('common.updateFailed'))
+  }
+}
+
+async function changePolicy(row: any, enabled: boolean) {
+  const previous = row.audit_policy
+  row.audit_policy = enabled ? 'on' : 'off'
+  try {
+    await keysApi.update(row.id, { audit_policy: row.audit_policy })
+  } catch {
+    row.audit_policy = previous
+    ElMessage.error(t('common.updateFailed'))
   }
 }
 
 async function resetQuota(id: number) {
   try {
     await keysApi.resetQuota(id)
-    ElMessage.success('Quota reset')
+    ElMessage.success(t('keys.quotaReset'))
     await load()
   } catch {
-    ElMessage.error('Reset failed')
+    ElMessage.error(t('keys.resetFailed'))
   }
 }
 
 async function copyKey() {
   try {
     await navigator.clipboard.writeText(newKey.value)
-    ElMessage.success('Copied')
+    ElMessage.success(t('common.copied'))
   } catch {
-    ElMessage.error('Copy failed, please copy manually')
+    ElMessage.error(t('keys.copyManual'))
   }
 }
 

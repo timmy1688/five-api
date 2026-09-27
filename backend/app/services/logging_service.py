@@ -3,8 +3,9 @@ import logging
 from datetime import datetime, timedelta
 from decimal import Decimal
 
-from app.config import settings
-from app.models import RequestLog
+from tortoise.transactions import in_transaction
+
+from app.models import RequestLog, RequestLogAudit
 from app.services.metrics import record_request_metrics
 
 logger = logging.getLogger(__name__)
@@ -24,35 +25,54 @@ async def save_request_log(
     completion_tokens: int,
     cost: Decimal = Decimal(0),
     cached_tokens: int = 0,
+    cache_write_tokens: int = 0,
     is_stream: bool = False,
     status_code: int = 0,
     latency_ms: int = 0,
     error_message: str = "",
+    error_origin: str = "",
+    upstream_status_code: int = 0,
+    upstream_error: str = "",
     ip_address: str = "",
     failed_over: bool = False,
+    audit_request: str = "",
+    security_hit: str = "",
 ) -> None:
-    await RequestLog.create(
-        request_id=request_id,
-        api_key_id=api_key_id,
-        api_key_name=api_key_name,
-        channel_id=channel_id,
-        channel_name=channel_name,
-        model_requested=model_requested,
-        model_actual=model_actual,
-        provider=provider,
-        endpoint=endpoint,
-        prompt_tokens=prompt_tokens,
-        completion_tokens=completion_tokens,
-        total_tokens=prompt_tokens + completion_tokens,
-        cached_tokens=cached_tokens,
-        cost=cost,
-        is_stream=is_stream,
-        status_code=status_code,
-        latency_ms=latency_ms,
-        error_message=error_message,
-        ip_address=ip_address,
-        failed_over=failed_over,
-    )
+    has_audit = bool(audit_request)
+    async with in_transaction():
+        log = await RequestLog.create(
+            request_id=request_id,
+            api_key_id=api_key_id,
+            api_key_name=api_key_name,
+            channel_id=channel_id,
+            channel_name=channel_name,
+            model_requested=model_requested,
+            model_actual=model_actual,
+            provider=provider,
+            endpoint=endpoint,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=prompt_tokens + completion_tokens,
+            cached_tokens=cached_tokens,
+            cache_write_tokens=cache_write_tokens,
+            cost=cost,
+            is_stream=is_stream,
+            status_code=status_code,
+            latency_ms=latency_ms,
+            error_message=error_message,
+            error_origin=error_origin,
+            upstream_status_code=upstream_status_code,
+            upstream_error=upstream_error,
+            ip_address=ip_address,
+            failed_over=failed_over,
+            has_audit=has_audit,
+            security_hit=security_hit[:128],
+        )
+        if has_audit:
+            await RequestLogAudit.create(
+                request_log=log,
+                audit_request=audit_request,
+            )
 
     record_request_metrics(
         model=model_actual or model_requested,
@@ -70,7 +90,12 @@ async def save_request_log(
 
 async def cleanup_old_logs(days: int | None = None) -> int:
     """删除超过保留天数的日志，分批删除避免锁表。返回删除总数。"""
-    retention = days if days is not None else settings.LOG_RETENTION_DAYS
+    if days is None:
+        from app.services.settings_service import gateway_config
+
+        retention = (await gateway_config())["log_retention_days"]
+    else:
+        retention = days
     if retention <= 0:
         return 0
     cutoff = datetime.utcnow() - timedelta(days=retention)
@@ -80,6 +105,7 @@ async def cleanup_old_logs(days: int | None = None) -> int:
         ids = await RequestLog.filter(created_at__lt=cutoff).limit(batch_size).values_list("id", flat=True)
         if not ids:
             break
+        await RequestLogAudit.filter(request_log_id__in=ids).delete()
         deleted = await RequestLog.filter(id__in=ids).delete()
         total_deleted += deleted
     if total_deleted > 0:

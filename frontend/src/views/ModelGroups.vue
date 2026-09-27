@@ -2,33 +2,33 @@
   <div>
     <div class="page-header">
       <div>
-        <h3>Model Groups</h3>
-        <p>Group models and assign them to API keys</p>
+        <h3>{{ t('nav.groups') }}</h3>
+        <p>{{ t('groups.subtitle') }}</p>
       </div>
-      <el-button v-if="auth.hasPermission('model_group:write')" type="primary" @click="openCreate">Create Group</el-button>
+      <el-button v-if="auth.hasPermission('model_group:write')" type="primary" @click="openCreate">{{ t('groups.create') }}</el-button>
     </div>
 
     <el-card shadow="never">
       <el-table :data="items" v-loading="loading" stripe>
-        <el-table-column prop="id" label="ID" width="60" />
-        <el-table-column prop="name" label="Name" min-width="150" show-overflow-tooltip />
-        <el-table-column label="Models" min-width="300">
+        <el-table-column prop="id" :label="t('common.id')" width="60" />
+        <el-table-column prop="name" :label="t('common.name')" min-width="150" show-overflow-tooltip />
+        <el-table-column :label="t('nav.models')" min-width="300">
           <template #default="{ row }">
             <div style="display: flex; flex-wrap: wrap; gap: 4px">
               <el-tag v-for="m in row.models" :key="m" size="small">{{ m }}</el-tag>
-              <span v-if="!row.models || row.models.length === 0" style="color: #94a3b8; font-size: 13px">No models (all allowed)</span>
+              <span v-if="!row.models || row.models.length === 0" style="color: #94a3b8; font-size: 13px">{{ t('groups.empty') }}</span>
             </div>
           </template>
         </el-table-column>
-        <el-table-column label="Created" width="170">
+        <el-table-column :label="t('common.created')" width="170">
           <template #default="{ row }">{{ formatTime(row.created_at) }}</template>
         </el-table-column>
-        <el-table-column v-if="auth.hasPermission('model_group:write')" label="Actions" width="140" fixed="right">
+        <el-table-column v-if="auth.hasPermission('model_group:write')" :label="t('common.actions')" width="140" fixed="right">
           <template #default="{ row }">
-            <el-button text type="primary" size="small" @click="openEdit(row)">Edit</el-button>
-            <el-popconfirm title="Delete this group? Keys referencing it will lose group restriction." @confirm="handleDelete(row.id)">
+            <el-button text type="primary" size="small" @click="openEdit(row)">{{ t('common.edit') }}</el-button>
+            <el-popconfirm :title="t('groups.deleteConfirm')" @confirm="handleDelete(row.id)">
               <template #reference>
-                <el-button text type="danger" size="small">Delete</el-button>
+                <el-button text type="danger" size="small">{{ t('common.delete') }}</el-button>
               </template>
             </el-popconfirm>
           </template>
@@ -46,21 +46,21 @@
       />
     </el-card>
 
-    <el-dialog v-model="dialogVisible" :title="editingId ? 'Edit Group' : 'Create Group'" width="520px">
+    <el-dialog v-model="dialogVisible" :title="editingId ? t('groups.edit') : t('groups.create')" width="520px">
       <el-form :model="form" label-width="100px">
-        <el-form-item label="Name">
-          <el-input v-model="form.name" placeholder="e.g. Basic, Premium" />
+        <el-form-item :label="t('common.name')">
+          <el-input v-model="form.name" :placeholder="t('groups.namePlaceholder')" />
         </el-form-item>
-        <el-form-item label="Models">
-          <el-select v-model="form.models" multiple filterable allow-create style="width: 100%" placeholder="Select or type model names">
+        <el-form-item :label="t('nav.models')">
+          <el-select v-model="form.models" multiple filterable allow-create style="width: 100%" :placeholder="t('groups.modelsPlaceholder')">
             <el-option v-for="m in availableModels" :key="m" :label="m" :value="m" />
           </el-select>
-          <div style="font-size: 12px; color: #909399">Select models from channels or type custom names. Empty = all models allowed.</div>
+          <div style="font-size: 12px; color: #909399">{{ t('groups.empty') }}</div>
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="dialogVisible = false">Cancel</el-button>
-        <el-button type="primary" :loading="saving" @click="handleSave">Save</el-button>
+        <el-button @click="dialogVisible = false">{{ t('common.cancel') }}</el-button>
+        <el-button type="primary" :loading="saving" @click="handleSave">{{ t('common.save') }}</el-button>
       </template>
     </el-dialog>
   </div>
@@ -71,6 +71,9 @@ import { ref, onMounted } from 'vue'
 import { modelGroupsApi } from '@/api/model_groups'
 import { modelsApi } from '@/api/models'
 import { useAuthStore } from '@/stores/auth'
+import { useI18n } from '@/i18n'
+
+const { t } = useI18n()
 import { ElMessage } from 'element-plus'
 import dayjs from 'dayjs'
 
@@ -106,7 +109,7 @@ async function load() {
     items.value = res.items
     total.value = res.total
   } catch {
-    ElMessage.error('Failed to load model groups')
+    ElMessage.error(t('groups.loadFailed'))
   } finally {
     loading.value = false
   }
@@ -133,10 +136,10 @@ async function handleSave() {
       await modelGroupsApi.create(form.value)
     }
     dialogVisible.value = false
-    ElMessage.success('Saved')
+    ElMessage.success(t('common.saved'))
     await load()
   } catch {
-    ElMessage.error('Save failed')
+    ElMessage.error(t('common.saveFailed'))
   } finally {
     saving.value = false
   }
@@ -145,10 +148,11 @@ async function handleSave() {
 async function handleDelete(id: number) {
   try {
     await modelGroupsApi.remove(id)
-    ElMessage.success('Deleted')
+    ElMessage.success(t('common.deleted'))
     await load()
-  } catch {
-    ElMessage.error('Delete failed')
+  } catch (error: any) {
+    const detail = error?.response?.data?.detail
+    ElMessage.error(typeof detail === 'string' ? detail : t('common.deleteFailed'))
   }
 }
 

@@ -5,19 +5,27 @@ from unittest.mock import patch
 
 import pytest
 
-from app.models import APIKey, Channel, ModelPrice
+from app.models import APIKey, Channel, ModelPrice, RequestLog
 from app.providers.openai_provider import OpenAIProvider
 from app.services.auth import hash_api_key
 from app.services.concurrency import ConcurrencyExceeded, ConcurrencyLimiter
 from app.services.failover import is_retryable_error, upstream_status
-from app.services.pricing import calculate_cost
+from app.routers.anthropic_proxy import (
+    _extract_anthropic_usage,
+    _passthrough_stream_with_usage,
+)
+from app.services.channel_health import is_channel_healthy, record_failure
+from app.services.logging_service import cleanup_old_logs
+from app.services.pricing import calculate_cost, catalog_prices
+from app.services.settings_service import set_gateway_config
+from app.services.sticky_session import make_session_key
 from app.services.proxy import extract_openai_usage
 from app.services.quota import check_quota, deduct_quota, reset_expired_quotas
 from app.utils.secrets import decrypt_secret, encrypt_secret, mask_secret
 from app.utils.upstream_url import upstream_url
 import httpx
 
-pytestmark = pytest.mark.asyncio
+pytestmark = [pytest.mark.asyncio, pytest.mark.regression]
 
 
 async def test_secret_round_trip_and_mask():
@@ -134,6 +142,19 @@ async def test_calculate_cost_zero_tokens():
     assert cost == Decimal("0.000000")
 
 
+async def test_extract_openai_cache_write_tokens():
+    usage = extract_openai_usage({
+        "usage": {
+            "prompt_tokens": 1000,
+            "completion_tokens": 10,
+            "prompt_tokens_details": {"cached_tokens": 200},
+            "cache_write_tokens": 300,
+        }
+    })
+    assert usage["cached_tokens"] == 200
+    assert usage["cache_write_tokens"] == 300
+
+
 async def test_extract_deepseek_cache_usage():
     usage = extract_openai_usage({
         "usage": {
@@ -147,6 +168,160 @@ async def test_extract_deepseek_cache_usage():
         "prompt_tokens": 120,
         "completion_tokens": 10,
         "cached_tokens": 80,
+        "cache_write_tokens": 0,
+    }
+
+
+async def test_cache_writes_are_billed_as_input():
+    await ModelPrice.create(
+        model="cache-split-model",
+        prompt_price=Decimal("10"),
+        completion_price=Decimal("50"),
+        cached_price=Decimal("1"),
+        cache_write_price=Decimal("12.5"),
+    )
+    cost = await calculate_cost(
+        "cache-split-model", 1000, 0, None,
+        cached_tokens=200, cache_write_tokens=300,
+    )
+    # Writes stay in the 800 input tokens. The stored write price is ignored.
+    expected = (800 * Decimal("10") + 200 * Decimal("1")) / Decimal("1000000")
+    assert cost == expected.quantize(Decimal("0.000001"))
+
+
+async def test_missing_channel_write_price_uses_prompt_price():
+    await ModelPrice.create(
+        model="channel-write-fallback",
+        prompt_price=Decimal("1"),
+        completion_price=Decimal("1"),
+        cached_price=Decimal("1"),
+        cache_write_price=Decimal("99"),
+    )
+    ch = await Channel.create(
+        name="write-fallback",
+        provider="anthropic",
+        base_url="https://example.test",
+        api_key="sk-x",
+        models=["channel-write-fallback"],
+        model_pricing={
+            "channel-write-fallback": {"prompt": 10, "completion": 20, "cached": 1},
+        },
+    )
+    cost = await calculate_cost(
+        "channel-write-fallback", 1000, 0, ch, cache_write_tokens=400,
+    )
+    # The 400 write tokens stay inside the 1000 input tokens at $10, not the global $99.
+    expected = (1000 * Decimal("10")) / Decimal("1000000")
+    assert cost == expected.quantize(Decimal("0.000001"))
+
+
+async def test_channel_write_price_does_not_change_the_bill():
+    await ModelPrice.create(
+        model="free-write-model",
+        prompt_price=Decimal("10"),
+        completion_price=Decimal("20"),
+        cache_write_price=Decimal("12.5"),
+    )
+    ch = await Channel.create(
+        name="free-write",
+        provider="anthropic",
+        base_url="https://example.test",
+        api_key="sk-x",
+        models=["free-write-model"],
+        model_pricing={
+            "free-write-model": {
+                "prompt": 10, "completion": 20, "cached": 1, "cache_write": 0,
+            },
+        },
+    )
+    cost = await calculate_cost(
+        "free-write-model", 1000, 0, ch, cache_write_tokens=400,
+    )
+    expected = (1000 * Decimal("10")) / Decimal("1000000")
+    assert cost == expected.quantize(Decimal("0.000001"))
+
+
+async def test_cache_tokens_above_prompt_do_not_make_negative_cost():
+    await ModelPrice.create(
+        model="clamp-model",
+        prompt_price=Decimal("10"),
+        completion_price=Decimal("0"),
+        cached_price=Decimal("1"),
+        cache_write_price=Decimal("12.5"),
+    )
+    cost = await calculate_cost(
+        "clamp-model", 100, 0, None, cached_tokens=80, cache_write_tokens=50,
+    )
+    expected = (20 * Decimal("10") + 80 * Decimal("1")) / Decimal("1000000")
+    assert cost == expected.quantize(Decimal("0.000001"))
+
+
+async def test_inactive_price_is_not_billed():
+    await ModelPrice.create(
+        model="inactive-price",
+        prompt_price=Decimal("10"),
+        completion_price=Decimal("20"),
+        is_active=False,
+    )
+    assert await calculate_cost("inactive-price", 1000, 500, None) == Decimal("0.000000")
+
+
+async def test_catalog_write_price_matches_input_price():
+    for model in ("claude-sonnet-4-6", "deepseek-v4-flash", "gpt-4o", "gpt-5.6"):
+        prices = catalog_prices(model)
+        assert prices["cache_write"] == prices["prompt"]
+
+
+async def test_anthropic_usage_is_billed_on_openai_token_basis():
+    await ModelPrice.create(
+        model="claude-bill",
+        prompt_price=Decimal("10"),
+        completion_price=Decimal("50"),
+        cached_price=Decimal("1"),
+        cache_write_price=Decimal("12.5"),
+    )
+    usage = _extract_anthropic_usage({
+        "usage": {
+            "input_tokens": 500,
+            "cache_read_input_tokens": 200,
+            "cache_creation_input_tokens": 300,
+            "output_tokens": 40,
+        }
+    })
+    assert usage == {
+        "prompt_tokens": 1000,
+        "completion_tokens": 40,
+        "cached_tokens": 200,
+        "cache_write_tokens": 300,
+    }
+    cost = await calculate_cost("claude-bill", usage["prompt_tokens"], usage["completion_tokens"], None,
+                                 cached_tokens=usage["cached_tokens"],
+                                 cache_write_tokens=usage["cache_write_tokens"])
+    expected = (
+        800 * Decimal("10") + 200 * Decimal("1") + 40 * Decimal("50")
+    ) / Decimal("1000000")
+    assert cost == expected.quantize(Decimal("0.000001"))
+
+
+async def test_anthropic_stream_usage_keeps_cache_read_and_write():
+    class _Stream:
+        async def stream_anthropic_passthrough(self, _body, _headers):
+            for line in (
+                'event: message_start\n',
+                'data: {"message":{"usage":{"input_tokens":500,"cache_read_input_tokens":200,"cache_creation_input_tokens":300}}}\n\n',
+                'event: message_delta\n',
+                'data: {"usage":{"output_tokens":40}}\n\n',
+            ):
+                yield line
+
+    last = {}
+    async for _line, usage in _passthrough_stream_with_usage(_Stream(), {}, None):
+        last = usage
+    assert last == {
+        "prompt_tokens": 1000,
+        "completion_tokens": 40,
+        "cached_tokens": 200,
+        "cache_write_tokens": 300,
     }
 
 
@@ -306,6 +481,37 @@ async def test_reset_expired_quotas_no_reset_day():
     await reset_expired_quotas()
     await k.refresh_from_db()
     assert k.quota_used == Decimal("50")
+
+
+async def test_saved_retention_deletes_only_older_logs():
+    await set_gateway_config({
+        "log_retention_days": 2,
+        "channel_health_threshold": 3,
+        "channel_health_check_interval": 60,
+        "sticky_session_enabled": True,
+        "sticky_session_ttl": 900,
+    })
+    old = await RequestLog.create(request_id="old-log", api_key_id=1, model_requested="m")
+    recent = await RequestLog.create(request_id="recent-log", api_key_id=1, model_requested="m")
+    await RequestLog.filter(id=old.id).update(
+        created_at=datetime.utcnow() - timedelta(days=5)
+    )
+    assert await cleanup_old_logs() == 1
+    assert await RequestLog.filter(id=old.id).exists() is False
+    assert await RequestLog.filter(id=recent.id).exists() is True
+
+
+async def test_gateway_settings_change_sticky_sessions_and_health():
+    await set_gateway_config({
+        "log_retention_days": 90,
+        "channel_health_threshold": 1,
+        "channel_health_check_interval": 60,
+        "sticky_session_enabled": False,
+        "sticky_session_ttl": 900,
+    })
+    assert await make_session_key(1, {"x-session-id": "chat-1"}, {}) is None
+    await record_failure(7)
+    assert await is_channel_healthy(7) is False
 
 
 async def test_reset_day_31_uses_last_day_of_short_month():

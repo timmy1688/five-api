@@ -15,6 +15,8 @@ class APIKey(Model):
     allowed_ips = fields.JSONField(default=list)
     model_group_id = fields.IntField(null=True, default=None)
     is_enabled = fields.BooleanField(default=True)
+    audit_enabled = fields.BooleanField(default=False)
+    audit_policy = fields.CharField(max_length=16, default="on")
     quota_reset_day = fields.SmallIntField(null=True)
     quota_last_reset_at = fields.DatetimeField(null=True)
     expires_at = fields.DatetimeField(null=True)

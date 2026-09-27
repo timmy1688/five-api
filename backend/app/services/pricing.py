@@ -24,13 +24,36 @@ def find_channel_pricing(
     return pricing_map.get(alias) if alias else None
 
 
+def catalog_prices(model: str) -> dict[str, float]:
+    """Input, output, and cache-read prices.
+
+    Cache writes stay inside the input price. cache_write is returned equal
+    to the input price so older rows stay aligned, and billing does not read it.
+    """
+    raw = DEFAULT_MODEL_PRICES[model]
+    prompt = float(raw["prompt"])
+    return {
+        "prompt": prompt,
+        "completion": float(raw["completion"]),
+        "cached": float(raw.get("cached", 0)),
+        "cache_write": prompt,
+    }
+
+
 async def calculate_cost(
     model: str,
     prompt_tokens: int,
     completion_tokens: int,
     channel: Channel | None = None,
     cached_tokens: int = 0,
+    cache_write_tokens: int = 0,
 ) -> Decimal:
+    """Bill input, cache reads, and output.
+
+    Write tokens are ordinary input: they are already inside prompt_tokens,
+    and only cache reads are subtracted. cache_write_tokens is ignored.
+    """
+    del cache_write_tokens
     prompt_price = Decimal(0)
     completion_price = Decimal(0)
     cached_price = Decimal(0)
@@ -53,9 +76,9 @@ async def calculate_cost(
             completion_price = Decimal(str(mp.completion_price))
             cached_price = Decimal(str(mp.cached_price))
 
-    non_cached = max(prompt_tokens - cached_tokens, 0)
+    fresh_input = max(prompt_tokens - cached_tokens, 0)
     cost = (
-        Decimal(non_cached) * prompt_price
+        Decimal(fresh_input) * prompt_price
         + Decimal(cached_tokens) * cached_price
         + Decimal(completion_tokens) * completion_price
     ) / MILLION

@@ -8,6 +8,7 @@ class ModelPrice(Model):
     prompt_price = fields.DecimalField(max_digits=16, decimal_places=6, default=0)
     completion_price = fields.DecimalField(max_digits=16, decimal_places=6, default=0)
     cached_price = fields.DecimalField(max_digits=16, decimal_places=6, default=0)
+    cache_write_price = fields.DecimalField(max_digits=16, decimal_places=6, default=0)
     currency = fields.CharField(max_length=8, default="USD")
     is_active = fields.BooleanField(default=True)
     created_at = fields.DatetimeField(auto_now_add=True)

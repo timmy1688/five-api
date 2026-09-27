@@ -2,23 +2,23 @@
   <div>
     <div class="page-header">
       <div>
-        <h3>Channels</h3>
-        <p>Connect official APIs, proxy services, and self-hosted models</p>
+        <h3>{{ t('nav.channels') }}</h3>
+        <p>{{ t('channels.subtitle') }}</p>
       </div>
-      <el-button v-if="auth.hasPermission('channel:write')" type="primary" @click="openCreate">Add Channel</el-button>
+      <el-button v-if="auth.hasPermission('channel:write')" type="primary" @click="openCreate">{{ t('channels.add') }}</el-button>
     </div>
 
     <div class="channel-summary">
-      <div class="summary-item"><span>Total</span><strong>{{ total }}</strong></div>
-      <div class="summary-item"><span>Enabled</span><strong>{{ enabledCount }}</strong></div>
-      <div class="summary-item"><span>Healthy</span><strong class="success-text">{{ healthyCount }}</strong></div>
-      <div class="summary-item"><span>Models</span><strong>{{ modelCount }}</strong></div>
+      <div class="summary-item"><span>{{ t('channels.total') }}</span><strong>{{ total }}</strong></div>
+      <div class="summary-item"><span>{{ t('common.enabled') }}</span><strong>{{ enabledCount }}</strong></div>
+      <div class="summary-item"><span>{{ t('channels.healthy') }}</span><strong class="success-text">{{ healthyCount }}</strong></div>
+      <div class="summary-item"><span>{{ t('nav.models') }}</span><strong>{{ modelCount }}</strong></div>
     </div>
 
     <el-card shadow="never">
       <el-table :data="channels" v-loading="loading" stripe>
-        <el-table-column prop="id" label="ID" width="60" />
-        <el-table-column prop="name" label="Name" min-width="170" show-overflow-tooltip>
+        <el-table-column prop="id" :label="t('common.id')" width="60" />
+        <el-table-column prop="name" :label="t('common.name')" min-width="170" show-overflow-tooltip>
           <template #default="{ row }">
             <div class="channel-name">
               <strong>{{ row.name }}</strong>
@@ -26,43 +26,43 @@
             </div>
           </template>
         </el-table-column>
-        <el-table-column prop="provider" label="Protocol" width="155">
+        <el-table-column prop="provider" :label="t('channels.protocol')" width="155">
           <template #default="{ row }">
             <el-tag size="small" round>{{ providerLabel(row.provider) }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="Health" width="110">
+        <el-table-column :label="t('channels.health')" width="110">
           <template #default="{ row }">
             <div class="health-cell" :class="{ unknown: !healthMap[row.id], unhealthy: healthMap[row.id] && !healthMap[row.id].healthy }">
               <span class="health-dot" />
-              <span>{{ !healthMap[row.id] ? 'Unknown' : healthMap[row.id].healthy ? 'Healthy' : 'Unhealthy' }}</span>
+              <span>{{ !healthMap[row.id] ? t('channels.unknown') : healthMap[row.id].healthy ? t('channels.healthy') : t('channels.unhealthy') }}</span>
             </div>
           </template>
         </el-table-column>
-        <el-table-column label="Models" min-width="200">
+        <el-table-column :label="t('nav.models')" min-width="200">
           <template #default="{ row }">
             <div class="model-tags">
               <el-tag v-for="m in row.models.slice(0, 3)" :key="m" size="small">{{ m }}</el-tag>
               <el-tag v-if="row.models.length > 3" size="small" type="info">+{{ row.models.length - 3 }}</el-tag>
-              <span v-if="!row.models.length" class="muted-text">Not configured</span>
+              <span v-if="!row.models.length" class="muted-text">{{ t('channels.notConfigured') }}</span>
             </div>
           </template>
         </el-table-column>
-        <el-table-column prop="priority" label="Priority" width="80" align="center" />
-        <el-table-column prop="weight" label="Weight" width="72" align="center" />
-        <el-table-column label="Enabled" width="76" align="center">
+        <el-table-column prop="priority" :label="t('channels.priority')" width="80" align="center" />
+        <el-table-column prop="weight" :label="t('channels.weight')" width="72" align="center" />
+        <el-table-column :label="t('common.enabled')" width="76" align="center">
           <template #default="{ row }">
             <el-switch v-model="row.is_enabled" :disabled="!auth.hasPermission('channel:write')" @change="toggleEnabled(row)" />
           </template>
         </el-table-column>
-        <el-table-column v-if="auth.hasPermission('channel:write')" label="Actions" width="220" fixed="right">
+        <el-table-column v-if="auth.hasPermission('channel:write')" :label="t('common.actions')" width="220" fixed="right">
           <template #default="{ row }">
-            <el-button text type="primary" size="small" @click="openEdit(row)">Edit</el-button>
-            <el-button text type="success" size="small" :loading="testingId === row.id" @click="testChannel(row)">Test</el-button>
-            <el-button v-if="healthMap[row.id] && !healthMap[row.id].healthy" text type="warning" size="small" @click="recoverChannel(row)">Recover</el-button>
-            <el-popconfirm title="Delete this channel?" @confirm="handleDelete(row.id)">
+            <el-button text type="primary" size="small" @click="openEdit(row)">{{ t('common.edit') }}</el-button>
+            <el-button text type="success" size="small" :loading="testingId === row.id" @click="testChannel(row)">{{ t('channels.test') }}</el-button>
+            <el-button v-if="healthMap[row.id] && !healthMap[row.id].healthy" text type="warning" size="small" @click="recoverChannel(row)">{{ t('channels.recover') }}</el-button>
+            <el-popconfirm :title="t('channels.deleteConfirm')" @confirm="handleDelete(row.id)">
               <template #reference>
-                <el-button text type="danger" size="small">Delete</el-button>
+                <el-button text type="danger" size="small">{{ t('common.delete') }}</el-button>
               </template>
             </el-popconfirm>
           </template>
@@ -80,64 +80,63 @@
       />
     </el-card>
 
-    <el-dialog v-model="dialogVisible" :title="editingId ? 'Edit channel' : 'Add channel'" width="760px" top="4vh">
+    <el-dialog v-model="dialogVisible" :title="editingId ? t('channels.edit') : t('channels.add')" width="760px" top="4vh">
       <el-form ref="formRef" :model="form" :rules="rules" label-position="top" class="channel-form">
         <el-alert
           v-if="form.provider === 'openai'"
           class="provider-alert"
-          title="OpenAI-compatible mode"
-          description="Supports OpenAI, DeepSeek, vLLM, Ollama, and compatible gateways. For vLLM, use a URL such as http://127.0.0.1:8000/v1; API Key can be empty."
+          :title="t('channels.modeTitle')"
+          :description="t('channels.modeDesc')"
           type="info"
           :closable="false"
           show-icon
         />
 
         <div class="form-grid">
-        <el-form-item label="Name" prop="name">
-          <el-input v-model="form.name" placeholder="e.g. OpenAI Official" />
-          <div class="form-hint">A short name shown in routing logs</div>
+        <el-form-item :label="t('common.name')" prop="name">
+          <el-input v-model="form.name" :placeholder="t('channels.namePlaceholder')" />
+          <div class="form-hint">{{ t('channels.nameHint') }}</div>
         </el-form-item>
 
-        <el-form-item label="Provider">
+        <el-form-item :label="t('channels.provider')">
           <el-select v-model="form.provider" style="width: 100%">
-            <el-option label="OpenAI Compatible" value="openai">
-              <span>OpenAI Compatible</span>
-              <span class="option-hint">OpenAI / vLLM / proxy</span>
+            <el-option :label="t('channels.openai')" value="openai">
+              <span>{{ t('channels.openai') }}</span>
+              <span class="option-hint">{{ t('channels.openaiHint') }}</span>
             </el-option>
-            <el-option label="Anthropic" value="anthropic">
-              <span>Anthropic</span>
-              <span class="option-hint">Native /v1/messages</span>
+            <el-option :label="t('channels.anthropic')" value="anthropic">
+              <span>{{ t('channels.anthropic') }}</span>
+              <span class="option-hint">{{ t('channels.anthropicHint') }}</span>
             </el-option>
           </el-select>
-          <div class="form-hint">The wire protocol implemented by the upstream</div>
+          <div class="form-hint">{{ t('channels.providerHint') }}</div>
         </el-form-item>
 
-        <el-form-item label="Base URL" prop="base_url">
+        <el-form-item :label="t('channels.baseUrl')" prop="base_url">
           <el-input v-model="form.base_url" :placeholder="baseUrlPlaceholder" />
-          <div class="form-hint">Server root and URLs ending in /v1 are both supported</div>
+          <div class="form-hint">{{ t('channels.baseUrlHint') }}</div>
         </el-form-item>
 
-        <el-form-item label="API Key">
-          <el-input v-model="form.api_key" type="password" show-password :placeholder="editingId ? 'Leave empty to keep the current key' : 'Optional for self-hosted services'" />
-          <div class="form-hint">Optional for local vLLM; encrypted at rest when provided</div>
+        <el-form-item :label="t('channels.apiKey')">
+          <el-input v-model="form.api_key" type="password" show-password :placeholder="editingId ? t('channels.apiKeyKeep') : t('channels.apiKeyOptional')" />
+          <div class="form-hint">{{ t('channels.apiKeyHint') }}</div>
         </el-form-item>
         </div>
 
-        <el-divider content-position="left">Models</el-divider>
+        <el-divider content-position="left">{{ t('nav.models') }}</el-divider>
 
-        <el-form-item label="Models">
+        <el-form-item :label="t('nav.models')">
           <div style="display: flex; gap: 8px; width: 100%">
-            <el-select v-model="form.models" multiple filterable allow-create style="flex: 1" placeholder="Enter a model name and press Enter">
+            <el-select v-model="form.models" multiple filterable allow-create style="flex: 1" :placeholder="t('channels.modelsPlaceholder')">
             </el-select>
-            <el-button @click="fetchModels" :loading="fetchingModels" :disabled="!form.base_url">Fetch</el-button>
+            <el-button @click="fetchModels" :loading="fetchingModels" :disabled="!form.base_url">{{ t('channels.fetch') }}</el-button>
           </div>
-          <div class="form-hint">Fetch from /models, or type a model name and press Enter</div>
+          <div class="form-hint">{{ t('channels.modelsHint') }}</div>
         </el-form-item>
 
-        <el-form-item label="Model Mapping">
+        <el-form-item :label="t('channels.mapping')">
           <div class="form-hint" style="margin-bottom: 8px">
-            Map a public model alias to the model name expected upstream.<br/>
-            Example: client requests <code>my-model</code>, upstream receives <code>local-model</code>.
+            {{ t('channels.mappingHint') }}
           </div>
           <div v-for="(val, key, idx) in form.model_mapping" :key="idx" style="display: flex; gap: 8px; margin-bottom: 4px">
             <el-input :model-value="key" disabled style="width: 45%" />
@@ -146,41 +145,40 @@
             <el-button text type="danger" @click="removeMapping(key as string)">X</el-button>
           </div>
           <div style="display: flex; gap: 8px; align-items: center">
-            <el-input v-model="newMappingKey" placeholder="Public model" style="width: 45%" />
+            <el-input v-model="newMappingKey" :placeholder="t('channels.publicModel')" style="width: 45%" />
             <span class="mapping-arrow">&rarr;</span>
-            <el-input v-model="newMappingVal" placeholder="Upstream model" style="width: 45%" />
+            <el-input v-model="newMappingVal" :placeholder="t('channels.upstreamModel')" style="width: 45%" />
             <el-button text type="primary" @click="addMapping">+</el-button>
           </div>
         </el-form-item>
 
-        <el-divider content-position="left">Routing and billing</el-divider>
+        <el-divider content-position="left">{{ t('channels.routing') }}</el-divider>
 
         <div class="routing-grid">
-        <el-form-item label="Priority">
+        <el-form-item :label="t('channels.priority')">
           <el-input-number v-model="form.priority" :min="0" />
-          <div class="form-hint">Higher values are selected first</div>
+          <div class="form-hint">{{ t('channels.priorityHint') }}</div>
         </el-form-item>
 
-        <el-form-item label="Weight">
+        <el-form-item :label="t('channels.weight')">
           <el-input-number v-model="form.weight" :min="1" />
-          <div class="form-hint">Traffic share within the same priority</div>
+          <div class="form-hint">{{ t('channels.weightHint') }}</div>
         </el-form-item>
 
-        <el-form-item label="Timeout (s)">
+        <el-form-item :label="t('channels.timeout')">
           <el-input-number v-model="form.timeout" :min="10" :max="600" />
-          <div class="form-hint">Upstream request timeout</div>
+          <div class="form-hint">{{ t('channels.timeoutHint') }}</div>
         </el-form-item>
 
-        <el-form-item label="Retries">
+        <el-form-item :label="t('channels.retries')">
           <el-input-number v-model="form.max_retries" :min="0" :max="5" />
-          <div class="form-hint">Retries before switching channels</div>
+          <div class="form-hint">{{ t('channels.retriesHint') }}</div>
         </el-form-item>
         </div>
 
-        <el-form-item label="Custom Pricing">
+        <el-form-item :label="t('channels.pricing')">
           <div class="form-hint" style="margin-bottom: 8px">
-            Optional channel price per 1M tokens; overrides global pricing.<br/>
-            P = input, C = output, Ca = cached input.
+            {{ t('channels.pricingHint') }}
           </div>
           <div v-for="(val, key) in form.model_pricing" :key="key" style="display: flex; gap: 6px; margin-bottom: 4px; align-items: center">
             <el-input :model-value="key" disabled style="width: 24%" />
@@ -188,25 +186,25 @@
             <el-input-number :model-value="val.prompt" disabled :controls="false" style="width: 20%" />
             <span class="pricing-label">C:</span>
             <el-input-number :model-value="val.completion" disabled :controls="false" style="width: 20%" />
-            <span class="pricing-label">Ca:</span>
-            <el-input-number :model-value="val.cached" disabled :controls="false" style="width: 20%" />
+            <span class="pricing-label">R:</span>
+            <el-input-number :model-value="val.cached" disabled :controls="false" style="width: 16%" />
             <el-button text type="danger" @click="removePricing(key as string)">X</el-button>
           </div>
           <div style="display: flex; gap: 6px; align-items: center">
-            <el-input v-model="newPricingModel" placeholder="Model" style="width: 24%" />
+            <el-input v-model="newPricingModel" :placeholder="t('common.model')" style="width: 24%" />
             <span class="pricing-label">P:</span>
             <el-input-number v-model="newPricingPrompt" :min="0" :precision="4" :controls="false" placeholder="2.5" style="width: 20%" />
             <span class="pricing-label">C:</span>
             <el-input-number v-model="newPricingCompletion" :min="0" :precision="4" :controls="false" placeholder="10.0" style="width: 20%" />
-            <span class="pricing-label">Ca:</span>
-            <el-input-number v-model="newPricingCached" :min="0" :precision="4" :controls="false" placeholder="0.3" style="width: 20%" />
+            <span class="pricing-label">R:</span>
+            <el-input-number v-model="newPricingCached" :min="0" :precision="4" :controls="false" placeholder="0.3" style="width: 16%" />
             <el-button text type="primary" @click="addPricing">+</el-button>
           </div>
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="dialogVisible = false">Cancel</el-button>
-        <el-button type="primary" :loading="saving" @click="handleSave">Save</el-button>
+        <el-button @click="dialogVisible = false">{{ t('common.cancel') }}</el-button>
+        <el-button type="primary" :loading="saving" @click="handleSave">{{ t('common.save') }}</el-button>
       </template>
     </el-dialog>
   </div>
@@ -216,6 +214,9 @@
 import { ref, computed, onMounted } from 'vue'
 import { channelsApi } from '@/api/channels'
 import { useAuthStore } from '@/stores/auth'
+import { useI18n } from '@/i18n'
+
+const { t } = useI18n()
 import { ElMessage } from 'element-plus'
 import type { FormInstance } from 'element-plus'
 
@@ -255,16 +256,16 @@ const form = ref(emptyForm())
 const enabledCount = computed(() => channels.value.filter(channel => channel.is_enabled).length)
 const healthyCount = computed(() => channels.value.filter(channel => healthMap.value[channel.id]?.healthy).length)
 const modelCount = computed(() => new Set(channels.value.flatMap(channel => channel.models)).size)
-const rules = {
-  name: [{ required: true, message: 'Enter a channel name', trigger: 'blur' }],
+const rules = computed(() => ({
+  name: [{ required: true, message: t('channels.nameRequired'), trigger: 'blur' }],
   base_url: [
-    { required: true, message: 'Enter the upstream Base URL', trigger: 'blur' },
-    { pattern: /^https?:\/\/.+/i, message: 'Use a full http:// or https:// URL', trigger: 'blur' },
+    { required: true, message: t('channels.urlRequired'), trigger: 'blur' },
+    { pattern: /^https?:\/\/.+/i, message: t('channels.urlInvalid'), trigger: 'blur' },
   ],
-}
+}))
 
 function providerLabel(provider: string) {
-  return provider === 'openai' ? 'OpenAI Compatible' : 'Anthropic'
+  return provider === 'openai' ? t('channels.openai') : t('channels.anthropic')
 }
 
 function compactUrl(value: string) {
@@ -298,7 +299,7 @@ async function load() {
     total.value = res.total
     await loadHealth()
   } catch (error) {
-    ElMessage.error(apiError(error, 'Failed to load channels'))
+    ElMessage.error(apiError(error, t('channels.loadFailed')))
   } finally {
     loading.value = false
   }
@@ -313,10 +314,10 @@ async function loadHealth() {
 async function recoverChannel(row: any) {
   try {
     await channelsApi.recover(row.id)
-    ElMessage.success('Channel recovered')
+    ElMessage.success(t('channels.recovered'))
     await loadHealth()
   } catch (error) {
-    ElMessage.error(apiError(error, 'Recover failed'))
+    ElMessage.error(apiError(error, t('channels.recoverFailed')))
   }
 }
 
@@ -341,9 +342,9 @@ async function fetchModels() {
         added++
       }
     }
-    ElMessage.success(`Fetched ${res.models.length} models, ${added} new added`)
+    ElMessage.success(t('channels.fetched', { count: res.models.length, added }))
   } catch (error) {
-    ElMessage.error(apiError(error, 'Failed to fetch models'))
+    ElMessage.error(apiError(error, t('channels.fetchFailed')))
   } finally {
     fetchingModels.value = false
   }
@@ -383,7 +384,11 @@ function removeMapping(key: string) {
 
 function addPricing() {
   if (newPricingModel.value) {
-    form.value.model_pricing[newPricingModel.value] = { prompt: newPricingPrompt.value, completion: newPricingCompletion.value, cached: newPricingCached.value }
+    form.value.model_pricing[newPricingModel.value] = {
+      prompt: newPricingPrompt.value,
+      completion: newPricingCompletion.value,
+      cached: newPricingCached.value,
+    }
     newPricingModel.value = ''
     newPricingPrompt.value = 0
     newPricingCompletion.value = 0
@@ -407,10 +412,10 @@ async function handleSave() {
       await channelsApi.create(form.value)
     }
     dialogVisible.value = false
-    ElMessage.success('Saved')
+    ElMessage.success(t('common.saved'))
     await load()
   } catch (error) {
-    ElMessage.error(apiError(error, 'Save failed'))
+    ElMessage.error(apiError(error, t('common.saveFailed')))
   } finally {
     saving.value = false
   }
@@ -419,10 +424,10 @@ async function handleSave() {
 async function handleDelete(id: number) {
   try {
     await channelsApi.remove(id)
-    ElMessage.success('Deleted')
+    ElMessage.success(t('common.deleted'))
     await load()
   } catch (error) {
-    ElMessage.error(apiError(error, 'Delete failed'))
+    ElMessage.error(apiError(error, t('common.deleteFailed')))
   }
 }
 
@@ -431,7 +436,7 @@ async function toggleEnabled(row: any) {
     await channelsApi.update(row.id, { is_enabled: row.is_enabled })
   } catch (error) {
     row.is_enabled = !row.is_enabled
-    ElMessage.error(apiError(error, 'Update failed'))
+    ElMessage.error(apiError(error, t('common.updateFailed')))
   }
 }
 
@@ -439,10 +444,10 @@ async function testChannel(row: any) {
   testingId.value = row.id
   try {
     const res = await channelsApi.test(row.id)
-    if (res.success) ElMessage.success(`Test passed (${res.status_code})`)
-    else ElMessage.error(`Test failed: ${res.error || res.status_code}`)
+    if (res.success) ElMessage.success(t('channels.testPassed', { code: res.status_code }))
+    else ElMessage.error(t('channels.testFailed', { error: res.error || res.status_code }))
   } catch (error) {
-    ElMessage.error(apiError(error, 'Test request failed'))
+    ElMessage.error(apiError(error, t('channels.testRequestFailed')))
   } finally {
     testingId.value = null
   }

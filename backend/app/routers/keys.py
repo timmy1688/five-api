@@ -36,6 +36,7 @@ async def _to_response(k: APIKey, group_name_map: dict[int, str] | None = None) 
         model_group_id=k.model_group_id,
         model_group_name=model_group_name,
         is_enabled=k.is_enabled,
+        audit_policy=k.audit_policy if k.audit_policy in {"on", "off"} else "on",
         quota_reset_day=k.quota_reset_day,
         quota_last_reset_at=k.quota_last_reset_at,
         expires_at=k.expires_at,
@@ -80,6 +81,7 @@ async def create_key(body: APIKeyCreate, _: User = require_permission("key:write
         allowed_models=body.allowed_models,
         allowed_ips=body.allowed_ips,
         model_group_id=body.model_group_id,
+        audit_policy=body.audit_policy,
         quota_reset_day=body.quota_reset_day,
         quota_last_reset_at=(
             datetime.now(timezone.utc) if body.quota_reset_day is not None else None

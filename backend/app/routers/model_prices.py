@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from app.models import User, Channel, ModelPrice
 from app.schemas.model_price import ModelPriceCreate, ModelPriceResponse, ModelPriceUpdate
 from app.services.auth import require_permission
-from app.services.pricing import DEFAULT_MODEL_PRICES, MODEL_PRICE_CATALOG_VERSION
+from app.services.pricing import DEFAULT_MODEL_PRICES, MODEL_PRICE_CATALOG_VERSION, catalog_prices
 
 router = APIRouter(prefix="/api/model-prices", tags=["model-prices"])
 
@@ -17,6 +17,7 @@ def _to_response(mp: ModelPrice) -> ModelPriceResponse:
         prompt_price=float(mp.prompt_price),
         completion_price=float(mp.completion_price),
         cached_price=float(mp.cached_price),
+        cache_write_price=float(mp.cache_write_price),
         currency=mp.currency,
         is_active=mp.is_active,
         created_at=mp.created_at,
@@ -38,8 +39,8 @@ async def list_model_prices(
 @router.get("/defaults")
 async def get_defaults(_: User = require_permission("model_price:read")):
     return [
-        {"model": model, **prices}
-        for model, prices in sorted(DEFAULT_MODEL_PRICES.items())
+        {"model": model, **catalog_prices(model)}
+        for model in sorted(DEFAULT_MODEL_PRICES)
     ]
 
 
@@ -71,14 +72,16 @@ async def sync_defaults(
     _: User = require_permission("model_price:write"),
 ):
     created = updated = unchanged = 0
-    for model, prices in DEFAULT_MODEL_PRICES.items():
+    for model in DEFAULT_MODEL_PRICES:
+        prices = catalog_prices(model)
         existing = await ModelPrice.get_or_none(model=model)
         if not existing:
             await ModelPrice.create(
                 model=model,
                 prompt_price=prices["prompt"],
                 completion_price=prices["completion"],
-                cached_price=prices.get("cached", 0),
+                cached_price=prices["cached"],
+                cache_write_price=prices["cache_write"],
             )
             created += 1
             continue
@@ -86,18 +89,21 @@ async def sync_defaults(
         values = (
             Decimal(str(prices["prompt"])),
             Decimal(str(prices["completion"])),
-            Decimal(str(prices.get("cached", 0))),
+            Decimal(str(prices["cached"])),
+            Decimal(str(prices["cache_write"])),
         )
         current = (
             existing.prompt_price,
             existing.completion_price,
             existing.cached_price,
+            existing.cache_write_price,
         )
         if overwrite and current != values:
             await ModelPrice.filter(id=existing.id).update(
                 prompt_price=values[0],
                 completion_price=values[1],
                 cached_price=values[2],
+                cache_write_price=values[3],
             )
             updated += 1
         else:

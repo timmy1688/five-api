@@ -7,6 +7,8 @@ from fastapi.responses import StreamingResponse
 from app.models import APIKey, ModelPrice
 from app.providers.registry import list_available_models, resolve_candidates
 from app.schemas.openai import ChatCompletionRequest, CompletionRequest, EmbeddingRequest
+from app.services.audit import open_audit, security_exempt
+from app.services.content_filter import collect_request_hits, format_hits
 from app.services.auth import verify_api_key
 from app.services.concurrency import ConcurrencyExceeded, concurrency_limiter
 from app.services.pre_checks import get_effective_allowed_models, openai_error, run_pre_checks
@@ -33,12 +35,13 @@ async def _proxy_endpoint(request: Request, body, endpoint: str, api_key: APIKey
     request_id = getattr(request.state, "request_id", "")
     ip = get_client_ip(request)
     start_time = time.monotonic()
+    body_dict = body.model_dump()
+    audit = await open_audit(api_key, body_dict)
+    security_hits = await collect_request_hits(body_dict, exempt=security_exempt(api_key))
 
     try:
         await run_pre_checks(api_key, body.model)
-
-        body_dict = body.model_dump()
-        session_key = make_session_key(api_key.id, request.headers, body_dict)
+        session_key = await make_session_key(api_key.id, request.headers, body_dict)
         sticky_channel_id = await get_sticky_channel(session_key)
 
         candidates = await resolve_candidates(
@@ -58,7 +61,8 @@ async def _proxy_endpoint(request: Request, body, endpoint: str, api_key: APIKey
     except HTTPException as exc:
         await log_rejected_request(
             api_key, request_id, endpoint, body.model, exc.status_code,
-            start_time, ip, str(exc.detail),
+            start_time, ip, str(exc.detail), audit=audit,
+            security_hit=format_hits(security_hits),
         )
         raise
 
@@ -69,7 +73,8 @@ async def _proxy_endpoint(request: Request, body, endpoint: str, api_key: APIKey
     except ConcurrencyExceeded:
         await log_rejected_request(
             api_key, request_id, endpoint, body.model, 429,
-            start_time, ip, "Too many concurrent requests",
+            start_time, ip, "Too many concurrent requests", audit=audit,
+            security_hit=format_hits(security_hits),
         )
         openai_error(429, "rate_limit_error", "concurrent_limit", "Too many concurrent requests")
 
@@ -90,6 +95,8 @@ async def _proxy_endpoint(request: Request, body, endpoint: str, api_key: APIKey
                 request_id, start_time, ip, _openai_error_event,
                 concurrency_lease_id,
                 session_key=session_key,
+                audit=audit,
+                security_hits=security_hits,
             ),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
@@ -104,6 +111,8 @@ async def _proxy_endpoint(request: Request, body, endpoint: str, api_key: APIKey
         request_id, start_time, ip, openai_error,
         concurrency_lease_id,
         session_key=session_key,
+        audit=audit,
+        security_hits=security_hits,
     )
 
 
@@ -159,7 +168,11 @@ async def get_key_info(api_key: APIKey = Depends(verify_api_key)):
 
     all_prices = await ModelPrice.filter(is_active=True)
     price_map = {
-        mp.model: {"prompt": float(mp.prompt_price), "completion": float(mp.completion_price), "cached": float(mp.cached_price)}
+        mp.model: {
+            "prompt": float(mp.prompt_price),
+            "completion": float(mp.completion_price),
+            "cached": float(mp.cached_price),
+        }
         for mp in all_prices
     }
     model_prices = {mid: price_map[mid] for mid in model_ids if mid in price_map}

@@ -2,12 +2,12 @@
   <div>
     <div class="page-header">
       <div>
-        <h3>Model Pricing</h3>
-        <p>Configure per-model token pricing for cost tracking</p>
+        <h3>{{ t('nav.pricing') }}</h3>
+        <p>{{ t('prices.subtitle') }}</p>
       </div>
       <div v-if="auth.hasPermission('model_price:write')" style="display: flex; gap: 8px">
-        <el-button @click="syncDefaults" :loading="syncing">Sync Prices</el-button>
-        <el-button type="primary" @click="openCreate">Add Price</el-button>
+        <el-button @click="syncDefaults" :loading="syncing">{{ t('prices.sync') }}</el-button>
+        <el-button type="primary" @click="openCreate">{{ t('prices.add') }}</el-button>
       </div>
     </div>
 
@@ -15,8 +15,8 @@
       <template #header>
         <div style="display: flex; align-items: center; gap: 8px; padding: 0 4px">
           <el-icon color="#f59e0b" :size="18"><WarningFilled /></el-icon>
-          <span style="font-weight: 600; font-size: 14px">Unpriced Models ({{ unpricedModels.length }})</span>
-          <span style="font-size: 12px; color: #94a3b8">These channel models have no price and will be billed at $0.</span>
+          <span style="font-weight: 600; font-size: 14px">{{ t('prices.unpriced', { count: unpricedModels.length }) }}</span>
+          <span style="font-size: 12px; color: #94a3b8">{{ t('prices.unpricedHint') }}</span>
         </div>
       </template>
       <div class="unpriced-list" style="padding: 4px 20px 16px">
@@ -27,39 +27,39 @@
               <span v-for="ch in item.channels" :key="ch" class="channel-tag">{{ ch }}</span>
             </span>
           </div>
-          <el-button v-if="auth.hasPermission('model_price:write')" text type="primary" size="small" @click="quickAdd(item.model)">Add Price</el-button>
+          <el-button v-if="auth.hasPermission('model_price:write')" text type="primary" size="small" @click="quickAdd(item.model)">{{ t('prices.add') }}</el-button>
         </div>
       </div>
     </el-card>
 
     <el-card shadow="never">
       <el-table :data="items" v-loading="loading" stripe>
-        <el-table-column prop="id" label="ID" width="60" />
-        <el-table-column prop="model" label="Model" min-width="180" show-overflow-tooltip />
-        <el-table-column label="Input ($/1M)" width="120" align="right">
+        <el-table-column prop="id" :label="t('common.id')" width="60" />
+        <el-table-column prop="model" :label="t('common.model')" min-width="180" show-overflow-tooltip />
+        <el-table-column :label="t('models.input')" width="120" align="right">
           <template #default="{ row }"><span style="font-weight: 500">{{ row.prompt_price }}</span></template>
         </el-table-column>
-        <el-table-column label="Output ($/1M)" width="120" align="right">
+        <el-table-column :label="t('models.output')" width="120" align="right">
           <template #default="{ row }"><span style="font-weight: 500">{{ row.completion_price }}</span></template>
         </el-table-column>
-        <el-table-column label="Cached ($/1M)" width="120" align="right">
+        <el-table-column :label="t('models.cached')" width="140" align="right">
           <template #default="{ row }">
             <span :style="{ fontWeight: 500, color: row.cached_price > 0 ? '#f59e0b' : '#cbd5e1' }">
               {{ row.cached_price }}
             </span>
           </template>
         </el-table-column>
-        <el-table-column label="Active" width="76" align="center">
+        <el-table-column :label="t('prices.active')" width="76" align="center">
           <template #default="{ row }">
             <el-switch v-model="row.is_active" :disabled="!auth.hasPermission('model_price:write')" @change="toggleActive(row)" />
           </template>
         </el-table-column>
-        <el-table-column v-if="auth.hasPermission('model_price:write')" label="Actions" width="140" fixed="right">
+        <el-table-column v-if="auth.hasPermission('model_price:write')" :label="t('common.actions')" width="140" fixed="right">
           <template #default="{ row }">
-            <el-button text type="primary" size="small" @click="openEdit(row)">Edit</el-button>
-            <el-popconfirm title="Delete this price?" @confirm="handleDelete(row.id)">
+            <el-button text type="primary" size="small" @click="openEdit(row)">{{ t('common.edit') }}</el-button>
+            <el-popconfirm :title="t('prices.deleteConfirm')" @confirm="handleDelete(row.id)">
               <template #reference>
-                <el-button text type="danger" size="small">Delete</el-button>
+                <el-button text type="danger" size="small">{{ t('common.delete') }}</el-button>
               </template>
             </el-popconfirm>
           </template>
@@ -77,27 +77,27 @@
       />
     </el-card>
 
-    <el-dialog v-model="dialogVisible" :title="editingId ? 'Edit Price' : 'Add Price'" width="500px">
+    <el-dialog v-model="dialogVisible" :title="editingId ? t('prices.edit') : t('prices.add')" width="500px">
       <el-form :model="form" label-width="170px">
-        <el-form-item label="Model">
+        <el-form-item :label="t('common.model')">
           <el-input v-model="form.model" placeholder="gpt-4o" :disabled="!!editingId" />
         </el-form-item>
-        <el-form-item label="Input ($/1M tokens)">
+        <el-form-item :label="t('prices.input')">
           <el-input-number v-model="form.prompt_price" :min="0" :precision="4" :step="0.1" style="width: 100%" />
-          <div class="form-hint">Input token price in USD per million tokens</div>
+          <div class="form-hint">{{ t('prices.inputHint') }}</div>
         </el-form-item>
-        <el-form-item label="Output ($/1M tokens)">
+        <el-form-item :label="t('prices.output')">
           <el-input-number v-model="form.completion_price" :min="0" :precision="4" :step="0.1" style="width: 100%" />
-          <div class="form-hint">Output token price in USD per million tokens</div>
+          <div class="form-hint">{{ t('prices.outputHint') }}</div>
         </el-form-item>
-        <el-form-item label="Cached ($/1M tokens)">
+        <el-form-item :label="t('prices.cached')">
           <el-input-number v-model="form.cached_price" :min="0" :precision="4" :step="0.1" style="width: 100%" />
-          <div class="form-hint">Cached input price, usually lower than the prompt price</div>
+          <div class="form-hint">{{ t('prices.cacheReadHint') }}</div>
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="dialogVisible = false">Cancel</el-button>
-        <el-button type="primary" :loading="saving" @click="handleSave">Save</el-button>
+        <el-button @click="dialogVisible = false">{{ t('common.cancel') }}</el-button>
+        <el-button type="primary" :loading="saving" @click="handleSave">{{ t('common.save') }}</el-button>
       </template>
     </el-dialog>
   </div>
@@ -107,6 +107,9 @@
 import { ref, onMounted } from 'vue'
 import { modelPricesApi } from '@/api/model_prices'
 import { useAuthStore } from '@/stores/auth'
+import { useI18n } from '@/i18n'
+
+const { t } = useI18n()
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { WarningFilled } from '@element-plus/icons-vue'
 
@@ -132,7 +135,7 @@ async function load() {
     items.value = res.items
     total.value = res.total
   } catch {
-    ElMessage.error('Failed to load model prices')
+    ElMessage.error(t('prices.loadFailed'))
   } finally {
     loading.value = false
   }
@@ -173,11 +176,11 @@ async function handleSave() {
       await modelPricesApi.create(form.value)
     }
     dialogVisible.value = false
-    ElMessage.success('Saved')
+    ElMessage.success(t('common.saved'))
     await load()
     await loadUnpriced()
   } catch {
-    ElMessage.error('Save failed')
+    ElMessage.error(t('common.saveFailed'))
   } finally {
     saving.value = false
   }
@@ -186,11 +189,11 @@ async function handleSave() {
 async function handleDelete(id: number) {
   try {
     await modelPricesApi.remove(id)
-    ElMessage.success('Deleted')
+    ElMessage.success(t('common.deleted'))
     await load()
     await loadUnpriced()
   } catch {
-    ElMessage.error('Delete failed')
+    ElMessage.error(t('common.deleteFailed'))
   }
 }
 
@@ -199,16 +202,16 @@ async function toggleActive(row: any) {
     await modelPricesApi.update(row.id, { is_active: row.is_active })
   } catch {
     row.is_active = !row.is_active
-    ElMessage.error('Update failed')
+    ElMessage.error(t('common.updateFailed'))
   }
 }
 
 async function syncDefaults() {
   try {
     await ElMessageBox.confirm(
-      'This adds missing models and refreshes built-in prices. Custom models, status, and channel pricing stay unchanged.',
-      'Sync Prices',
-      { confirmButtonText: 'Sync', cancelButtonText: 'Cancel', type: 'info' },
+      t('prices.syncConfirm'),
+      t('prices.sync'),
+      { confirmButtonText: t('prices.syncAction'), cancelButtonText: t('common.cancel'), type: 'info' },
     )
   } catch {
     return
@@ -216,11 +219,15 @@ async function syncDefaults() {
   syncing.value = true
   try {
     const res = await modelPricesApi.syncDefaults(true)
-    ElMessage.success(`Catalog ${res.catalog_version}: ${res.created} added, ${res.updated} updated`)
+    ElMessage.success(t('prices.synced', {
+      version: res.catalog_version,
+      created: res.created,
+      updated: res.updated,
+    }))
     await load()
     await loadUnpriced()
   } catch {
-    ElMessage.error('Sync failed')
+    ElMessage.error(t('prices.syncFailed'))
   } finally {
     syncing.value = false
   }

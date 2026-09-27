@@ -16,3 +16,9 @@ include = ["app*"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+pythonpath = ["."]
+markers = [
+    "smoke: release gate for login, passthrough, and quota",
+    "regression: protocol isolation, failover, billing, and admin behavior",
+    "load: concurrent request and security-scan pressure",
+]

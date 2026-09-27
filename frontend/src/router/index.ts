@@ -11,8 +11,11 @@ const viewComponents: Record<NavigationName, () => Promise<unknown>> = {
   ModelGroups: () => import('@/views/ModelGroups.vue'),
   ModelPrices: () => import('@/views/ModelPrices.vue'),
   Logs: () => import('@/views/Logs.vue'),
+  Audit: () => import('@/views/Audit.vue'),
+  Security: () => import('@/views/Security.vue'),
   Admins: () => import('@/views/Admins.vue'),
   Roles: () => import('@/views/Roles.vue'),
+  Settings: () => import('@/views/Settings.vue'),
 }
 
 const router = createRouter({
@@ -32,7 +35,7 @@ const router = createRouter({
           name: item.name,
           component: viewComponents[item.name],
           meta: {
-            title: item.title,
+            titleKey: item.titleKey,
             permission: item.permission,
           },
         })),

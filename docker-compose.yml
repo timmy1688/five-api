@@ -30,12 +30,12 @@ services:
       retries: 5
     restart: unless-stopped
 
-  backend:
+  gateway:
     build:
-      context: ./backend
+      context: .
       dockerfile: Dockerfile
     ports:
-      - "${BACKEND_PORT:-8000}:8000"
+      - "${HTTP_PORT:-80}:8000"
     environment:
       MYSQL_HOST: mysql
       MYSQL_PORT: 3306
@@ -52,14 +52,4 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    restart: unless-stopped
-
-  frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
-    ports:
-      - "${FRONTEND_PORT:-80}:80"
-    depends_on:
-      - backend
     restart: unless-stopped

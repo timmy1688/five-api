@@ -2,38 +2,40 @@
   <div>
     <div class="page-header">
       <div>
-        <h3>Roles & Permissions</h3>
-        <p>Manage roles and administrative permissions</p>
+        <h3>{{ t('nav.roles') }}</h3>
+        <p>{{ t('roles.subtitle') }}</p>
       </div>
-      <el-button v-if="auth.hasPermission('role:write')" type="primary" @click="openCreate">Create Role</el-button>
+      <el-button v-if="auth.hasPermission('role:write')" type="primary" @click="openCreate">{{ t('roles.create') }}</el-button>
     </div>
 
     <el-card shadow="never">
       <el-table :data="items" v-loading="loading" stripe>
-        <el-table-column prop="id" label="ID" width="60" />
-        <el-table-column prop="name" label="Name" min-width="140" />
-        <el-table-column prop="description" label="Description" min-width="200" show-overflow-tooltip />
-        <el-table-column label="Permissions" width="110" align="center">
+        <el-table-column prop="id" :label="t('common.id')" width="60" />
+        <el-table-column prop="name" :label="t('common.name')" min-width="140">
+          <template #default="{ row }">{{ roleLabel(row.name) }}</template>
+        </el-table-column>
+        <el-table-column prop="description" :label="t('roles.description')" min-width="200" show-overflow-tooltip />
+        <el-table-column :label="t('roles.permissions')" width="110" align="center">
           <template #default="{ row }">
             <el-tag size="small" round>{{ row.permissions.length }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="Builtin" width="80" align="center">
+        <el-table-column :label="t('roles.builtin')" width="80" align="center">
           <template #default="{ row }">
-            <el-tag v-if="row.is_builtin" size="small" type="warning" round>Yes</el-tag>
+            <el-tag v-if="row.is_builtin" size="small" type="warning" round>{{ t('common.yes') }}</el-tag>
             <span v-else style="color: #c0c4cc">-</span>
           </template>
         </el-table-column>
-        <el-table-column label="Created" width="165">
+        <el-table-column :label="t('common.created')" width="165">
           <template #default="{ row }">{{ formatTime(row.created_at) }}</template>
         </el-table-column>
-        <el-table-column v-if="auth.hasPermission('role:write')" label="Actions" width="180" fixed="right">
+        <el-table-column v-if="auth.hasPermission('role:write')" :label="t('common.actions')" width="180" fixed="right">
           <template #default="{ row }">
-            <el-button text type="info" size="small" @click="showDetail(row)">View</el-button>
-            <el-button v-if="!row.is_builtin" text type="primary" size="small" @click="openEdit(row)">Edit</el-button>
-            <el-popconfirm v-if="!row.is_builtin" title="Delete this role?" @confirm="handleDelete(row.id)">
+            <el-button text type="info" size="small" @click="showDetail(row)">{{ t('common.view') }}</el-button>
+            <el-button v-if="!row.is_builtin" text type="primary" size="small" @click="openEdit(row)">{{ t('common.edit') }}</el-button>
+            <el-popconfirm v-if="!row.is_builtin" :title="t('roles.deleteConfirm')" @confirm="handleDelete(row.id)">
               <template #reference>
-                <el-button text type="danger" size="small">Delete</el-button>
+                <el-button text type="danger" size="small">{{ t('common.delete') }}</el-button>
               </template>
             </el-popconfirm>
           </template>
@@ -42,54 +44,54 @@
     </el-card>
 
     <!-- Create / Edit Dialog -->
-    <el-dialog v-model="dialogVisible" :title="editingId ? 'Edit Role' : 'Create Role'" width="620px">
+    <el-dialog v-model="dialogVisible" :title="editingId ? t('roles.edit') : t('roles.create')" width="620px">
       <el-form :model="form" label-width="100px">
-        <el-form-item label="Name">
+        <el-form-item :label="t('common.name')">
           <el-input v-model="form.name" />
         </el-form-item>
-        <el-form-item label="Description">
+        <el-form-item :label="t('roles.description')">
           <el-input v-model="form.description" />
         </el-form-item>
-        <el-form-item label="Permissions">
+        <el-form-item :label="t('roles.permissions')">
           <div class="perm-matrix">
             <div v-for="group in permGroups" :key="group.resource" class="perm-row">
-              <div class="perm-resource">{{ group.resource }}</div>
+              <div class="perm-resource">{{ permissionResource(group.resource) }}</div>
               <div class="perm-actions">
                 <el-checkbox
                   v-for="action in group.actions"
                   :key="action.permission"
                   :model-value="form.permissions.includes(action.permission)"
-                  :label="action.action"
+                  :label="permissionAction(action.action)"
                   @change="(val: boolean) => togglePerm(action.permission, val)"
                 />
               </div>
             </div>
           </div>
           <div style="margin-top: 8px; display: flex; gap: 8px">
-            <el-button size="small" @click="selectAllPerms">Select All</el-button>
-            <el-button size="small" @click="selectReadOnly">Read Only</el-button>
-            <el-button size="small" @click="form.permissions = []">Clear</el-button>
+            <el-button size="small" @click="selectAllPerms">{{ t('roles.selectAll') }}</el-button>
+            <el-button size="small" @click="selectReadOnly">{{ t('roles.readOnly') }}</el-button>
+            <el-button size="small" @click="form.permissions = []">{{ t('roles.clear') }}</el-button>
           </div>
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="dialogVisible = false">Cancel</el-button>
-        <el-button type="primary" :loading="saving" @click="handleSave">Save</el-button>
+        <el-button @click="dialogVisible = false">{{ t('common.cancel') }}</el-button>
+        <el-button type="primary" :loading="saving" @click="handleSave">{{ t('common.save') }}</el-button>
       </template>
     </el-dialog>
 
     <!-- Detail Drawer -->
-    <el-drawer v-model="detailVisible" title="Role Detail" size="480px">
+    <el-drawer v-model="detailVisible" :title="t('roles.detail')" size="480px">
       <template v-if="detailRow">
         <el-descriptions :column="1" border>
-          <el-descriptions-item label="ID">{{ detailRow.id }}</el-descriptions-item>
-          <el-descriptions-item label="Name">{{ detailRow.name }}</el-descriptions-item>
-          <el-descriptions-item label="Description">{{ detailRow.description || '-' }}</el-descriptions-item>
-          <el-descriptions-item label="Builtin">{{ detailRow.is_builtin ? 'Yes' : 'No' }}</el-descriptions-item>
+          <el-descriptions-item :label="t('common.id')">{{ detailRow.id }}</el-descriptions-item>
+          <el-descriptions-item :label="t('common.name')">{{ roleLabel(detailRow.name) }}</el-descriptions-item>
+          <el-descriptions-item :label="t('roles.description')">{{ detailRow.description || '-' }}</el-descriptions-item>
+          <el-descriptions-item :label="t('roles.builtin')">{{ detailRow.is_builtin ? t('common.yes') : t('common.no') }}</el-descriptions-item>
         </el-descriptions>
-        <div style="font-size: 14px; font-weight: 600; color: #334155; margin: 20px 0 10px">Permissions</div>
+        <div style="font-size: 14px; font-weight: 600; color: #334155; margin: 20px 0 10px">{{ t('roles.permissions') }}</div>
         <div style="display: flex; flex-wrap: wrap; gap: 6px">
-          <el-tag v-for="p in detailRow.permissions" :key="p" size="small">{{ p }}</el-tag>
+          <el-tag v-for="p in detailRow.permissions" :key="p" size="small">{{ permissionLabel(p) }}</el-tag>
         </div>
       </template>
     </el-drawer>
@@ -100,8 +102,25 @@
 import { ref, onMounted } from 'vue'
 import { rolesApi } from '@/api/roles'
 import { useAuthStore } from '@/stores/auth'
+import { useI18n } from '@/i18n'
+import { en, type MessageKey } from '@/i18n/messages'
 import { ElMessage } from 'element-plus'
 import dayjs from 'dayjs'
+
+const { t, roleLabel, permissionLabel } = useI18n()
+
+function labeled(prefix: string, value: string) {
+  const key = `${prefix}.${value}` as MessageKey
+  return key in en ? t(key) : value
+}
+
+function permissionResource(resource: string) {
+  return labeled('perm', resource)
+}
+
+function permissionAction(action: string) {
+  return labeled('perm', action)
+}
 
 const auth = useAuthStore()
 const items = ref<any[]>([])
@@ -150,7 +169,7 @@ async function load() {
     const res = await rolesApi.list()
     items.value = res.items
   } catch {
-    ElMessage.error('Failed to load roles')
+    ElMessage.error(t('roles.loadFailed'))
   } finally {
     loading.value = false
   }
@@ -183,17 +202,17 @@ async function handleSave() {
       await rolesApi.update(editingId.value, form.value)
     } else {
       if (!form.value.name) {
-        ElMessage.warning('Name is required')
+        ElMessage.warning(t('roles.nameRequired'))
         saving.value = false
         return
       }
       await rolesApi.create(form.value)
     }
     dialogVisible.value = false
-    ElMessage.success('Saved')
+    ElMessage.success(t('common.saved'))
     await load()
   } catch (e: any) {
-    ElMessage.error(e?.response?.data?.detail || 'Save failed')
+    ElMessage.error(e?.response?.data?.detail || t('common.saveFailed'))
   } finally {
     saving.value = false
   }
@@ -202,10 +221,10 @@ async function handleSave() {
 async function handleDelete(id: number) {
   try {
     await rolesApi.remove(id)
-    ElMessage.success('Deleted')
+    ElMessage.success(t('common.deleted'))
     await load()
   } catch (e: any) {
-    ElMessage.error(e?.response?.data?.detail || 'Delete failed')
+    ElMessage.error(e?.response?.data?.detail || t('common.deleteFailed'))
   }
 }
 

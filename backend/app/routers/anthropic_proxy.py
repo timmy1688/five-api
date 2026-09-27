@@ -10,17 +10,13 @@ from app.providers.anthropic_provider import AnthropicProvider
 from app.providers.base import BaseProvider
 from app.providers.registry import resolve_candidates
 from app.schemas.anthropic import AnthropicMessagesRequest
-from app.services.anthropic_compat import (
-    anthropic_to_openai_request,
-    openai_stream_to_anthropic_stream,
-    openai_to_anthropic_response,
-)
+from app.services.audit import open_audit, security_exempt
+from app.services.content_filter import collect_request_hits, format_hits
 from app.services.auth import verify_api_key_anthropic
 from app.services.concurrency import ConcurrencyExceeded, concurrency_limiter
 from app.services.pre_checks import anthropic_error, run_pre_checks
 from app.services.proxy import (
     execute_with_failover,
-    extract_openai_usage,
     log_rejected_request,
     stream_with_failover,
 )
@@ -35,7 +31,7 @@ def _extract_anthropic_usage(resp: dict) -> dict:
 
     Anthropic 的 input_tokens 不含缓存 token，而计费按 OpenAI 口径（prompt_tokens
     含全部输入）。这里把 cache_read + cache_creation 补进 prompt_tokens，
-    cached_tokens 只取 cache_read（享受缓存折扣价）。
+    cached_tokens 只取 cache_read。cache_creation 留在 prompt_tokens 里，按输入价计。
     """
     usage = resp.get("usage", {})
     cache_read = usage.get("cache_read_input_tokens", 0) or 0
@@ -44,6 +40,7 @@ def _extract_anthropic_usage(resp: dict) -> dict:
         "prompt_tokens": (usage.get("input_tokens", 0) or 0) + cache_read + cache_creation,
         "completion_tokens": usage.get("output_tokens", 0) or 0,
         "cached_tokens": cache_read,
+        "cache_write_tokens": cache_creation,
     }
 
 
@@ -61,7 +58,8 @@ async def _passthrough_stream_with_usage(
     """Yield (sse_line, usage_dict)，从 Anthropic SSE 流中提取 token 用量。
 
     Anthropic 的 input_tokens 不含缓存 token，计费按 OpenAI 口径补齐：
-    prompt_tokens = input_tokens + cache_read + cache_creation，cached_tokens 取 cache_read。
+    prompt_tokens = input_tokens + cache_read + cache_creation。
+    cached_tokens 取 cache_read。写入留在 prompt_tokens 里，按输入价计。
     """
     input_tokens = 0
     output_tokens = 0
@@ -89,6 +87,7 @@ async def _passthrough_stream_with_usage(
             "prompt_tokens": input_tokens + cache_read + cache_creation,
             "completion_tokens": output_tokens,
             "cached_tokens": cache_read,
+            "cache_write_tokens": cache_creation,
         }
 
 
@@ -101,12 +100,17 @@ async def messages(
     request_id = getattr(request.state, "request_id", "")
     ip = get_client_ip(request)
     start_time = time.monotonic()
+    audit = await open_audit(api_key, body.model_dump())
+    security_hits: list[str] = []
 
     try:
         await run_pre_checks(api_key, body.model, anthropic_error)
 
         raw_body = json.loads(await request.body())
-        session_key = make_session_key(api_key.id, request.headers, raw_body)
+        security_hits.extend(await collect_request_hits(raw_body, exempt=security_exempt(api_key)))
+        if audit is not None:
+            audit.set_request(raw_body)
+        session_key = await make_session_key(api_key.id, request.headers, raw_body)
         sticky_channel_id = await get_sticky_channel(session_key)
 
         candidates = await resolve_candidates(
@@ -116,7 +120,8 @@ async def messages(
     except HTTPException as exc:
         await log_rejected_request(
             api_key, request_id, "/v1/messages", body.model, exc.status_code,
-            start_time, ip, str(exc.detail),
+            start_time, ip, str(exc.detail), audit=audit,
+            security_hit=format_hits(security_hits),
         )
         raise
 
@@ -127,7 +132,8 @@ async def messages(
     except ConcurrencyExceeded:
         await log_rejected_request(
             api_key, request_id, "/v1/messages", body.model, 429,
-            start_time, ip, "Too many concurrent requests",
+            start_time, ip, "Too many concurrent requests", audit=audit,
+            security_hit=format_hits(security_hits),
         )
         anthropic_error(429, "rate_limit_error", "concurrent_limit", "Too many concurrent requests")
 
@@ -138,15 +144,10 @@ async def messages(
 
     if body.stream:
         async def _stream_fn(provider: BaseProvider, channel):
-            is_passthrough = channel.provider == "anthropic" and isinstance(provider, AnthropicProvider)
-            if is_passthrough:
-                async for line, usage in _passthrough_stream_with_usage(provider, raw_body, extra_headers):
-                    yield line, usage
-            else:
-                openai_body = anthropic_to_openai_request(raw_body)
-                openai_sse = provider.send_stream(openai_body, "/v1/chat/completions")
-                async for line, usage in openai_stream_to_anthropic_stream(openai_sse, body.model):
-                    yield line, usage
+            if not isinstance(provider, AnthropicProvider):
+                raise RuntimeError("messages endpoint only forwards to anthropic channels")
+            async for line, usage in _passthrough_stream_with_usage(provider, raw_body, extra_headers):
+                yield line, usage
 
         return StreamingResponse(
             stream_with_failover(
@@ -154,24 +155,24 @@ async def messages(
                 request_id, start_time, ip, _anthropic_error_event,
                 concurrency_lease_id,
                 session_key=session_key,
+                audit=audit,
+                security_hits=security_hits,
             ),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
     async def _send_fn(provider: BaseProvider, channel):
-        is_passthrough = channel.provider == "anthropic" and isinstance(provider, AnthropicProvider)
-        if is_passthrough:
-            result = await provider.send_anthropic_passthrough(raw_body, extra_headers)
-            return JSONResponse(content=result), _extract_anthropic_usage(result)
-        else:
-            openai_body = anthropic_to_openai_request(raw_body)
-            result = await provider.send_request(openai_body, "/v1/chat/completions")
-            return openai_to_anthropic_response(result, body.model), extract_openai_usage(result)
+        if not isinstance(provider, AnthropicProvider):
+            raise RuntimeError("messages endpoint only forwards to anthropic channels")
+        result = await provider.send_anthropic_passthrough(raw_body, extra_headers)
+        return JSONResponse(content=result), _extract_anthropic_usage(result)
 
     return await execute_with_failover(
         candidates, _send_fn, api_key, "/v1/messages", body.model,
         request_id, start_time, ip, anthropic_error,
         concurrency_lease_id,
         session_key=session_key,
+        audit=audit,
+        security_hits=security_hits,
     )

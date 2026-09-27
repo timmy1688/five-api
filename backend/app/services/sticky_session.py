@@ -8,7 +8,6 @@ import hashlib
 import json
 from typing import Any
 
-from app.config import settings
 from app.dependencies import get_redis
 
 KEY_PREFIX = "five:sticky:"
@@ -41,9 +40,11 @@ def _fingerprint_from_body(body: dict[str, Any]) -> str | None:
     return hashlib.sha256("\x1f".join(parts).encode("utf-8")).hexdigest()[:32]
 
 
-def make_session_key(api_key_id: int, headers: Any, body: dict[str, Any]) -> str | None:
+async def make_session_key(api_key_id: int, headers: Any, body: dict[str, Any]) -> str | None:
     """构造 Redis 会话键；未启用或无法识别会话时返回 None。"""
-    if not settings.STICKY_SESSION_ENABLED:
+    from app.services.settings_service import gateway_config
+
+    if not (await gateway_config())["sticky_session_enabled"]:
         return None
 
     session_id = None
@@ -80,5 +81,8 @@ async def bind_sticky_channel(session_key: str | None, channel_id: int) -> None:
     """请求成功后回写绑定并刷新 TTL。"""
     if not session_key:
         return
+    from app.services.settings_service import gateway_config
+
     r = await get_redis()
-    await r.set(session_key, channel_id, ex=settings.STICKY_SESSION_TTL)
+    ttl = (await gateway_config())["sticky_session_ttl"]
+    await r.set(session_key, channel_id, ex=ttl)

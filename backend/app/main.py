@@ -1,8 +1,10 @@
 from contextlib import asynccontextmanager
 import asyncio
+from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from passlib.context import CryptContext
 from tortoise.contrib.fastapi import RegisterTortoise
 
@@ -78,6 +80,55 @@ async def lifespan(app: FastAPI):
     await close_redis()
 
 
+def _frontend_dir() -> Path:
+    return Path(__file__).resolve().parents[1] / "static"
+
+
+def resolve_frontend_file(static_dir: Path, full_path: str) -> Path | None:
+    """Map a URL path to a built frontend file.
+
+    API prefixes stay 404 so a missing route is not replaced by the SPA.
+    Unknown frontend paths return None and the caller serves index.html.
+    """
+    normalized = full_path.lstrip("/")
+    if (
+        normalized == "metrics"
+        or normalized.startswith(("api/", "v1/"))
+        or normalized in {"docs", "redoc", "openapi.json"}
+    ):
+        raise LookupError(normalized)
+
+    if not normalized:
+        return None
+    root = static_dir.resolve()
+    candidate = (static_dir / normalized).resolve()
+    if root == candidate or root not in candidate.parents:
+        return None
+    if candidate.is_file():
+        return candidate
+    return None
+
+
+def _mount_frontend(app: FastAPI) -> None:
+    static_dir = _frontend_dir()
+    index = static_dir / "index.html"
+    if not index.is_file():
+        return
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def frontend(full_path: str):
+        try:
+            target = resolve_frontend_file(static_dir, full_path)
+        except LookupError:
+            raise HTTPException(status_code=404)
+        if target is None:
+            return FileResponse(index, headers={"Cache-Control": "no-cache"})
+        headers = {}
+        if full_path.startswith("assets/"):
+            headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        return FileResponse(target, headers=headers)
+
+
 def create_app() -> FastAPI:
     app = FastAPI(title="Five API Gateway", version="0.1.0", lifespan=lifespan)
 
@@ -110,9 +161,18 @@ def create_app() -> FastAPI:
     app.include_router(model_prices.router)
     app.include_router(models.router)
     app.include_router(roles.router)
+    from app.routers import audit as audit_router
+    from app.routers import security as security_router
+
+    app.include_router(security_router.router)
+    app.include_router(audit_router.router)
+    from app.routers import settings as settings_router
+
+    app.include_router(settings_router.router)
     app.include_router(stats.router)
     app.include_router(users.router)
     app.include_router(metrics.router)
+    _mount_frontend(app)
 
     return app
 

@@ -22,6 +22,8 @@ ALL_PERMISSIONS = [
     "stat:read",
     "user:read", "user:write",
     "role:read", "role:write",
+    "security:read", "security:write",
+    "setting:read", "setting:write",
 ]
 
 BUILTIN_ROLES = [
