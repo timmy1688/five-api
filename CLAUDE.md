@@ -18,9 +18,8 @@ Five API 是一个自托管的 AI API 网关，对外暴露 OpenAI 兼容接口�
 
 ```bash
 cd /opt/five-api
-cp .env.example .env && vi .env    # 修改数据库和初始管理员密码
-docker compose up -d
-docker compose logs -f backend     # 查看日志
+docker compose up -d               # 不需要 .env
+docker compose logs -f gateway     # 查看日志
 ```
 
 启动后管理后台和 API 都在 `http://localhost`（容器内 8000，默认映射到宿主机 80），默认管理员 `admin` / `admin123`（Super Admin 角色）
@@ -40,7 +39,6 @@ docker compose logs -f backend     # 查看日志
 
 # 方法 B：手动启动
 docker compose up -d mysql redis
-cp .env.example .env
 cd backend && ../.venv/bin/aerich upgrade && ../.venv/bin/uvicorn app.main:app --reload --port 5002
 cd frontend && npm install && npx vite --port 5001
 ```
@@ -598,7 +596,7 @@ export ANTHROPIC_API_KEY=sk-your-five-api-key
 | `CHANNEL_HEALTH_THRESHOLD` | `3` | 连续失败熔断默认次数。后台保存后以保存值为准 |
 | `CHANNEL_HEALTH_CHECK_INTERVAL` | `60` | 熔断探测默认间隔秒数。后台保存后以保存值为准 |
 
-Docker Compose 额外: `MYSQL_ROOT_PASSWORD`、`HTTP_PORT`(80)、`REDIS_PORT`(6379)
+Docker Compose 把数据库地址、Redis 和初始管理员写在 `docker-compose.yml` 里。改端口或密码时改这个文件，不读 `.env`。
 
 JWT 算法固定为 HS256、有效期固定为 24 小时。应用签名及渠道加密密钥首次启动自动
 生成并持久化为 `data/.secret_key`；Docker 将项目 `data/` 挂载到容器 `/data`，

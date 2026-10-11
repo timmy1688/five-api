@@ -45,16 +45,40 @@ export ANTHROPIC_API_KEY=sk-your-gateway-key
 
 ![模型定价](docs/images/zh/model-prices.png)
 
-## 启动
+## 生产部署
+
+安装 Docker 后，在项目目录执行：
 
 ```bash
-cp .env.example .env   # 改数据库密码和初始管理员密码
 docker compose up -d
 ```
 
-管理后台和 API 都在 `http://localhost`（容器内 8000，默认映射到宿主机 80）。默认账号 `admin` / `admin123`。
+不需要复制 `.env`。管理后台和 API 在同一个端口，默认是宿主机的 80，浏览器打开 `http://服务器地址`。首次登录 `admin` / `admin123`，登录后在后台改掉密码。数据库、Redis 和签名密钥都在 `./data`，`docker compose down` 不会删掉这个目录。
 
-本地开发：`./service.sh install` 然后 `./service.sh start`（前端 :5001，后端 :5002）。
+要改对外端口或密码，直接改 `docker-compose.yml` 里的对应值，然后重新执行 `docker compose up -d`。管理员账号已经创建之后，再改 `INIT_ADMIN_PASSWORD` 不会更新已有密码。
+
+```bash
+docker compose logs -f gateway
+docker compose down
+```
+
+## 开发
+
+本机需要 Python 3.11+、Node.js 20+ 和 Docker。数据库仍由 Compose 启动，账号用上面的默认值，也不需要 `.env`。
+
+```bash
+./service.sh install
+./service.sh start
+```
+
+前端在 `http://localhost:5001`，后端在 `http://localhost:5002`。页面上的 `/api` 和 `/v1` 会转到后端。
+
+```bash
+./service.sh stop
+./service.sh logs
+```
+
+数据库账号和 `docker-compose.yml` 里写的是同一套。要改密码，两边写成一样：Compose 改那个文件，本机后端再放一份 `.env`。
 
 ## 接入
 
@@ -81,4 +105,4 @@ cost  = (fresh × 输入价 + cache_read × 缓存读价 + completion × 输出�
 cd backend && ../.venv/bin/pytest -m smoke && ../.venv/bin/pytest -m regression
 ```
 
-环境变量见 [.env.example](.env.example)。架构见 [CLAUDE.md](CLAUDE.md)。[MIT License](LICENSE)。费用是估算，可能和上游账单不一致，说明见 [法律风险与免责声明](DISCLAIMER.md)。
+可选的环境变量见 [.env.example](.env.example)。架构见 [CLAUDE.md](CLAUDE.md)。[MIT License](LICENSE)。费用是估算，可能和上游账单不一致，说明见 [法律风险与免责声明](DISCLAIMER.md)。

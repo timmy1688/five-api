@@ -1,55 +1,44 @@
+# 启动：docker compose up -d
+# 打开 http://localhost ，账号 admin / admin123
+# 改端口或密码时，直接改下面的值。
+
 services:
-  mysql:
-    image: mysql:8.0
-    environment:
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root_password}
-      MYSQL_DATABASE: ${MYSQL_DATABASE:-five_api}
-      MYSQL_USER: ${MYSQL_USER:-five}
-      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-five_password}
+  gateway:
+    build: .
+    restart: always
     ports:
-      - "${MYSQL_PORT:-3306}:3306"
+      - "80:8000"
     volumes:
-      - ./data/mysql:/var/lib/mysql
-    healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    restart: unless-stopped
+      - ./data:/data
+    environment:
+      MYSQL_HOST: mysql
+      MYSQL_USER: five
+      MYSQL_PASSWORD: five_password
+      MYSQL_DATABASE: five_api
+      REDIS_URL: redis://redis:6379/0
+      INIT_ADMIN_USERNAME: admin
+      INIT_ADMIN_PASSWORD: admin123
+    depends_on:
+      - mysql
+      - redis
 
   redis:
     image: redis:7-alpine
+    restart: always
     ports:
-      - "${REDIS_PORT:-6379}:6379"
+      - "6379:6379"
     volumes:
       - ./data/redis:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    restart: unless-stopped
 
-  gateway:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    ports:
-      - "${HTTP_PORT:-80}:8000"
+  mysql:
+    image: mysql:8.0
+    restart: always
     environment:
-      MYSQL_HOST: mysql
-      MYSQL_PORT: 3306
-      MYSQL_USER: ${MYSQL_USER:-five}
-      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-five_password}
-      MYSQL_DATABASE: ${MYSQL_DATABASE:-five_api}
-      REDIS_URL: redis://redis:6379/0
-      INIT_ADMIN_USERNAME: ${INIT_ADMIN_USERNAME:-admin}
-      INIT_ADMIN_PASSWORD: ${INIT_ADMIN_PASSWORD:-admin123}
+      MYSQL_ROOT_PASSWORD: root_password
+      MYSQL_DATABASE: five_api
+      MYSQL_USER: five
+      MYSQL_PASSWORD: five_password
     volumes:
-      - ./data:/data
-    depends_on:
-      mysql:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    restart: unless-stopped
+      - ./data/mysql:/var/lib/mysql
+    ports:
+      - "3306:3306"

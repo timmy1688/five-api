@@ -45,16 +45,40 @@ The admin UI and the API are the same process.
 
 ![Model Pricing](docs/images/model-prices.png)
 
-## Start
+## Production
+
+Install Docker, then from the project directory:
 
 ```bash
-cp .env.example .env   # database password and the first admin password
 docker compose up -d
 ```
 
-The admin UI and the API are both at `http://localhost` (container port 8000, published on host port 80). The first login is `admin` / `admin123`.
+No `.env` file is required. The admin UI and the API share one port, host port 80 by default. Open `http://your-server`. The first login is `admin` / `admin123`. Change that password in the admin UI after logging in. The database, Redis, and the signing key live in `./data`. `docker compose down` leaves that directory in place.
 
-Local development: `./service.sh install`, then `./service.sh start` (frontend :5001, backend :5002).
+To change the published port or a password, edit the values in `docker-compose.yml`, then run `docker compose up -d` again. `INIT_ADMIN_PASSWORD` applies only when the admin account is created.
+
+```bash
+docker compose logs -f gateway
+docker compose down
+```
+
+## Development
+
+You need Python 3.11+, Node.js 20+, and Docker. Compose still starts MySQL and Redis with the defaults above. No `.env` file is required.
+
+```bash
+./service.sh install
+./service.sh start
+```
+
+The frontend is at `http://localhost:5001` and the backend at `http://localhost:5002`. The dev server forwards `/api` and `/v1` to the backend.
+
+```bash
+./service.sh stop
+./service.sh logs
+```
+
+The database account matches the values in `docker-compose.yml`. To change a password, change it in that file and put the same values in a `.env` file for the local backend.
 
 ## Connect
 
@@ -81,4 +105,4 @@ The channel price is used first, then the global price. Quota is deducted after 
 cd backend && ../.venv/bin/pytest -m smoke && ../.venv/bin/pytest -m regression
 ```
 
-Environment variables are in [.env.example](.env.example). Architecture is in [CLAUDE.md](CLAUDE.md). [MIT License](LICENSE). Cost is an estimate and can differ from the upstream invoice. The full statement is in [DISCLAIMER.md](DISCLAIMER.md) (Chinese).
+Optional environment variables are in [.env.example](.env.example). Architecture is in [CLAUDE.md](CLAUDE.md). [MIT License](LICENSE). Cost is an estimate and can differ from the upstream invoice. The full statement is in [DISCLAIMER.md](DISCLAIMER.md) (Chinese).
