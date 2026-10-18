@@ -7,6 +7,7 @@ import time
 
 from app.config import settings
 from app.models import SystemSetting
+from app.services.time_pricing import normalize_rules
 
 INFERENCE_AUDIT_KEY = "inference_audit_enabled"
 KEYWORD_FILTER_KEY = "keyword_filter_enabled"
@@ -149,6 +150,7 @@ def default_gateway_config() -> dict:
         "model_fallbacks": {},
         "auto_cache_control": False,
         "budget_downgrade": {"threshold": 0.8, "rules": {}},
+        "time_pricing": [],
     }
 
 
@@ -216,6 +218,7 @@ def _normalize_gateway(value) -> dict:
         "model_fallbacks": _normalize_fallbacks(raw.get("model_fallbacks")),
         "auto_cache_control": bool(raw.get("auto_cache_control", defaults["auto_cache_control"])),
         "budget_downgrade": _normalize_downgrade(raw.get("budget_downgrade")),
+        "time_pricing": normalize_rules(raw.get("time_pricing")),
     }
 
 

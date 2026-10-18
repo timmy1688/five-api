@@ -294,7 +294,7 @@ const costLines = computed(() => {
     .map((key) => ({
       key,
       units: units[key].toLocaleString(),
-      price: key === 'request' ? `$${cd.prices.request}` : `$${cd.prices[key]}/1M`,
+      price: (key === 'request' ? `$${cd.prices.request}` : `$${cd.prices[key]}/1M`) + (cd.time_rule ? ` ×${cd.time_rule.multiplier}` : ''),
       amount: cd.lines[key] as number,
     }))
 })

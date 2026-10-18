@@ -83,6 +83,31 @@
           <p class="hint">{{ t('settings.downgradeHint') }}</p>
         </el-form-item>
 
+        <el-form-item :label="t('settings.timePricing')">
+          <div class="fallback-list">
+            <div v-for="(rule, index) in timeRules" :key="index" class="time-rule">
+              <el-input v-model="rule.name" :placeholder="t('settings.timeName')" class="time-name" />
+              <el-time-select v-model="rule.start" start="00:00" step="00:30" end="23:30" :clearable="false" class="time-clock" />
+              <span class="fallback-arrow">–</span>
+              <el-time-select v-model="rule.end" start="00:30" step="00:30" end="24:00" :clearable="false" class="time-clock" />
+              <el-select v-model="rule.utc_offset" class="time-offset">
+                <el-option v-for="h in offsets" :key="h" :label="h === 0 ? 'UTC' : `UTC${h > 0 ? '+' : ''}${h}`" :value="h" />
+              </el-select>
+              <span class="threshold-label">×</span>
+              <el-input-number v-model="rule.multiplier" :min="0" :max="10" :step="0.1" :precision="2" class="time-multiplier" />
+              <el-select v-model="rule.models" multiple filterable allow-create default-first-option collapse-tags :placeholder="t('settings.timeModels')" class="time-models">
+                <el-option v-for="m in modelOptions" :key="m" :label="m" :value="m" />
+              </el-select>
+              <el-select v-if="channelOptions.length" v-model="rule.channel_ids" multiple collapse-tags :placeholder="t('settings.timeChannels')" class="time-models">
+                <el-option v-for="c in channelOptions" :key="c.id" :label="c.name" :value="c.id" />
+              </el-select>
+              <el-button text type="danger" @click="timeRules.splice(index, 1)">{{ t('common.delete') }}</el-button>
+            </div>
+            <el-button v-if="canWrite" plain size="small" @click="addTimeRule">{{ t('settings.fallbackAdd') }}</el-button>
+          </div>
+          <p class="hint">{{ t('settings.timePricingHint') }}</p>
+        </el-form-item>
+
         <h4>{{ t('settings.health') }}</h4>
         <el-form-item :label="t('settings.healthThreshold')">
           <el-input-number v-model="form.channel_health_threshold" :min="1" :max="100" :step="1" />
@@ -99,7 +124,8 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { settingsApi, type GatewaySettings } from '@/api/settings'
+import { settingsApi, type GatewaySettings, type TimePriceRule } from '@/api/settings'
+import { channelsApi } from '@/api/channels'
 import { modelsApi } from '@/api/models'
 import { useAuthStore } from '@/stores/auth'
 import { useI18n } from '@/i18n'
@@ -122,6 +148,13 @@ const fallbacks = ref<{ source: string; targets: string[] }[]>([])
 const downgrades = ref<{ source: string; target: string }[]>([])
 const downgradeThreshold = ref(80)
 const modelOptions = ref<string[]>([])
+const channelOptions = ref<{ id: number; name: string }[]>([])
+const timeRules = ref<TimePriceRule[]>([])
+const offsets = Array.from({ length: 27 }, (_, i) => i - 12)
+
+function addTimeRule() {
+  timeRules.value.push({ name: '', models: [], channel_ids: [], start: '00:00', end: '08:00', utc_offset: 8, multiplier: 0.5 })
+}
 
 function apply(data: GatewaySettings) {
   form.log_retention_days = data.log_retention_days
@@ -134,6 +167,7 @@ function apply(data: GatewaySettings) {
   form.auto_cache_control = data.auto_cache_control ?? false
   downgradeThreshold.value = Math.round((data.budget_downgrade?.threshold ?? 0.8) * 100)
   downgrades.value = Object.entries(data.budget_downgrade?.rules ?? {}).map(([source, target]) => ({ source, target }))
+  timeRules.value = (data.time_pricing ?? []).map(rule => ({ ...rule, models: [...rule.models], channel_ids: [...rule.channel_ids] }))
 }
 
 function downgradeConfig() {
@@ -162,6 +196,9 @@ async function load() {
       modelsApi.list().then(data => {
         modelOptions.value = (data.items || []).map((item: { model: string }) => item.model)
       }).catch(() => {})
+      channelsApi.list(1, 100).then(data => {
+        channelOptions.value = (data.items || []).map((item: { id: number; name: string }) => ({ id: item.id, name: item.name }))
+      }).catch(() => {})
     }
   } catch {
     ElMessage.error(t('settings.loadFailed'))
@@ -173,7 +210,7 @@ async function load() {
 async function save() {
   saving.value = true
   try {
-    apply(await settingsApi.save({ ...form, model_fallbacks: fallbackMap(), budget_downgrade: downgradeConfig() }))
+    apply(await settingsApi.save({ ...form, model_fallbacks: fallbackMap(), budget_downgrade: downgradeConfig(), time_pricing: timeRules.value }))
     ElMessage.success(t('common.saved'))
   } catch {
     ElMessage.error(t('common.saveFailed'))
@@ -219,6 +256,38 @@ h4:not(:first-child) {
 .fallback-targets {
   flex: 1;
   min-width: 260px;
+}
+
+.time-rule {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 10px;
+  border: 1px solid #e5e6eb;
+  border-radius: 8px;
+}
+
+.time-name {
+  width: 140px;
+}
+
+.time-clock {
+  width: 110px;
+}
+
+.time-offset {
+  width: 110px;
+}
+
+.time-multiplier {
+  width: 120px;
+}
+
+.time-models {
+  flex: 1;
+  min-width: 200px;
 }
 
 .threshold-label {

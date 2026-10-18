@@ -1,6 +1,9 @@
+from datetime import datetime, timezone
 from decimal import Decimal
 
 from app.models import Channel, ModelPrice
+from app.services import time_pricing
+from app.services.settings_service import gateway_config
 
 MILLION = Decimal("1000000")
 
@@ -225,6 +228,9 @@ async def estimate_upper_cost(
     ) / MILLION
     if request_units:
         cost += Decimal(request_units) * await upper_request_price(model)
+    rules = (await gateway_config())["time_pricing"]
+    if rules:
+        cost *= Decimal(str(time_pricing.peak_multiplier(rules, model, datetime.now(timezone.utc))))
     return cost
 
 
@@ -259,6 +265,7 @@ async def cost_breakdown(
     cached_tokens: int = 0,
     cache_write_tokens: int = 0,
     request_units: int = 0,
+    at: datetime | None = None,
 ) -> dict:
     """Cost plus every number that produced it, kept on the log for later review.
 
@@ -279,11 +286,19 @@ async def cost_breakdown(
     if request_units:
         request_price = await resolve_request_price(model, channel)
         lines["request"] = Decimal(request_units) * request_price
-    cost = sum(lines.values(), Decimal(0)).quantize(Decimal("0.000001"))
     savings = (
         Decimal(cached_tokens) * (prompt_price - cached_price)
         - Decimal(cache_write_tokens) * (write_price - prompt_price)
     ) / MILLION
+    rule = time_pricing.match_rule(
+        (await gateway_config())["time_pricing"], model,
+        channel.id if channel else None, at or datetime.now(timezone.utc),
+    )
+    if rule is not None:
+        factor = Decimal(str(rule["multiplier"]))
+        lines = {name: value * factor for name, value in lines.items()}
+        savings *= factor
+    cost = sum(lines.values(), Decimal(0)).quantize(Decimal("0.000001"))
     return {
         "cost": cost,
         "cache_savings": savings.quantize(Decimal("0.000001")),
@@ -305,6 +320,9 @@ async def cost_breakdown(
                 "request_units": request_units,
             },
             "lines": {name: float(value.quantize(Decimal("0.000001"))) for name, value in lines.items()},
+            "time_rule": (
+                {"name": rule["name"], "multiplier": rule["multiplier"]} if rule is not None else None
+            ),
         },
     }
 

@@ -20,6 +20,7 @@ class GatewaySettingsBody(BaseModel):
     model_fallbacks: dict[str, list[str]] | None = None
     auto_cache_control: bool | None = None
     budget_downgrade: dict | None = None
+    time_pricing: list[dict] | None = None
 
 
 @router.get("")
