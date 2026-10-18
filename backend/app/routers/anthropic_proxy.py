@@ -7,8 +7,8 @@ from fastapi.responses import JSONResponse
 
 from app.models import APIKey
 from app.providers.anthropic_provider import AnthropicProvider
-from app.providers.base import BaseProvider, forwardable_headers
-from app.providers.registry import resolve_candidates, resolve_with_fallbacks
+from app.providers.base import forwardable_headers
+from app.providers.registry import resolve_candidates
 from app.schemas.anthropic import AnthropicMessagesRequest
 from app.services.audit import open_audit, security_exempt
 from app.services.content_filter import collect_request_hits, format_hits
@@ -17,12 +17,7 @@ from app.services.concurrency import ConcurrencyExceeded, concurrency_limiter
 from app.services.quota import QuotaExceeded, begin_request_budget
 from app.services.rate_limit import TPMExceeded
 from app.services.failover import is_retryable_error, upstream_status
-from app.services.pre_checks import (
-    anthropic_error,
-    check_model_access,
-    get_effective_allowed_models,
-    run_pre_checks,
-)
+from app.services.pre_checks import anthropic_error, check_model_access, run_pre_checks
 from app.services.pricing import estimate_request_tokens
 from app.services.proxy import (
     execute_with_failover,
@@ -30,32 +25,36 @@ from app.services.proxy import (
     open_stream,
     stream_with_failover,
 )
-from app.services.downgrade import downgrade_headers, downgrade_target, mark_downgraded
 from app.services.error_detail import upstream_json_error
 from app.services.auto_cache import with_cache_control
+from app.services.routing import plan_route
 from app.services.settings_service import gateway_config
-from app.services.sticky_session import get_sticky_channel, make_session_key, session_log_id
 from app.utils.ip_check import get_client_ip
 
 router = APIRouter(tags=["anthropic-proxy"])
 
 
-def _extract_anthropic_usage(resp: dict) -> dict:
-    """从 Anthropic 响应中提取 usage。
-
-    Anthropic 的 input_tokens 不含缓存 token，而计费按 OpenAI 口径（prompt_tokens
+def _billing_usage(input_tokens: int, output_tokens: int, cache_read: int, cache_creation: int) -> dict:
+    """Anthropic 的 input_tokens 不含缓存 token，而计费按 OpenAI 口径（prompt_tokens
     含全部输入）。这里把 cache_read + cache_creation 补进 prompt_tokens，
     cached_tokens 只取 cache_read。cache_creation 单独按缓存写入价计。
     """
-    usage = resp.get("usage", {})
-    cache_read = usage.get("cache_read_input_tokens", 0) or 0
-    cache_creation = usage.get("cache_creation_input_tokens", 0) or 0
     return {
-        "prompt_tokens": (usage.get("input_tokens", 0) or 0) + cache_read + cache_creation,
-        "completion_tokens": usage.get("output_tokens", 0) or 0,
+        "prompt_tokens": input_tokens + cache_read + cache_creation,
+        "completion_tokens": output_tokens,
         "cached_tokens": cache_read,
         "cache_write_tokens": cache_creation,
     }
+
+
+def _extract_anthropic_usage(resp: dict) -> dict:
+    usage = resp.get("usage", {})
+    return _billing_usage(
+        usage.get("input_tokens", 0) or 0,
+        usage.get("output_tokens", 0) or 0,
+        usage.get("cache_read_input_tokens", 0) or 0,
+        usage.get("cache_creation_input_tokens", 0) or 0,
+    )
 
 
 def _anthropic_error_event(e: Exception) -> str:
@@ -73,12 +72,7 @@ async def _passthrough_stream_with_usage(
     body: dict,
     extra_headers: dict[str, str] | None,
 ) -> AsyncIterator[tuple[str, dict]]:
-    """Yield (sse_line, usage_dict)，从 Anthropic SSE 流中提取 token 用量。
-
-    Anthropic 的 input_tokens 不含缓存 token，计费按 OpenAI 口径补齐：
-    prompt_tokens = input_tokens + cache_read + cache_creation。
-    cached_tokens 取 cache_read。写入单独按缓存写入价计。
-    """
+    """Yield (sse_line, usage_dict)，从 Anthropic SSE 流中提取 token 用量。"""
     input_tokens = 0
     output_tokens = 0
     cache_read = 0
@@ -101,12 +95,7 @@ async def _passthrough_stream_with_usage(
             except (json.JSONDecodeError, ValueError):
                 pass
 
-        yield line, {
-            "prompt_tokens": input_tokens + cache_read + cache_creation,
-            "completion_tokens": output_tokens,
-            "cached_tokens": cache_read,
-            "cache_write_tokens": cache_creation,
-        }
+        yield line, _billing_usage(input_tokens, output_tokens, cache_read, cache_creation)
 
 
 @router.post("/v1/messages/count_tokens")
@@ -134,8 +123,6 @@ async def count_tokens(
     }
     for channel, provider_cls in candidates:
         provider = provider_cls(channel)
-        if not isinstance(provider, AnthropicProvider):
-            continue
         try:
             result = await provider.count_tokens(raw_body, extra_headers)
             return JSONResponse(content=result, headers=provider.response_headers)
@@ -174,18 +161,7 @@ async def messages(
         security_hits.extend(await collect_request_hits(raw_body, exempt=security_exempt(api_key)))
         if audit is not None:
             audit.set_request(raw_body)
-        session_key = await make_session_key(api_key.id, request.headers, raw_body)
-        session_id = session_log_id(api_key.id, request.headers, raw_body)
-        sticky_channel_id = await get_sticky_channel(session_key)
-
-        allowed_models = await get_effective_allowed_models(api_key)
-        downgraded_to = await downgrade_target(api_key, body.model, allowed_models)
-        candidates = await resolve_with_fallbacks(
-            body.model, preferred_protocol="anthropic",
-            sticky_channel_id=sticky_channel_id,
-            allowed_models=allowed_models,
-            serve_as=downgraded_to,
-        )
+        plan = await plan_route(api_key, body.model, "anthropic", request.headers, raw_body)
     except HTTPException as exc:
         await log_rejected_request(
             api_key, request_id, "/v1/messages", body.model, exc.status_code,
@@ -230,20 +206,18 @@ async def messages(
         raw_body, _ = with_cache_control(raw_body)
 
     if body.stream:
-        async def _stream_fn(provider: BaseProvider, channel):
-            if not isinstance(provider, AnthropicProvider):
-                raise RuntimeError("messages endpoint only forwards to anthropic channels")
+        async def _stream_fn(provider: AnthropicProvider, channel):
             async for line, usage in _passthrough_stream_with_usage(provider, raw_body, extra_headers):
                 yield line, usage
 
-        upstream_headers: dict[str, str] = downgrade_headers(downgraded_to)
+        upstream_headers = plan.headers
         return await open_stream(
             stream_with_failover(
-                candidates, _stream_fn, api_key, "/v1/messages", body.model,
+                plan.candidates, _stream_fn, api_key, "/v1/messages", body.model,
                 request_id, start_time, ip, _anthropic_error_event,
                 concurrency_lease_id,
-                session_key=session_key,
-                session_id=session_id,
+                session_key=plan.session_key,
+                session_id=plan.session_id,
                 audit=audit,
                 security_hits=security_hits,
                 budget=budget,
@@ -252,20 +226,18 @@ async def messages(
             upstream_headers,
         )
 
-    async def _send_fn(provider: BaseProvider, channel):
-        if not isinstance(provider, AnthropicProvider):
-            raise RuntimeError("messages endpoint only forwards to anthropic channels")
+    async def _send_fn(provider: AnthropicProvider, channel):
         result = await provider.send_anthropic_passthrough(raw_body, extra_headers)
         return JSONResponse(content=result), _extract_anthropic_usage(result)
 
     response = await execute_with_failover(
-        candidates, _send_fn, api_key, "/v1/messages", body.model,
+        plan.candidates, _send_fn, api_key, "/v1/messages", body.model,
         request_id, start_time, ip, anthropic_error,
         concurrency_lease_id,
-        session_key=session_key,
-        session_id=session_id,
+        session_key=plan.session_key,
+        session_id=plan.session_id,
         audit=audit,
         security_hits=security_hits,
         budget=budget,
     )
-    return mark_downgraded(response, downgraded_to)
+    return plan.mark(response)

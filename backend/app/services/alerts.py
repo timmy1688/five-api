@@ -18,7 +18,8 @@ from urllib.parse import quote_plus, urlsplit
 import httpx
 
 from app import dependencies
-from app.models import SystemSetting
+from app.models import APIKey, Channel, SystemSetting
+from app.services.budget_usage import budget_usages
 from app.utils.secrets import decrypt_secret, encrypt_secret
 
 logger = logging.getLogger(__name__)
@@ -205,9 +206,13 @@ async def deliver(hooks: list[dict], event: str, title: str, text: str, data: di
     return list(results)
 
 
+def _active(config: dict, event: str) -> bool:
+    return bool(config["enabled"] and config["webhooks"] and config["events"].get(event))
+
+
 async def notify(event: str, subject: str, title: str, text: str, data: dict, dedupe_seconds: int) -> bool:
     config = await alert_config()
-    if not config["enabled"] or not config["events"].get(event) or not config["webhooks"]:
+    if not _active(config, event):
         return False
     redis = await dependencies.get_redis()
     if not await redis.set(f"five:alert:{event}:{subject}", "1", ex=dedupe_seconds, nx=True):
@@ -223,17 +228,15 @@ async def drain_alerts() -> None:
         await asyncio.gather(*list(_tasks))
 
 
-def _active(config: dict | None, event: str) -> bool:
-    return bool(config and config["enabled"] and config["webhooks"] and config["events"].get(event))
+async def _channel_name(channel_id: int) -> str:
+    channel = await Channel.get_or_none(id=channel_id)
+    return channel.name if channel else f"#{channel_id}"
 
 
 async def channel_opened(channel_id: int, failures: int) -> None:
     if not _active(await alert_config(), "channel"):
         return
-    from app.models import Channel
-
-    channel = await Channel.get_or_none(id=channel_id)
-    name = channel.name if channel else f"#{channel_id}"
+    name = await _channel_name(channel_id)
     await notify(
         "channel", f"open:{channel_id}", f"渠道熔断 {name}",
         f"渠道 {name} 连续失败 {failures} 次，已暂停分配请求，后台探测恢复后自动启用。",
@@ -245,10 +248,7 @@ async def channel_opened(channel_id: int, failures: int) -> None:
 async def channel_recovered(channel_id: int) -> None:
     if not _active(await alert_config(), "channel"):
         return
-    from app.models import Channel
-
-    channel = await Channel.get_or_none(id=channel_id)
-    name = channel.name if channel else f"#{channel_id}"
+    name = await _channel_name(channel_id)
     redis = await dependencies.get_redis()
     await redis.delete(f"five:alert:channel:open:{channel_id}")
     await notify(
@@ -285,37 +285,28 @@ async def record_outcome(status_code: int) -> None:
     )
 
 
+_SCOPE_LABELS = {"key": "Key", "team": "团队"}
+_BUDGET_LABELS = {"quota": "总额度"}
+
+
 async def check_budget(api_key_id: int) -> None:
     config = await alert_config()
     if not _active(config, "budget"):
         return
-    from app.models import APIKey, Team
-    from app.services.spend_windows import normalize_limits, window_spend
-
-    threshold = config["budget_threshold"]
     key = await APIKey.get_or_none(id=api_key_id)
     if key is None:
         return
-    owners = [("key", key.id, f"Key {key.name}", key)]
-    if key.team_id:
-        team = await Team.get_or_none(id=key.team_id)
-        if team is not None:
-            owners.append(("team", team.id, f"团队 {team.name}", team))
-    for scope, owner_id, label, owner in owners:
-        budgets = []
-        total = float(owner.quota_total)
-        if total > 0:
-            budgets.append(("quota", "总额度", float(owner.quota_used), total))
-        caps = normalize_limits(owner.window_limits)
-        if caps:
-            spent = await window_spend(scope, owner_id)
-            budgets.extend((window, f"{window} 滚动限额", spent[window], cap) for window, cap in caps.items())
-        for budget, budget_label, used, cap in budgets:
-            if cap <= 0 or used / cap < threshold:
-                continue
-            await notify(
-                "budget", f"{scope}:{owner_id}:{budget}", f"预算预警 {label}",
-                f"{label} 的{budget_label}已用 ${used:.4f} / ${cap:.4f}（{used / cap:.0%}）。",
-                {"scope": scope, "id": owner_id, "budget": budget, "used": round(used, 6), "limit": cap},
-                BUDGET_DEDUPE,
-            )
+    for usage in await budget_usages(key):
+        if usage.limit <= 0 or usage.share < config["budget_threshold"]:
+            continue
+        owner = f"{_SCOPE_LABELS[usage.scope]} {usage.owner_name}"
+        budget = _BUDGET_LABELS.get(usage.budget, f"{usage.budget} 滚动限额")
+        await notify(
+            "budget", f"{usage.scope}:{usage.owner_id}:{usage.budget}", f"预算预警 {owner}",
+            f"{owner} 的{budget}已用 ${usage.used:.4f} / ${usage.limit:.4f}（{usage.share:.0%}）。",
+            {
+                "scope": usage.scope, "id": usage.owner_id, "budget": usage.budget,
+                "used": round(usage.used, 6), "limit": usage.limit,
+            },
+            BUDGET_DEDUPE,
+        )

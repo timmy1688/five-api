@@ -1,7 +1,7 @@
-
 import httpx
 
 from app.models import Channel
+from app.services.key_pool import available_keys, cool_down, cooldown_for, pick_key
 from app.utils.secrets import channel_keys
 
 _http_clients: dict[tuple[str, int], httpx.AsyncClient] = {}
@@ -80,15 +80,11 @@ class BaseProvider:
         self.response_headers: dict[str, str] = {}
 
     async def select_key(self, session_key: str | None = None) -> None:
-        from app.services.key_pool import pick_key
-
         if len(self.keys) > 1:
             self.api_key = await pick_key(self.channel.id, self.keys, session_key)
 
     async def rotate_key(self, exc: Exception) -> bool:
         """Cool the failing key. True when another key on this channel is ready."""
-        from app.services.key_pool import available_keys, cool_down, cooldown_for
-
         if len(self.keys) <= 1:
             return False
         await cool_down(self.channel.id, self.api_key, cooldown_for(exc))

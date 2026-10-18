@@ -2,7 +2,6 @@ from collections.abc import AsyncIterator
 
 import httpx
 
-from app.models import Channel
 from app.providers.base import BaseProvider, forwardable_headers, read_error_body
 
 STREAM_USAGE_ENDPOINTS = {"/v1/chat/completions", "/v1/completions"}
@@ -12,12 +11,9 @@ class OpenAIProvider(BaseProvider):
     """Passthrough provider for OpenAI and all OpenAI-compatible APIs
     (OpenAI 官方、第三方中转、Gemini/Qwen 等兼容端点)。"""
 
-    def __init__(self, channel: Channel):
-        super().__init__(channel)
-
-    def transform_request(self, openai_request: dict, endpoint: str) -> tuple[str, dict, dict]:
-        body = {**openai_request}
-        body["model"] = self.apply_model_mapping(body.get("model", ""))
+    def prepare_request(self, body: dict, endpoint: str) -> tuple[str, dict, dict]:
+        """Upstream path, headers and body. Returns (path, headers, body)."""
+        body = {**body, "model": self.apply_model_mapping(body.get("model", ""))}
         # The Responses API always reports usage in response.completed and
         # rejects include_usage.
         if body.get("stream") and endpoint in STREAM_USAGE_ENDPOINTS:
@@ -39,7 +35,7 @@ class OpenAIProvider(BaseProvider):
 
     async def send_event_stream(self, body: dict, endpoint: str) -> AsyncIterator[str]:
         """Whole SSE events, keeping the event: line next to its data: line."""
-        url_path, headers, payload = self.transform_request(body, endpoint)
+        url_path, headers, payload = self.prepare_request(body, endpoint)
         req = self.client.build_request("POST", url_path, json=payload, headers=headers)
         resp = await self.client.send(req, stream=True)
         await read_error_body(resp)
@@ -82,14 +78,14 @@ class OpenAIProvider(BaseProvider):
         return resp
 
     async def send_request(self, body: dict, endpoint: str) -> dict:
-        url_path, headers, payload = self.transform_request(body, endpoint)
+        url_path, headers, payload = self.prepare_request(body, endpoint)
         resp = await self.client.post(url_path, json=payload, headers=headers)
         resp.raise_for_status()
         self.response_headers = forwardable_headers(resp)
         return resp.json()
 
     async def send_stream(self, body: dict, endpoint: str) -> AsyncIterator[str]:
-        url_path, headers, payload = self.transform_request(body, endpoint)
+        url_path, headers, payload = self.prepare_request(body, endpoint)
         req = self.client.build_request("POST", url_path, json=payload, headers=headers)
         resp = await self.client.send(req, stream=True)
         await read_error_body(resp)

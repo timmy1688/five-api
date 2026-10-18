@@ -84,6 +84,7 @@ cd frontend && npm install && npx vite --port 5001
 │   │   │   ├── anthropic_provider.py#   Anthropic 协议（原生直通 + count_tokens）
 │   │   │   └── registry.py          #   渠道选择 & 模型路由（按协议过滤）
 │   │   ├── services/                # 基础设施（依赖 Redis/DB 的可复用模块）
+│   │   │   ├── routing.py           #   单次请求的选路：会话粘性、预算降级、回退链（plan_route）
 │   │   │   ├── proxy.py             #   通用代理编排（故障转移 + 计费 + 日志）
 │   │   │   ├── pre_checks.py        #   前置策略管线（quota / model / RPM）
 │   │   │   ├── auth.py              #   JWT + API Key 认证 + RBAC 权限（ALL_PERMISSIONS、require_permission、get_current_admin）
@@ -98,9 +99,11 @@ cd frontend && npm install && npx vite --port 5001
 │   │   │   ├── metrics.py           #   Prometheus 指标
 │   │   │   ├── key_pool.py          #   渠道多 Key 冷却与轮换
 │   │   │   ├── spend_windows.py     #   5h/1d/7d 滚动限额
+│   │   │   ├── budget_usage.py      #   Key/团队各项预算占比（降级和告警共用）
 │   │   │   ├── downgrade.py         #   接近预算时改用便宜模型
 │   │   │   ├── auto_cache.py        #   自动加 Anthropic cache_control
 │   │   │   ├── time_pricing.py      #   分时定价倍率
+│   │   │   ├── reconcile.py         #   账单 CSV 解析与比对
 │   │   │   └── alerts.py            #   飞书/钉钉/企业微信/JSON 告警
 │   │   ├── middleware/
 │   │   │   └── request_id.py        #   注入 X-Request-ID
@@ -167,7 +170,7 @@ cd frontend && npm install && npx vite --port 5001
 1. **Request ID 中间件** → 注入/复用 `X-Request-ID`
 2. **API Key 认证** → SHA-256 哈希查表，检查启用/过期状态
 3. **前置检查** `run_pre_checks()` → 配额检查 → 模型权限检查 → RPM 限流
-4. **渠道选择** `resolve_candidates()` → 只保留与入口协议一致的渠道 → 按 priority 分层，层内按系统设置 `routing_strategy` 排序（`weighted` 加权随机；`least_busy` 按 Redis `five:ch_inflight:{id}` 进行中请求数；`latency` 按 `five:ch_latency:{id}` 成功请求延迟 EWMA，流式取首包时间；同分保持加权顺序）→ 粘性会话渠道提前 → 返回候选列表
+4. **渠道选择** `plan_route()` 取会话、降级目标后调 `resolve_with_fallbacks()` → `resolve_candidates()` → 只保留与入口协议一致的渠道 → 按 priority 分层，层内按系统设置 `routing_strategy` 排序（`weighted` 加权随机；`least_busy` 按 Redis `five:ch_inflight:{id}` 进行中请求数；`latency` 按 `five:ch_latency:{id}` 成功请求延迟 EWMA，流式取首包时间；同分保持加权顺序）→ 粘性会话渠道提前 → 返回候选列表
 5. **并发限制** `concurrency_limiter.acquire()` → Redis 原子租约（请求级 lease ID，自动续租和过期回收）
 6. **代理编排** → 下面详述
 7. **后置处理** `_bill_and_log()` → 计费扣费 + 写日志 + 释放并发；上游 HTTP 连接由共享连接池复用
@@ -319,7 +322,7 @@ async def create(body: ..., user: User = require_permission("channel:write")):
 ### 成本控制
 
 - **滚动限额**（`services/spend_windows.py`）：Key 和团队的 `window_limits` `{"5h","1d","7d": USD}`。花费按小时桶 `five:spend:{key|team}:{id}:{hour}` 累加（TTL 8 天），`begin_request_budget` 检查，`settle` 记账，重置配额时清空。
-- **预算降级**（`services/downgrade.py`）：系统设置 `budget_downgrade` `{threshold, rules: {贵: 便宜}}`。压力取 Key 总额度、Key 窗口、团队总额度、团队窗口里占比最高的一个，达到阈值且目标模型被允许时改写模型，响应头 `x-five-downgraded-to`。
+- **预算降级**（`services/downgrade.py`）：系统设置 `budget_downgrade` `{threshold, rules: {贵: 便宜}}`。压力取 `budget_usages()` 里占比最高的一项（Key 总额度、Key 窗口、团队总额度、团队窗口），达到阈值且目标模型被允许时改写模型，响应头 `x-five-downgraded-to`。
 - **自动缓存**（`services/auto_cache.py`）：系统设置 `auto_cache_control` 打开后，`/v1/messages` 请求里没有任何 `cache_control` 时，在最后一个工具、系统提示、最后一条消息的最后一个非 thinking block 上加 `ephemeral` 标记。
 - **分时定价**（`services/time_pricing.py`）：系统设置 `time_pricing` 规则列表 `{name, models(通配), channel_ids, start, end, utc_offset, multiplier}`，按顺序第一条命中生效，结束不晚于开始时跨午夜。`cost_breakdown()` 把各档费用和缓存节省乘以倍率，`cost_detail.time_rule` 记规则名和倍率。预留按当前时段所有命中规则的最大倍率（至少 1）放大。
 - **会话**：`sticky_session.session_log_id()` 由请求头、Claude Code `metadata.user_id` 里的 `_session_<uuid>` 或对话指纹算出，写进 `request_logs.session_id`。`/api/stats/sessions` 按会话聚合。

@@ -94,7 +94,7 @@ async def test_keyword_filter_marks_the_request_and_still_forwards(client):
     provider.close = AsyncMock()
 
     with patch(
-        "app.routers.openai_proxy.resolve_with_fallbacks",
+        "app.services.routing.resolve_with_fallbacks",
         return_value=[(channel, lambda _: provider)],
     ):
         resp = await client.post(
@@ -123,7 +123,7 @@ async def test_keyword_filter_does_not_block_a_reply(client):
     provider.close = AsyncMock()
 
     with patch(
-        "app.routers.openai_proxy.resolve_with_fallbacks",
+        "app.services.routing.resolve_with_fallbacks",
         return_value=[(channel, lambda _: provider)],
     ):
         resp = await client.post(
@@ -147,7 +147,7 @@ async def test_secret_scan_marks_the_request_without_logging_the_secret(client):
     provider.close = AsyncMock()
 
     with patch(
-        "app.routers.openai_proxy.resolve_with_fallbacks",
+        "app.services.routing.resolve_with_fallbacks",
         return_value=[(channel, lambda _: provider)],
     ):
         resp = await client.post(
@@ -177,7 +177,7 @@ async def test_disabled_filter_does_not_block(client):
     provider.close = AsyncMock()
 
     with patch(
-        "app.routers.openai_proxy.resolve_with_fallbacks",
+        "app.services.routing.resolve_with_fallbacks",
         return_value=[(channel, lambda _: provider)],
     ):
         resp = await client.post(
@@ -226,7 +226,7 @@ def _provider(content: str = "ok"):
 
 async def _post(client, channel, provider, raw_key: str, content: str):
     with patch(
-        "app.routers.openai_proxy.resolve_with_fallbacks",
+        "app.services.routing.resolve_with_fallbacks",
         return_value=[(channel, lambda _: provider)],
     ):
         return await client.post(

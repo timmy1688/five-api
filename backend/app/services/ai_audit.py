@@ -213,7 +213,7 @@ async def _complete(model: str, excerpt: str) -> str:
     provider = provider_cls(channel)
     try:
         for body_in in _request_variants(model, excerpt):
-            path, headers, body = provider.transform_request(body_in, "/v1/chat/completions")
+            path, headers, body = provider.prepare_request(body_in, "/v1/chat/completions")
             response = await provider.client.post(
                 path,
                 json=body,

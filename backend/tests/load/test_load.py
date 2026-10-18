@@ -165,7 +165,7 @@ async def test_keyword_filter_stays_correct_under_concurrency(client):
         )
 
     with patch(
-        "app.routers.openai_proxy.resolve_with_fallbacks",
+        "app.services.routing.resolve_with_fallbacks",
         return_value=[(channel, lambda _: provider)],
     ):
         responses = await asyncio.gather(*[send(i % 2 == 0) for i in range(BURST)])

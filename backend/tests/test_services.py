@@ -64,7 +64,7 @@ async def test_openai_compatible_channel_accepts_v1_base_url_without_key():
     )
     provider = OpenAIProvider(channel)
     try:
-        path, headers, body = provider.transform_request(
+        path, headers, body = provider.prepare_request(
             {"model": "local-model", "messages": []},
             "/v1/chat/completions",
         )

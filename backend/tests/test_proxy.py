@@ -55,7 +55,7 @@ async def test_chat_completions_non_stream(client):
 
     mock_provider_cls = lambda channel: mock_provider
 
-    with patch("app.routers.openai_proxy.resolve_with_fallbacks", return_value=[(ch, mock_provider_cls)]):
+    with patch("app.services.routing.resolve_with_fallbacks", return_value=[(ch, mock_provider_cls)]):
         resp = await client.post(
             "/v1/chat/completions",
             json={"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}]},
@@ -94,7 +94,7 @@ async def test_openai_cache_read_is_deducted_and_logged(client):
     mock_provider.apply_model_mapping = lambda model: model
     mock_provider.close = AsyncMock()
 
-    with patch("app.routers.openai_proxy.resolve_with_fallbacks", return_value=[(ch, lambda _: mock_provider)]):
+    with patch("app.services.routing.resolve_with_fallbacks", return_value=[(ch, lambda _: mock_provider)]):
         resp = await client.post(
             "/v1/chat/completions",
             json={"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}]},
@@ -196,7 +196,7 @@ async def test_channel_retry_before_failover(client):
     mock_provider.close = AsyncMock()
 
     with patch(
-        "app.routers.openai_proxy.resolve_with_fallbacks",
+        "app.services.routing.resolve_with_fallbacks",
         return_value=[(ch, lambda _: mock_provider)],
     ):
         resp = await client.post(
@@ -231,7 +231,7 @@ async def test_cross_channel_failover_is_logged(client):
     working.close = AsyncMock()
 
     with patch(
-        "app.routers.openai_proxy.resolve_with_fallbacks",
+        "app.services.routing.resolve_with_fallbacks",
         return_value=[
             (first, lambda _: failing),
             (second, lambda _: working),
@@ -496,7 +496,7 @@ async def test_embeddings_and_completions_accept_token_arrays(client):
     provider.send_request = AsyncMock(side_effect=send_request)
     provider.apply_model_mapping = lambda model: model
     provider.close = AsyncMock()
-    with patch("app.routers.openai_proxy.resolve_with_fallbacks", return_value=[(ch, lambda _: provider)]):
+    with patch("app.services.routing.resolve_with_fallbacks", return_value=[(ch, lambda _: provider)]):
         embedded = await client.post(
             "/v1/embeddings",
             json={"model": "text-embedding-3-small", "input": [[11, 22], [33]]},
@@ -570,7 +570,7 @@ async def test_stream_forwards_upstream_4xx_json(client):
     provider.send_stream = send_stream
     provider.apply_model_mapping = lambda model: model
     provider.close = AsyncMock()
-    with patch("app.routers.openai_proxy.resolve_with_fallbacks", return_value=[(ch, lambda _: provider)]):
+    with patch("app.services.routing.resolve_with_fallbacks", return_value=[(ch, lambda _: provider)]):
         resp = await client.post(
             "/v1/chat/completions",
             json={"model": "gpt-4o", "stream": True, "messages": [{"role": "user", "content": "hi"}]},
@@ -713,7 +713,7 @@ async def test_embeddings_non_stream(client):
 
     mock_provider_cls = lambda channel: mock_provider
 
-    with patch("app.routers.openai_proxy.resolve_with_fallbacks", return_value=[(ch, mock_provider_cls)]):
+    with patch("app.services.routing.resolve_with_fallbacks", return_value=[(ch, mock_provider_cls)]):
         resp = await client.post(
             "/v1/embeddings",
             json={"model": "text-embedding-3-small", "input": "hello"},
@@ -771,7 +771,7 @@ async def test_inference_audit_records_only_when_enabled(client):
     payload = {"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}]}
 
     with patch(
-        "app.routers.openai_proxy.resolve_with_fallbacks",
+        "app.services.routing.resolve_with_fallbacks",
         return_value=[(ch, lambda _: mock_provider)],
     ):
         quiet = await client.post(

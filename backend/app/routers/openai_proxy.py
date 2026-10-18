@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response
 
 from app.models import APIKey, ModelPrice
-from app.providers.registry import list_available_models, resolve_with_fallbacks
+from app.providers.registry import list_available_models
 from app.schemas.openai import ChatCompletionRequest, CompletionRequest, EmbeddingRequest
 from app.services.audit import open_audit, security_exempt
 from app.services.content_filter import collect_request_hits, format_hits
@@ -21,9 +21,8 @@ from app.services.proxy import (
     open_stream,
     stream_with_failover,
 )
-from app.services.downgrade import downgrade_headers, downgrade_target, mark_downgraded
 from app.services.error_detail import upstream_json_error
-from app.services.sticky_session import get_sticky_channel, make_session_key, session_log_id
+from app.services.routing import plan_route
 from app.utils.ip_check import get_client_ip
 
 router = APIRouter(tags=["openai-proxy"])
@@ -122,7 +121,7 @@ async def _proxy(
     default_output: int | None = None,
     request_units: int = 0,
 ):
-    """所有 OpenAI 兼容端点共享的编排入口。只有 chat 可以落到其他协议的渠道。"""
+    """所有 OpenAI 兼容端点共享的编排入口。"""
     request_id = getattr(request.state, "request_id", "")
     ip = get_client_ip(request)
     start_time = time.monotonic()
@@ -133,28 +132,7 @@ async def _proxy(
         if not model:
             openai_error(400, "invalid_request_error", "model_required", "model is required")
         await run_pre_checks(api_key, model)
-        session_key = await make_session_key(api_key.id, request.headers, body_dict)
-        session_id = session_log_id(api_key.id, request.headers, body_dict)
-        sticky_channel_id = await get_sticky_channel(session_key)
-
-        allowed_models = await get_effective_allowed_models(api_key)
-        downgraded_to = await downgrade_target(api_key, model, allowed_models)
-        candidates = await resolve_with_fallbacks(
-            model, preferred_protocol="openai",
-            sticky_channel_id=sticky_channel_id,
-            allowed_models=allowed_models,
-            serve_as=downgraded_to,
-        )
-        if endpoint != "/v1/chat/completions":
-            candidates = [
-                candidate for candidate in candidates
-                if candidate[0].provider == "openai"
-            ]
-            if not candidates:
-                openai_error(
-                    404, "invalid_request_error", "model_not_found",
-                    f"No OpenAI-compatible channel supports {endpoint}",
-                )
+        plan = await plan_route(api_key, model, "openai", request.headers, body_dict)
     except HTTPException as exc:
         await log_rejected_request(
             api_key, request_id, endpoint, model, exc.status_code,
@@ -195,14 +173,14 @@ async def _proxy(
         openai_error(status, error_type, code, message)
 
     if stream_fn is not None:
-        upstream_headers: dict[str, str] = downgrade_headers(downgraded_to)
+        upstream_headers = plan.headers
         return await open_stream(
             stream_with_failover(
-                candidates, stream_fn, api_key, endpoint, model,
+                plan.candidates, stream_fn, api_key, endpoint, model,
                 request_id, start_time, ip, error_event,
                 concurrency_lease_id,
-                session_key=session_key,
-                session_id=session_id,
+                session_key=plan.session_key,
+                session_id=plan.session_id,
                 audit=audit,
                 security_hits=security_hits,
                 budget=budget,
@@ -212,16 +190,16 @@ async def _proxy(
         )
 
     response = await execute_with_failover(
-        candidates, send_fn, api_key, endpoint, model,
+        plan.candidates, send_fn, api_key, endpoint, model,
         request_id, start_time, ip, openai_error,
         concurrency_lease_id,
-        session_key=session_key,
-        session_id=session_id,
+        session_key=plan.session_key,
+        session_id=plan.session_id,
         audit=audit,
         security_hits=security_hits,
         budget=budget,
     )
-    return mark_downgraded(response, downgraded_to)
+    return plan.mark(response)
 
 
 async def _proxy_endpoint(request: Request, body, endpoint: str, api_key: APIKey):

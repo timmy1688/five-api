@@ -78,7 +78,7 @@ async def test_official_upstream_error_is_logged(client):
     provider.close = AsyncMock()
 
     with patch(
-        "app.routers.openai_proxy.resolve_with_fallbacks",
+        "app.services.routing.resolve_with_fallbacks",
         return_value=[(channel, lambda _: provider)],
     ):
         resp = await client.post(
@@ -110,7 +110,7 @@ async def test_reseller_upstream_error_is_logged(client):
     provider.close = AsyncMock()
 
     with patch(
-        "app.routers.openai_proxy.resolve_with_fallbacks",
+        "app.services.routing.resolve_with_fallbacks",
         return_value=[(channel, lambda _: provider)],
     ):
         resp = await client.post(
@@ -136,7 +136,7 @@ async def test_system_audit_switch_records_content(client):
     provider.close = AsyncMock()
 
     with patch(
-        "app.routers.openai_proxy.resolve_with_fallbacks",
+        "app.services.routing.resolve_with_fallbacks",
         return_value=[(channel, lambda _: provider)],
     ):
         resp = await client.post(

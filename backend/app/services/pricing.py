@@ -6,6 +6,7 @@ from app.services import time_pricing
 from app.services.settings_service import gateway_config
 
 MILLION = Decimal("1000000")
+USD_STEP = Decimal("0.000001")
 
 
 def find_channel_pricing(
@@ -298,10 +299,10 @@ async def cost_breakdown(
         factor = Decimal(str(rule["multiplier"]))
         lines = {name: value * factor for name, value in lines.items()}
         savings *= factor
-    cost = sum(lines.values(), Decimal(0)).quantize(Decimal("0.000001"))
+    cost = sum(lines.values(), Decimal(0)).quantize(USD_STEP)
     return {
         "cost": cost,
-        "cache_savings": savings.quantize(Decimal("0.000001")),
+        "cache_savings": savings.quantize(USD_STEP),
         "detail": {
             "model": model,
             "price_source": source,
@@ -319,7 +320,7 @@ async def cost_breakdown(
                 "output": completion_tokens,
                 "request_units": request_units,
             },
-            "lines": {name: float(value.quantize(Decimal("0.000001"))) for name, value in lines.items()},
+            "lines": {name: float(value.quantize(USD_STEP)) for name, value in lines.items()},
             "time_rule": (
                 {"name": rule["name"], "multiplier": rule["multiplier"]} if rule is not None else None
             ),

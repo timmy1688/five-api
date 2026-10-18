@@ -3,7 +3,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field, field_validator
 
-from app.services.spend_windows import normalize_limits
+from app.schemas.common import WindowLimits
 
 
 def _validate_ip_list(v):
@@ -28,7 +28,7 @@ class APIKeyCreate(BaseModel):
     model_group_id: int | None = None
     team_id: int | None = None
     quota_reset_day: int | None = Field(None, ge=1, le=31)
-    window_limits: dict[str, float] = Field(default_factory=dict)
+    window_limits: WindowLimits = Field(default_factory=dict)
     expires_at: datetime | None = None
     audit_policy: str = "on"
 
@@ -65,11 +65,6 @@ class APIKeyCreate(BaseModel):
             raise ValueError("audit_policy must be on or off")
         return v
 
-    @field_validator("window_limits", mode="before")
-    @classmethod
-    def validate_windows(cls, v):
-        return None if v is None else normalize_limits(v)
-
 
 class APIKeyUpdate(BaseModel):
     name: str | None = Field(None, min_length=1, max_length=128)
@@ -84,7 +79,7 @@ class APIKeyUpdate(BaseModel):
     is_enabled: bool | None = None
     audit_policy: str | None = None
     quota_reset_day: int | None = Field(None, ge=1, le=31)
-    window_limits: dict[str, float] | None = None
+    window_limits: WindowLimits | None = None
     expires_at: datetime | None = None
 
     @field_validator("allowed_ips", mode="before")
@@ -119,11 +114,6 @@ class APIKeyUpdate(BaseModel):
         if v is not None and v not in {"on", "off"}:
             raise ValueError("audit_policy must be on or off")
         return v
-
-    @field_validator("window_limits", mode="before")
-    @classmethod
-    def validate_windows(cls, v):
-        return None if v is None else normalize_limits(v)
 
 
 class APIKeyResponse(BaseModel):

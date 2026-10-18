@@ -7,9 +7,9 @@ by their cheaper target instead of failing later with a hard 429.
 
 from fastapi.responses import JSONResponse, Response
 
-from app.models import APIKey, Team
+from app.models import APIKey
+from app.services.budget_usage import budget_pressure
 from app.services.settings_service import gateway_config
-from app.services.spend_windows import normalize_limits, window_spend
 
 
 DOWNGRADE_HEADER = "x-five-downgraded-to"
@@ -26,33 +26,6 @@ def mark_downgraded(response, target: str | None):
         response.headers.update(downgrade_headers(target))
         return response
     return JSONResponse(content=response, headers=downgrade_headers(target))
-
-
-def _share(used: float, total: float) -> float:
-    if total < 0:
-        return 0.0
-    if total == 0:
-        return 1.0
-    return used / total
-
-
-async def _window_pressure(scope: str, owner_id: int, limits) -> float:
-    caps = normalize_limits(limits)
-    if not caps:
-        return 0.0
-    spent = await window_spend(scope, owner_id)
-    return max(_share(spent[window], cap) for window, cap in caps.items())
-
-
-async def budget_pressure(api_key: APIKey) -> float:
-    pressure = _share(float(api_key.quota_used), float(api_key.quota_total))
-    pressure = max(pressure, await _window_pressure("key", api_key.id, api_key.window_limits))
-    if api_key.team_id:
-        team = await Team.get_or_none(id=api_key.team_id)
-        if team is not None:
-            pressure = max(pressure, _share(float(team.quota_used), float(team.quota_total)))
-            pressure = max(pressure, await _window_pressure("team", team.id, team.window_limits))
-    return pressure
 
 
 async def downgrade_target(api_key: APIKey, model: str, allowed_models: list[str] | None) -> str | None:

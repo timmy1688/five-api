@@ -1,15 +1,9 @@
 from collections.abc import AsyncIterator
 
-from app.models import Channel
 from app.providers.base import BaseProvider, forwardable_headers, read_error_body
 
 
 class AnthropicProvider(BaseProvider):
-    def __init__(self, channel: Channel):
-        super().__init__(channel)
-
-    # ── Anthropic native pass-through (used by /v1/messages when upstream is anthropic) ──
-
     def _path(self, resource: str) -> str:
         # Base URL may be the server root or already end in /v1.
         if self.channel.base_url.rstrip("/").lower().endswith("/v1"):

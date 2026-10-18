@@ -16,6 +16,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from app.models import APIKey, Channel
 from app.providers.base import BaseProvider, forwardable_headers
+from app.services import alerts
 from app.services.channel_health import record_failure, record_rate_limit, record_success
 from app.services.channel_stats import begin_attempt, end_attempt, record_latency
 from app.services.concurrency import concurrency_limiter
@@ -35,7 +36,6 @@ from app.services.error_detail import (
 )
 from app.services.key_pool import KEY_STATUSES, retry_after_seconds
 from app.services.logging_service import save_request_log
-from app.services import alerts
 from app.services.pricing import cost_breakdown, count_text_tokens
 from app.services.quota import RequestLease, deduct_quota
 from app.services.sticky_session import bind_sticky_channel
