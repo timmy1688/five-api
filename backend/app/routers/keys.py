@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from app.models import User, APIKey, ModelGroup, Team
 from app.schemas.api_key import APIKeyCreate, APIKeyCreateResponse, APIKeyResponse, APIKeyUpdate
 from app.services.auth import hash_api_key, require_permission
+from app.services.spend_windows import normalize_limits, reset_windows, window_spend
 from app.utils.key_generator import generate_api_key
 
 router = APIRouter(prefix="/api/keys", tags=["keys"])
@@ -53,6 +54,8 @@ async def _to_response(
         audit_policy=k.audit_policy if k.audit_policy in {"on", "off"} else "on",
         quota_reset_day=k.quota_reset_day,
         quota_last_reset_at=k.quota_last_reset_at,
+        window_limits=normalize_limits(k.window_limits),
+        window_spend=await window_spend("key", k.id),
         expires_at=k.expires_at,
         created_at=k.created_at,
         updated_at=k.updated_at,
@@ -109,6 +112,7 @@ async def create_key(body: APIKeyCreate, _: User = require_permission("key:write
         quota_last_reset_at=(
             datetime.now(timezone.utc) if body.quota_reset_day is not None else None
         ),
+        window_limits=body.window_limits,
         expires_at=body.expires_at,
     )
     resp = await _to_response(k)
@@ -162,4 +166,5 @@ async def reset_quota(key_id: int, _: User = require_permission("key:write")):
     )
     if not updated:
         raise HTTPException(status_code=404, detail="Key not found")
+    await reset_windows("key", key_id)
     return {"message": "Quota reset"}

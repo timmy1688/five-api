@@ -110,6 +110,13 @@ class FakeRedis:
         self.data[key] = str(int(self.data.get(key, 0)) + 1)
         return int(self.data[key])
 
+    async def incrby(self, key, amount):
+        self.data[key] = str(int(self.data.get(key, 0)) + int(amount))
+        return int(self.data[key])
+
+    async def mget(self, keys):
+        return [self.data.get(key) for key in keys]
+
     async def decr(self, key):
         self.data[key] = str(int(self.data.get(key, 0)) - 1)
         return int(self.data[key])

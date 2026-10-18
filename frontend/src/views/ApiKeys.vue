@@ -38,6 +38,7 @@
                 <span style="margin-left: 6px; color: #10b981">{{ t('keys.remain') }}: ${{ row.quota_remaining.toFixed(4) }}</span>
               </div>
             </template>
+            <WindowUsage :limits="row.window_limits" :spend="row.window_spend" />
           </template>
         </el-table-column>
         <el-table-column :label="t('keys.reset')" width="64" align="center">
@@ -131,6 +132,10 @@
             <el-option v-for="d in 31" :key="d" :label="t('keys.day', { day: d })" :value="d" />
           </el-select>
           <div style="font-size: 12px; color: #909399">{{ t('keys.resetHint') }}</div>
+        </el-form-item>
+        <el-form-item :label="t('windows.label')">
+          <WindowLimitsInput v-model="form.window_limits" />
+          <div style="font-size: 12px; color: #909399">{{ t('windows.hint') }}</div>
         </el-form-item>
         <el-form-item :label="t('keys.concurrencyLabel')">
           <el-input-number v-model="form.concurrent_limit" :min="1" :max="100" />
@@ -280,6 +285,8 @@ import { teamsApi } from '@/api/teams'
 import { modelsApi } from '@/api/models'
 import { useAuthStore } from '@/stores/auth'
 import { useI18n } from '@/i18n'
+import WindowLimitsInput from '@/components/WindowLimitsInput.vue'
+import WindowUsage from '@/components/WindowUsage.vue'
 
 const { t } = useI18n()
 import { ElMessage } from 'element-plus'
@@ -327,6 +334,7 @@ const emptyForm = () => ({
   model_group_id: null as number | null,
   team_id: null as number | null,
   quota_reset_day: null as number | null,
+  window_limits: {} as Record<string, number>,
   audit_policy: 'on',
 })
 const form = ref(emptyForm())
@@ -369,6 +377,7 @@ function openEdit(row: any) {
     model_group_id: row.model_group_id ?? null,
     team_id: row.team_id ?? null,
     quota_reset_day: row.quota_reset_day ?? null,
+    window_limits: { ...(row.window_limits || {}) },
     audit_policy: row.audit_policy === 'off' ? 'off' : 'on',
   }
   dialogVisible.value = true

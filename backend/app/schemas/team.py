@@ -2,6 +2,8 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field, field_validator
 
+from app.services.spend_windows import normalize_limits
+
 
 def _check_quota(v):
     if v is not None and v != -1 and v < 0:
@@ -14,6 +16,7 @@ class TeamCreate(BaseModel):
     description: str = Field("", max_length=256)
     quota_total: float = Field(-1, allow_inf_nan=False)
     quota_reset_day: int | None = Field(None, ge=1, le=31)
+    window_limits: dict[str, float] = Field(default_factory=dict)
     is_enabled: bool = True
 
     @field_validator("quota_total")
@@ -21,18 +24,29 @@ class TeamCreate(BaseModel):
     def validate_quota(cls, v):
         return _check_quota(v)
 
+    @field_validator("window_limits", mode="before")
+    @classmethod
+    def validate_windows(cls, v):
+        return None if v is None else normalize_limits(v)
+
 
 class TeamUpdate(BaseModel):
     name: str | None = Field(None, min_length=1, max_length=128)
     description: str | None = Field(None, max_length=256)
     quota_total: float | None = Field(None, allow_inf_nan=False)
     quota_reset_day: int | None = Field(None, ge=1, le=31)
+    window_limits: dict[str, float] | None = None
     is_enabled: bool | None = None
 
     @field_validator("quota_total")
     @classmethod
     def validate_quota(cls, v):
         return _check_quota(v)
+
+    @field_validator("window_limits", mode="before")
+    @classmethod
+    def validate_windows(cls, v):
+        return None if v is None else normalize_limits(v)
 
 
 class TeamResponse(BaseModel):
@@ -44,6 +58,8 @@ class TeamResponse(BaseModel):
     quota_remaining: float
     quota_reset_day: int | None
     quota_last_reset_at: datetime | None
+    window_limits: dict[str, float] = Field(default_factory=dict)
+    window_spend: dict[str, float] = Field(default_factory=dict)
     is_enabled: bool
     key_count: int = 0
     created_at: datetime

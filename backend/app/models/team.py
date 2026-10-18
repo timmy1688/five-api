@@ -12,6 +12,8 @@ class Team(Model):
     quota_used = fields.DecimalField(max_digits=16, decimal_places=6, default=0)
     quota_reset_day = fields.SmallIntField(null=True)
     quota_last_reset_at = fields.DatetimeField(null=True)
+    # Rolling USD caps keyed by "5h", "1d", "7d". A missing key means no cap.
+    window_limits = fields.JSONField(default=dict)
     is_enabled = fields.BooleanField(default=True)
     created_at = fields.DatetimeField(auto_now_add=True)
     updated_at = fields.DatetimeField(auto_now=True)

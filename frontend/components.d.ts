@@ -56,6 +56,8 @@ declare module 'vue' {
     LangSwitch: typeof import('./src/components/LangSwitch.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
+    WindowLimitsInput: typeof import('./src/components/WindowLimitsInput.vue')['default']
+    WindowUsage: typeof import('./src/components/WindowUsage.vue')['default']
   }
   export interface GlobalDirectives {
     vLoading: typeof import('element-plus/es')['ElLoadingDirective']

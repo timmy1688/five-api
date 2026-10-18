@@ -11,6 +11,7 @@ from app.dependencies import get_redis
 from app.models import APIKey, Team
 from app.services.pricing import estimate_request_tokens, estimate_upper_cost
 from app.services.rate_limit import rate_limiter
+from app.services.spend_windows import exceeded_window, record_spend
 
 logger = logging.getLogger(__name__)
 
@@ -53,15 +54,18 @@ return 1
 
 
 class QuotaExceeded(Exception):
-    def __init__(self, key_id: int, scope: str = "key"):
+    def __init__(self, key_id: int, scope: str = "key", window: str = ""):
         self.key_id = key_id
         self.scope = scope
+        self.window = window
         super().__init__(f"Quota exceeded for {scope} of key {key_id}")
 
     _DETAILS = {
         "key": (429, "quota_exceeded", "Spending quota exceeded"),
         "team": (429, "team_quota_exceeded", "Team spending quota exceeded"),
         "team_disabled": (403, "team_disabled", "Team is disabled"),
+        "key_window": (429, "window_limit", "Key {window} spending limit reached"),
+        "team_window": (429, "team_window_limit", "Team {window} spending limit reached"),
     }
 
     @property
@@ -74,7 +78,7 @@ class QuotaExceeded(Exception):
 
     @property
     def message(self) -> str:
-        return self._DETAILS[self.scope][2]
+        return self._DETAILS[self.scope][2].format(window=self.window)
 
 
 def _micro(amount: Decimal) -> int:
@@ -172,8 +176,17 @@ class RequestLease:
                 await deduct_quota(self.api_key_id, cost)
                 if self.team_id:
                     await deduct_team_quota(self.team_id, cost)
+                await self._record_windows(cost)
         finally:
             await self._clear(actual_tokens)
+
+    async def _record_windows(self, cost: Decimal) -> None:
+        try:
+            await record_spend("key", self.api_key_id, cost)
+            if self.team_id:
+                await record_spend("team", self.team_id, cost)
+        except Exception:
+            logger.exception("window spend record failed for key %s", self.api_key_id)
 
     async def release(self) -> None:
         if self.closed:
@@ -227,6 +240,13 @@ async def begin_request_budget(
     try:
         if team and not team.is_enabled:
             raise QuotaExceeded(api_key.id, scope="team_disabled")
+        window = await exceeded_window("key", api_key.id, api_key.window_limits)
+        if window:
+            raise QuotaExceeded(api_key.id, scope="key_window", window=window)
+        if team:
+            window = await exceeded_window("team", team.id, team.window_limits)
+            if window:
+                raise QuotaExceeded(api_key.id, scope="team_window", window=window)
         await rate_limiter.reserve_tpm(
             api_key.id, api_key.tpm_limit, input_tokens + output_tokens
         )

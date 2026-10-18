@@ -33,6 +33,7 @@
                 ${{ row.quota_used.toFixed(4) }} / ${{ row.quota_total.toFixed(2) }}
               </div>
             </template>
+            <WindowUsage :limits="row.window_limits" :spend="row.window_spend" />
           </template>
         </el-table-column>
         <el-table-column :label="t('teams.resetDay')" width="110" align="center">
@@ -93,6 +94,10 @@
           </el-select>
           <div style="font-size: 12px; color: #909399">{{ t('teams.resetDayHint') }}</div>
         </el-form-item>
+        <el-form-item :label="t('windows.label')">
+          <WindowLimitsInput v-model="form.window_limits" />
+          <div style="font-size: 12px; color: #909399">{{ t('windows.hint') }}</div>
+        </el-form-item>
         <el-form-item :label="t('common.enabled')">
           <el-switch v-model="form.is_enabled" />
           <div style="font-size: 12px; color: #909399; margin-left: 8px">{{ t('teams.disabledHint') }}</div>
@@ -112,6 +117,8 @@ import { ElMessage } from 'element-plus'
 import { teamsApi } from '@/api/teams'
 import { useAuthStore } from '@/stores/auth'
 import { useI18n } from '@/i18n'
+import WindowLimitsInput from '@/components/WindowLimitsInput.vue'
+import WindowUsage from '@/components/WindowUsage.vue'
 
 const { t } = useI18n()
 const auth = useAuthStore()
@@ -130,6 +137,7 @@ const emptyForm = () => ({
   description: '',
   quota_total: -1,
   quota_reset_day: null as number | null,
+  window_limits: {} as Record<string, number>,
   is_enabled: true,
 })
 const form = ref(emptyForm())
@@ -165,6 +173,7 @@ function openEdit(row: any) {
     description: row.description,
     quota_total: row.quota_total,
     quota_reset_day: row.quota_reset_day ?? null,
+    window_limits: { ...(row.window_limits || {}) },
     is_enabled: row.is_enabled,
   }
   dialogVisible.value = true

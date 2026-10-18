@@ -21,6 +21,8 @@ class APIKey(Model):
     audit_policy = fields.CharField(max_length=16, default="on")
     quota_reset_day = fields.SmallIntField(null=True)
     quota_last_reset_at = fields.DatetimeField(null=True)
+    # Rolling USD caps keyed by "5h", "1d", "7d". A missing key means no cap.
+    window_limits = fields.JSONField(default=dict)
     expires_at = fields.DatetimeField(null=True)
     created_at = fields.DatetimeField(auto_now_add=True)
     updated_at = fields.DatetimeField(auto_now=True)

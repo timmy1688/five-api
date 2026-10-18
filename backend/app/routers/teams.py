@@ -6,11 +6,12 @@ from tortoise.functions import Count
 from app.models import APIKey, Team, User
 from app.schemas.team import TeamCreate, TeamResponse, TeamUpdate
 from app.services.auth import require_permission
+from app.services.spend_windows import normalize_limits, reset_windows, window_spend
 
 router = APIRouter(prefix="/api/teams", tags=["teams"])
 
 
-def _to_response(t: Team, key_count: int = 0) -> TeamResponse:
+async def _to_response(t: Team, key_count: int = 0) -> TeamResponse:
     total = float(t.quota_total)
     used = float(t.quota_used)
     return TeamResponse(
@@ -22,6 +23,8 @@ def _to_response(t: Team, key_count: int = 0) -> TeamResponse:
         quota_remaining=-1.0 if total == -1 else max(0.0, total - used),
         quota_reset_day=t.quota_reset_day,
         quota_last_reset_at=t.quota_last_reset_at,
+        window_limits=normalize_limits(t.window_limits),
+        window_spend=await window_spend("team", t.id),
         is_enabled=t.is_enabled,
         key_count=key_count,
         created_at=t.created_at,
@@ -50,7 +53,7 @@ async def list_teams(
     total = await Team.all().count()
     teams = await Team.all().order_by("-id").offset((page - 1) * size).limit(size)
     counts = await _key_counts([t.id for t in teams])
-    return {"total": total, "items": [_to_response(t, counts.get(t.id, 0)) for t in teams]}
+    return {"total": total, "items": [await _to_response(t, counts.get(t.id, 0)) for t in teams]}
 
 
 @router.get("/all")
@@ -66,7 +69,7 @@ async def create_team(body: TeamCreate, _: User = require_permission("team:write
     data = body.model_dump()
     if body.quota_reset_day is not None:
         data["quota_last_reset_at"] = datetime.now(timezone.utc)
-    return _to_response(await Team.create(**data))
+    return await _to_response(await Team.create(**data))
 
 
 @router.get("/{team_id}", response_model=TeamResponse)
@@ -75,7 +78,7 @@ async def get_team(team_id: int, _: User = require_permission("team:read")):
     if t is None:
         raise HTTPException(status_code=404, detail="Team not found")
     counts = await _key_counts([t.id])
-    return _to_response(t, counts.get(t.id, 0))
+    return await _to_response(t, counts.get(t.id, 0))
 
 
 @router.put("/{team_id}", response_model=TeamResponse)
@@ -96,7 +99,7 @@ async def update_team(team_id: int, body: TeamUpdate, _: User = require_permissi
         await Team.filter(id=team_id).update(**data)
         t = await Team.get(id=team_id)
     counts = await _key_counts([t.id])
-    return _to_response(t, counts.get(t.id, 0))
+    return await _to_response(t, counts.get(t.id, 0))
 
 
 @router.post("/{team_id}/reset-quota")
@@ -106,6 +109,7 @@ async def reset_team_quota(team_id: int, _: User = require_permission("team:writ
     )
     if not updated:
         raise HTTPException(status_code=404, detail="Team not found")
+    await reset_windows("team", team_id)
     return {"message": "Quota reset"}
 
 
