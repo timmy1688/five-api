@@ -1,6 +1,7 @@
 export type NavigationName =
   | 'Dashboard'
   | 'Insights'
+  | 'Reconcile'
   | 'Onboarding'
   | 'Channels'
   | 'Models'
@@ -18,6 +19,7 @@ export type NavigationName =
 export type NavigationIcon =
   | 'dashboard'
   | 'insights'
+  | 'reconcile'
   | 'onboarding'
   | 'channels'
   | 'models'
@@ -35,7 +37,7 @@ export type NavigationIcon =
 export interface NavigationItem {
   path: string
   name: NavigationName
-  titleKey: 'nav.overview' | 'nav.insights' | 'nav.onboarding' | 'nav.channels' | 'nav.models' | 'nav.keys' | 'nav.teams' | 'nav.groups' | 'nav.pricing' | 'nav.logs' | 'nav.audit' | 'nav.security' | 'nav.admins' | 'nav.roles' | 'nav.settings'
+  titleKey: 'nav.overview' | 'nav.insights' | 'nav.reconcile' | 'nav.onboarding' | 'nav.channels' | 'nav.models' | 'nav.keys' | 'nav.teams' | 'nav.groups' | 'nav.pricing' | 'nav.logs' | 'nav.audit' | 'nav.security' | 'nav.admins' | 'nav.roles' | 'nav.settings'
   permission: string
   icon: NavigationIcon
 }
@@ -52,6 +54,7 @@ export const navigationGroups: NavigationGroup[] = [
     items: [
       { path: '/', name: 'Dashboard', titleKey: 'nav.overview', permission: 'stat:read', icon: 'dashboard' },
       { path: '/insights', name: 'Insights', titleKey: 'nav.insights', permission: 'stat:read', icon: 'insights' },
+      { path: '/reconcile', name: 'Reconcile', titleKey: 'nav.reconcile', permission: 'stat:read', icon: 'reconcile' },
     ],
   },
   {

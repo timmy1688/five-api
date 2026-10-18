@@ -145,7 +145,7 @@ def create_app() -> FastAPI:
     app.add_middleware(RequestIDMiddleware)
 
     from app.routers import (
-        auth, channels, insights, keys, logs,
+        auth, channels, insights, keys, logs, reconcile,
         model_groups, model_prices, models,
         roles, stats, teams, users,
         openai_proxy, anthropic_proxy, metrics,
@@ -171,6 +171,7 @@ def create_app() -> FastAPI:
     app.include_router(settings_router.router)
     app.include_router(stats.router)
     app.include_router(insights.router)
+    app.include_router(reconcile.router)
     app.include_router(teams.router)
     app.include_router(users.router)
     app.include_router(metrics.router)

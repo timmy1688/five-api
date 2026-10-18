@@ -207,6 +207,28 @@
             </div>
           </div>
 
+          <template v-if="detail.cost_detail">
+            <div class="token-section-title">{{ t('logs.costBreakdown') }}</div>
+            <p class="error-hint">
+              {{ t('logs.priceSource') }}: {{ t(`logs.source_${detail.cost_detail.price_source}` as 'logs.source_global') }} · {{ detail.cost_detail.model }}
+              <template v-if="detail.cost_detail.time_rule"> · {{ t('logs.timeRule', { name: detail.cost_detail.time_rule.name, x: detail.cost_detail.time_rule.multiplier }) }}</template>
+            </p>
+            <table class="breakdown">
+              <tbody>
+                <tr v-for="line in costLines" :key="line.key">
+                  <td>{{ t(`logs.line_${line.key}` as 'logs.line_input') }}</td>
+                  <td class="num">{{ line.units }}</td>
+                  <td class="num muted">× {{ line.price }}</td>
+                  <td class="num">${{ line.amount.toFixed(6) }}</td>
+                </tr>
+                <tr v-if="detail.cache_savings > 0" class="saving">
+                  <td colspan="3">{{ t('logs.cacheSavings') }}</td>
+                  <td class="num">-${{ detail.cache_savings.toFixed(6) }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </template>
+
           <div class="token-section-title">{{ t('logs.downstream') }}</div>
           <p class="error-hint">{{ t('logs.downstreamHint') }}</p>
           <div class="error-panel">
@@ -263,6 +285,19 @@ const page = ref(1)
 const drawerVisible = ref(false)
 const detailLoading = ref(false)
 const detail = ref<any>(null)
+const costLines = computed(() => {
+  const cd = detail.value?.cost_detail
+  if (!cd) return []
+  const units: Record<string, number> = { ...cd.tokens, request: cd.tokens.request_units }
+  return ['input', 'cache_read', 'cache_write', 'output', 'request']
+    .filter((key) => units[key] > 0 && key in cd.lines)
+    .map((key) => ({
+      key,
+      units: units[key].toLocaleString(),
+      price: key === 'request' ? `$${cd.prices.request}` : `$${cd.prices[key]}/1M`,
+      amount: cd.lines[key] as number,
+    }))
+})
 const auditVisible = ref(false)
 const auditLoading = ref(false)
 const auditText = ref('')
@@ -472,6 +507,26 @@ onMounted(async () => {
 
 .cost-highlight {
   color: #6366f1;
+}
+
+.breakdown {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.breakdown td {
+  padding: 6px 4px;
+  border-bottom: 1px solid #f1f5f9;
+}
+
+.breakdown .num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.breakdown .saving td {
+  color: #10b981;
 }
 
 .audit-label {
