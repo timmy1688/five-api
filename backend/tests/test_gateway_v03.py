@@ -216,9 +216,10 @@ async def test_team_budget_blocks_and_accumulates(client):
         await team.refresh_from_db()
         assert team.quota_used == Decimal("0.2")
 
+        await Team.filter(id=team.id).update(quota_used=Decimal("1"))
         blocked = await client.post(
             "/v1/chat/completions",
-            json={"model": "gpt-4o", "max_tokens": 1000, "messages": [{"role": "user", "content": "hi"}]},
+            json={"model": "gpt-4o", "max_tokens": 1, "messages": [{"role": "user", "content": "hi"}]},
             headers=auth_header(RAW_KEY),
         )
     assert blocked.status_code == 429

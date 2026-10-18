@@ -255,29 +255,29 @@ async def test_cross_channel_failover_is_logged(client):
     assert log.failed_over is True
 
 
-async def test_estimated_quota_hold_rejects_before_upstream(client):
+async def test_quota_hold_admits_a_request_larger_than_the_remainder(client):
     ch, _, _ = await _setup_proxy_env()
-    raw = "sk-hold-reject"
-    await APIKey.create(
-        name="hold-reject",
+    raw = "sk-hold-small"
+    key = await APIKey.create(
+        name="hold-small",
         key_hash=hash_api_key(raw),
         key_prefix=raw[:8],
         quota_total=Decimal("0.01"),
         quota_used=Decimal("0"),
     )
-    http = AsyncMock()
-    http.is_closed = False
-    http.post = AsyncMock()
-    with patch("app.providers.base._shared_http_client", return_value=http):
+    provider = AsyncMock()
+    provider.send_request = AsyncMock(return_value=MOCK_COMPLETION_RESPONSE)
+    provider.apply_model_mapping = lambda m: m
+    provider.close = AsyncMock()
+    with patch("app.services.routing.resolve_with_fallbacks", return_value=[(ch, lambda _: provider)]):
         resp = await client.post(
             "/v1/chat/completions",
             json={"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}]},
             headers=auth_header(raw),
         )
-    assert resp.status_code == 429
-    assert resp.json()["detail"]["error"]["code"] == "quota_exceeded"
-    http.post.assert_not_awaited()
-    assert ch.id
+    assert resp.status_code == 200
+    await key.refresh_from_db()
+    assert key.quota_used > 0
 
 
 async def test_tpm_limit_rejects_before_upstream(client):

@@ -410,7 +410,7 @@ async def test_quota_hold_blocks_a_second_reservation():
         name="hold", key_hash=hash_api_key("sk-hold"), key_prefix="sk-hold0",
         quota_total=Decimal("1"), quota_used=Decimal("0.40"),
     )
-    assert await reserve_quota(k, "req-a", Decimal("0.50")) is True
+    assert await reserve_quota(k, "req-a", Decimal("0.60")) is True
     with pytest.raises(QuotaExceeded):
         await reserve_quota(k, "req-b", Decimal("0.20"))
     await release_quota(k.id, "req-a")

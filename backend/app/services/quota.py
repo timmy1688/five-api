@@ -20,6 +20,8 @@ HOLD_TTL = 600
 HOLD_PREFIX = "five:quota:hold:"
 TEAM_HOLD_PREFIX = "five:quota:team_hold:"
 
+# Admit while anything is left, so a small remainder still serves a request.
+# The hold blocks concurrent requests; overspend is at most one request.
 QUOTA_RESERVE_SCRIPT = """
 local key = KEYS[1]
 local request_id = ARGV[1]
@@ -35,7 +37,7 @@ local vals = redis.call('HVALS', key)
 for _, value in ipairs(vals) do
     sum = sum + tonumber(value)
 end
-if used >= total or used + sum + estimate > total then
+if used + sum >= total then
     return 0
 end
 redis.call('HSET', key, request_id, estimate)

@@ -55,7 +55,7 @@ class FakeRedis:
             return 1
         held = sum(bucket.values())
         estimate, used, total = int(estimate), int(used), int(total)
-        if used >= total or used + held + estimate > total:
+        if used + held >= total:
             return 0
         bucket[request_id] = estimate
         return 1

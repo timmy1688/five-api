@@ -492,7 +492,7 @@ fresh = prompt - cache_read - cache_write
 
 定价优先级：Channel `model_pricing` → 全局 `model_prices` 表（查价用 `model_actual`，即经 `model_mapping` 后的真实上游模型名）。渠道显式配置 `0` 是有效覆盖，不回退全局价格。渠道没填 `cache_write` 时，写入按该渠道的输入价计。扣减使用 `F()` 原子操作。
 
-配额在请求发出前按估算费用写入 Redis 预留（`five:quota:hold:{key_id}`），响应后先把实际费用加到 `quota_used`，再释放预留。无限配额不预留，仍累计 `quota_used`。估算用当前最高输入价和输出价，不含缓存折扣。预留覆盖并发超额；价格未知时估算为 0，只挡住已经用满的额度。
+配额在请求发出前按估算费用写入 Redis 预留（`five:quota:hold:{key_id}`），响应后先把实际费用加到 `quota_used`，再释放预留。无限配额不预留，仍累计 `quota_used`。估算用当前最高输入价和输出价，不含缓存折扣。已用加上其他请求的预留小于总额就放行，本次预估超过剩余也放行，所以最多超支一次请求的费用；预留用来挡住同时发出的其他请求。
 
 内置价格表（`services/pricing.py` `DEFAULT_MODEL_PRICES`）含 80+ 个主流模型，版本由
 `MODEL_PRICE_CATALOG_VERSION` 标记。管理后台“同步最新价格”会新增缺失项并刷新内置
