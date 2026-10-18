@@ -12,6 +12,7 @@ venv/
 # ── Node.js ──
 node_modules/
 frontend/dist/
+backend/static
 
 # ── Environment & Secrets ──
 .env
