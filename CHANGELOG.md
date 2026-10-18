@@ -14,7 +14,8 @@
 
 ### 变更
 
-- MySQL 和 Redis 端口只绑 `127.0.0.1`。镜像只信任本机发来的 `X-Forwarded-For`，前面有反向代理时设置 `FORWARDED_ALLOW_IPS`。
+- MySQL 和 Redis 端口只绑 `127.0.0.1`。镜像只信任本机发来的 `X-Forwarded-For`。
+- 镜像构建固定走国内源（pip 用阿里云，npm 用 npmmirror），去掉 `PIP_INDEX_URL`、`NPM_REGISTRY` 构建参数。
 - 流式请求中途断开或上游没给用量时，按已转发的内容估算 token 计费，不再记 0。
 - 改密码、管理员被改密码或停用后，旧的登录凭证立即失效。
 - 同一 IP 或用户名 15 分钟内登录失败 10 次，暂停登录 15 分钟。

@@ -629,7 +629,6 @@ export ANTHROPIC_API_KEY=sk-your-five-api-key
 | `INIT_ADMIN_USERNAME/PASSWORD` | `admin`/`admin123` | 首次启动创建（Super Admin 角色） |
 | `STICKY_SESSION_ENABLED` | `true` | 粘性会话默认开关。后台系统设置保存后以保存值为准 |
 | `STICKY_SESSION_TTL` | `900` | 会话绑定默认秒数。后台保存后以保存值为准 |
-| `FORWARDED_ALLOW_IPS` | `127.0.0.1` | 镜像里 Uvicorn 信任 `X-Forwarded-For` 的来源。前面有反向代理时填它的地址 |
 | `METRICS_TOKEN` | 空 | 填了才能从容器外抓 `/metrics` |
 | `LOG_RETENTION_DAYS` | `90` | 日志保留默认天数。后台保存后以保存值为准 |
 | `CHANNEL_HEALTH_THRESHOLD` | `3` | 连续失败熔断默认次数。后台保存后以保存值为准 |
@@ -788,7 +787,7 @@ resp = client.chat.completions.create(model="gpt-4o", messages=[{"role": "user",
 管理后台和 `/v1` 由同一个 Uvicorn 进程提供，不再单独跑 Nginx。SSE 不经过应用内缓冲。
 IP 白名单读取 `request.client`；部署反向代理时只能通过 Uvicorn
 `--forwarded-allow-ips` 信任明确的代理网段，不能在应用层直接相信任意
-`X-Forwarded-For`。Docker 镜像默认只信任 `127.0.0.1`，由 `FORWARDED_ALLOW_IPS` 覆盖。
+`X-Forwarded-For`。Docker 镜像只信任 `127.0.0.1`。
 
 ---
 

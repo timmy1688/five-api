@@ -57,16 +57,14 @@ docker compose up -d
 
 不需要复制 `.env`。有发布镜像时直接拉取 `ghcr.io/timmy1688/five-api`，拉不到就用本地源码构建。管理后台和 API 在同一个端口，默认是宿主机的 80，浏览器打开 `http://服务器地址`。首次登录 `admin` / `admin123`，系统会先要求改密码，改完才能进后台。数据库、Redis 和签名密钥都在 `./data`，`docker compose down` 不会删掉这个目录。
 
-MySQL 和 Redis 的端口只绑在 `127.0.0.1`，其他机器连不上，网关走容器内网。网关只信任本机发来的 `X-Forwarded-For`；前面有 Nginx 等反向代理时，把它的地址填进 `docker-compose.yml` 的 `FORWARDED_ALLOW_IPS`。
+MySQL 和 Redis 的端口只绑在 `127.0.0.1`，其他机器连不上，网关走容器内网。网关只信任本机发来的 `X-Forwarded-For`。
 
 网关等 MySQL 和 Redis 就绪后才执行迁移。`/healthz` 返回两者的状态，Docker 健康检查用的就是它。`/metrics` 默认只允许容器内访问；Prometheus 要从外面抓，在 `docker-compose.yml` 填 `METRICS_TOKEN`，抓取时带 `Authorization: Bearer <令牌>`。
 
 要改对外端口或密码，直接改 `docker-compose.yml` 里的对应值，然后重新执行 `docker compose up -d`。管理员账号已经创建之后，再改 `INIT_ADMIN_PASSWORD` 不会更新已有密码。改密码后旧的登录凭证立即失效。同一 IP 或同一用户名 15 分钟内登录失败 10 次，暂停登录 15 分钟。
 
 ```bash
-docker compose up -d --build   # 改了源码后重新构建
-# 国内服务器用镜像源构建，pip 和 npm 都走国内
-PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/ NPM_REGISTRY=https://registry.npmmirror.com docker compose up -d --build
+docker compose up -d --build   # 改了源码后重新构建，pip 和 npm 走国内镜像源
 docker compose logs -f gateway
 docker compose down
 ```

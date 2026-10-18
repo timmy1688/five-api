@@ -57,16 +57,14 @@ docker compose up -d
 
 No `.env` file is required. Compose pulls `ghcr.io/timmy1688/five-api` when a release exists and builds from source otherwise. The admin UI and the API share one port, host port 80 by default. Open `http://your-server`. The first login is `admin` / `admin123`, and the UI asks for a new password before anything else. The database, Redis, and the signing key live in `./data`. `docker compose down` leaves that directory in place.
 
-MySQL and Redis publish their ports on `127.0.0.1` only, so other machines cannot reach them. The gateway talks to them over the container network. The gateway trusts `X-Forwarded-For` only from the local machine. If Nginx or another reverse proxy sits in front, put its address in `FORWARDED_ALLOW_IPS` in `docker-compose.yml`.
+MySQL and Redis publish their ports on `127.0.0.1` only, so other machines cannot reach them. The gateway talks to them over the container network. The gateway trusts `X-Forwarded-For` only from the local machine.
 
 The gateway waits for MySQL and Redis before it runs migrations. `/healthz` reports both, and the Docker health check uses it. `/metrics` answers only inside the container by default. To scrape it from Prometheus, set `METRICS_TOKEN` in `docker-compose.yml` and send `Authorization: Bearer <token>`.
 
 To change the published port or a password, edit the values in `docker-compose.yml`, then run `docker compose up -d` again. `INIT_ADMIN_PASSWORD` applies only when the admin account is created. Changing a password signs out every earlier session. Ten failed logins from one IP or for one username within 15 minutes pause logins for 15 minutes.
 
 ```bash
-docker compose up -d --build   # rebuild after changing the source
-# Build from package mirrors, for example inside mainland China
-PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/ NPM_REGISTRY=https://registry.npmmirror.com docker compose up -d --build
+docker compose up -d --build   # rebuild after changing the source; pip and npm use mirrors in China
 docker compose logs -f gateway
 docker compose down
 ```

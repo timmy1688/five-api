@@ -6,12 +6,7 @@ services:
   gateway:
     # 有发布镜像时直接拉取；拉不到就用本地源码构建
     image: ghcr.io/timmy1688/five-api:latest
-    build:
-      context: .
-      # 国内构建：PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/ NPM_REGISTRY=https://registry.npmmirror.com docker compose up -d --build
-      args:
-        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
-        NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmjs.org}
+    build: .
     restart: always
     ports:
       - "80:8000"
@@ -27,8 +22,6 @@ services:
       INIT_ADMIN_PASSWORD: admin123
       # 填了才能从容器外抓 /metrics，Prometheus 用 Bearer 令牌访问
       METRICS_TOKEN: ""
-      # 只信任这些地址发来的 X-Forwarded-For。前面有反向代理时填它的地址，例如 172.18.0.5
-      FORWARDED_ALLOW_IPS: "127.0.0.1"
     stop_grace_period: 40s
     depends_on:
       mysql:
