@@ -147,6 +147,8 @@ def default_gateway_config() -> dict:
         "sticky_session_ttl": _clamp_int(settings.STICKY_SESSION_TTL, 900, 60, 86400),
         "routing_strategy": "weighted",
         "model_fallbacks": {},
+        "auto_cache_control": False,
+        "budget_downgrade": {"threshold": 0.8, "rules": {}},
     }
 
 
@@ -177,6 +179,21 @@ def _normalize_fallbacks(value) -> dict[str, list[str]]:
     return rules
 
 
+def _normalize_downgrade(value) -> dict:
+    raw = value if isinstance(value, dict) else {}
+    try:
+        threshold = min(max(float(raw.get("threshold", 0.8)), 0.1), 1.0)
+    except (TypeError, ValueError):
+        threshold = 0.8
+    rules: dict[str, str] = {}
+    source_rules = raw.get("rules") if isinstance(raw.get("rules"), dict) else {}
+    for source, target in list(source_rules.items())[:MAX_FALLBACK_RULES]:
+        name, target_name = _model_name(source), _model_name(target)
+        if name and target_name and name != target_name:
+            rules[name] = target_name
+    return {"threshold": round(threshold, 2), "rules": rules}
+
+
 def _normalize_gateway(value) -> dict:
     defaults = default_gateway_config()
     raw = value if isinstance(value, dict) else {}
@@ -197,6 +214,8 @@ def _normalize_gateway(value) -> dict:
             else defaults["routing_strategy"]
         ),
         "model_fallbacks": _normalize_fallbacks(raw.get("model_fallbacks")),
+        "auto_cache_control": bool(raw.get("auto_cache_control", defaults["auto_cache_control"])),
+        "budget_downgrade": _normalize_downgrade(raw.get("budget_downgrade")),
     }
 
 

@@ -90,3 +90,32 @@ async def test_key_form_round_trips_windows(client, admin_token):
         f"/api/keys/{key_id}", json={"window_limits": {}}, headers=auth_header(admin_token),
     )
     assert updated.json()["window_limits"] == {}
+
+
+async def test_budget_downgrade_switches_model_past_threshold(client):
+    from app.models import RequestLog
+    from app.services.settings_service import clear_settings_cache, set_gateway_config
+
+    await Channel.create(
+        name="big", provider="openai", base_url="https://api.openai.test",
+        api_key="sk-up", models=["big-model", "small-model"], timeout=60,
+    )
+    key = await APIKey.create(
+        name="d-key", key_hash=hash_api_key(RAW_KEY), key_prefix=RAW_KEY[:8],
+        quota_total=Decimal("10"), quota_used=Decimal("7"),
+    )
+    await set_gateway_config({"budget_downgrade": {"threshold": 0.8, "rules": {"big-model": "small-model"}}})
+    body = {"model": "big-model", "messages": [{"role": "user", "content": "hi"}]}
+
+    http = _http()
+    with patch("app.providers.base._shared_http_client", return_value=http):
+        calm = await client.post("/v1/chat/completions", json=body, headers=auth_header(RAW_KEY))
+        assert calm.status_code == 200 and "x-five-downgraded-to" not in calm.headers
+        await APIKey.filter(id=key.id).update(quota_used=Decimal("8.5"))
+        hot = await client.post("/v1/chat/completions", json=body, headers=auth_header(RAW_KEY))
+    clear_settings_cache()
+    assert hot.status_code == 200
+    assert hot.headers["x-five-downgraded-to"] == "small-model"
+    assert [c.kwargs["json"]["model"] for c in http.post.await_args_list] == ["big-model", "small-model"]
+    last = await RequestLog.all().order_by("-id").first()
+    assert (last.model_requested, last.model_actual) == ("big-model", "small-model")

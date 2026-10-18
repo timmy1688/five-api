@@ -171,20 +171,24 @@ async def resolve_with_fallbacks(
     preferred_protocol: str | None = None,
     sticky_channel_id: int | None = None,
     allowed_models: list[str] | None = None,
+    serve_as: str | None = None,
 ) -> list[tuple[Channel, type[BaseProvider]]]:
     """Primary candidates first, then each configured fallback model in order.
 
     Failover walks the list on retryable errors, so the next model is tried
-    only after every channel of the previous one failed.
+    only after every channel of the previous one failed. serve_as replaces the
+    requested model from the start, as the budget downgrade does.
     """
     from app.services.settings_service import gateway_config
 
-    chain = (await gateway_config()).get("model_fallbacks", {}).get(model, [])
+    primary = serve_as or model
+    chain = (await gateway_config()).get("model_fallbacks", {}).get(primary, [])
+    chain = [target for target in chain if target != model]
     if allowed_models is not None:
         chain = [target for target in chain if target in allowed_models]
     result: list = []
     first_error: HTTPException | None = None
-    for index, target in enumerate([model, *chain]):
+    for index, target in enumerate([primary, *chain]):
         try:
             found = await resolve_candidates(
                 target, preferred_protocol, sticky_channel_id if index == 0 else None
@@ -192,7 +196,7 @@ async def resolve_with_fallbacks(
         except HTTPException as exc:
             first_error = first_error or exc
             continue
-        if index == 0:
+        if index == 0 and not serve_as:
             result.extend(found)
         else:
             result.extend((channel, _serving(provider_cls, target)) for channel, provider_cls in found)

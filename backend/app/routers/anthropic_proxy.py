@@ -30,7 +30,10 @@ from app.services.proxy import (
     open_stream,
     stream_with_failover,
 )
+from app.services.downgrade import downgrade_headers, downgrade_target, mark_downgraded
 from app.services.error_detail import upstream_json_error
+from app.services.auto_cache import with_cache_control
+from app.services.settings_service import gateway_config
 from app.services.sticky_session import get_sticky_channel, make_session_key, session_log_id
 from app.utils.ip_check import get_client_ip
 
@@ -175,10 +178,13 @@ async def messages(
         session_id = session_log_id(api_key.id, request.headers, raw_body)
         sticky_channel_id = await get_sticky_channel(session_key)
 
+        allowed_models = await get_effective_allowed_models(api_key)
+        downgraded_to = await downgrade_target(api_key, body.model, allowed_models)
         candidates = await resolve_with_fallbacks(
             body.model, preferred_protocol="anthropic",
             sticky_channel_id=sticky_channel_id,
-            allowed_models=await get_effective_allowed_models(api_key),
+            allowed_models=allowed_models,
+            serve_as=downgraded_to,
         )
     except HTTPException as exc:
         await log_rejected_request(
@@ -220,6 +226,8 @@ async def messages(
         k: v for k, v in request.headers.items()
         if k.startswith("anthropic-")
     }
+    if (await gateway_config()).get("auto_cache_control"):
+        raw_body, _ = with_cache_control(raw_body)
 
     if body.stream:
         async def _stream_fn(provider: BaseProvider, channel):
@@ -228,7 +236,7 @@ async def messages(
             async for line, usage in _passthrough_stream_with_usage(provider, raw_body, extra_headers):
                 yield line, usage
 
-        upstream_headers: dict[str, str] = {}
+        upstream_headers: dict[str, str] = downgrade_headers(downgraded_to)
         return await open_stream(
             stream_with_failover(
                 candidates, _stream_fn, api_key, "/v1/messages", body.model,
@@ -250,7 +258,7 @@ async def messages(
         result = await provider.send_anthropic_passthrough(raw_body, extra_headers)
         return JSONResponse(content=result), _extract_anthropic_usage(result)
 
-    return await execute_with_failover(
+    response = await execute_with_failover(
         candidates, _send_fn, api_key, "/v1/messages", body.model,
         request_id, start_time, ip, anthropic_error,
         concurrency_lease_id,
@@ -260,3 +268,4 @@ async def messages(
         security_hits=security_hits,
         budget=budget,
     )
+    return mark_downgraded(response, downgraded_to)

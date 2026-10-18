@@ -8,6 +8,8 @@ export interface GatewaySettings {
   sticky_session_ttl: number
   routing_strategy: 'weighted' | 'least_busy' | 'latency'
   model_fallbacks?: Record<string, string[]>
+  auto_cache_control?: boolean
+  budget_downgrade?: { threshold: number; rules: Record<string, string> }
 }
 
 export const settingsApi = {

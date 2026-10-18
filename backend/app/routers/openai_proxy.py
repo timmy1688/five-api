@@ -21,6 +21,7 @@ from app.services.proxy import (
     open_stream,
     stream_with_failover,
 )
+from app.services.downgrade import downgrade_headers, downgrade_target, mark_downgraded
 from app.services.error_detail import upstream_json_error
 from app.services.sticky_session import get_sticky_channel, make_session_key, session_log_id
 from app.utils.ip_check import get_client_ip
@@ -136,10 +137,13 @@ async def _proxy(
         session_id = session_log_id(api_key.id, request.headers, body_dict)
         sticky_channel_id = await get_sticky_channel(session_key)
 
+        allowed_models = await get_effective_allowed_models(api_key)
+        downgraded_to = await downgrade_target(api_key, model, allowed_models)
         candidates = await resolve_with_fallbacks(
             model, preferred_protocol="openai",
             sticky_channel_id=sticky_channel_id,
-            allowed_models=await get_effective_allowed_models(api_key),
+            allowed_models=allowed_models,
+            serve_as=downgraded_to,
         )
         if endpoint != "/v1/chat/completions":
             candidates = [
@@ -191,7 +195,7 @@ async def _proxy(
         openai_error(status, error_type, code, message)
 
     if stream_fn is not None:
-        upstream_headers: dict[str, str] = {}
+        upstream_headers: dict[str, str] = downgrade_headers(downgraded_to)
         return await open_stream(
             stream_with_failover(
                 candidates, stream_fn, api_key, endpoint, model,
@@ -207,7 +211,7 @@ async def _proxy(
             upstream_headers,
         )
 
-    return await execute_with_failover(
+    response = await execute_with_failover(
         candidates, send_fn, api_key, endpoint, model,
         request_id, start_time, ip, openai_error,
         concurrency_lease_id,
@@ -217,6 +221,7 @@ async def _proxy(
         security_hits=security_hits,
         budget=budget,
     )
+    return mark_downgraded(response, downgraded_to)
 
 
 async def _proxy_endpoint(request: Request, body, endpoint: str, api_key: APIKey):

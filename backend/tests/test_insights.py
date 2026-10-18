@@ -90,3 +90,51 @@ async def test_session_and_cache_stats(client, admin_token):
     assert cache["total"]["hit_rate"] == 0.9
     assert cache["by_model"][0]["model"] == "claude-x"
     assert cache["total"]["cache_savings"] == pytest.approx(0.00486)
+
+
+def test_auto_cache_marks_tools_system_and_last_message():
+    from app.services.auto_cache import with_cache_control
+
+    body = {
+        "system": "You are helpful",
+        "tools": [{"name": "a"}, {"name": "b"}],
+        "messages": [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": [{"type": "text", "text": "x"}, {"type": "thinking", "thinking": "t"}]},
+        ],
+    }
+    out, changed = with_cache_control(body)
+    assert changed
+    assert "cache_control" not in body["tools"][-1]
+    assert out["tools"][-1]["cache_control"] == {"type": "ephemeral"}
+    assert out["system"][0]["cache_control"] == {"type": "ephemeral"}
+    last = out["messages"][-1]["content"]
+    assert "cache_control" in last[0] and "cache_control" not in last[1]
+
+    managed = {"system": [{"type": "text", "text": "s", "cache_control": {"type": "ephemeral"}}], "messages": []}
+    assert with_cache_control(managed) == (managed, False)
+
+
+async def test_auto_cache_applies_when_enabled(client, admin_token):
+    from app.services.settings_service import clear_settings_cache, set_gateway_config
+
+    await Channel.create(
+        name="a", provider="anthropic", base_url="https://api.anthropic.test",
+        api_key="sk-up", models=["claude-x"], timeout=60,
+    )
+    await APIKey.create(
+        name="cc", key_hash=hash_api_key(RAW_KEY), key_prefix=RAW_KEY[:8], quota_total=Decimal("-1"),
+    )
+    await set_gateway_config({"auto_cache_control": True})
+    reply = {"id": "m", "type": "message", "role": "assistant", "content": [], "usage": {"input_tokens": 1, "output_tokens": 1}}
+    http = _http(reply)
+    with patch("app.providers.base._shared_http_client", return_value=http):
+        resp = await client.post(
+            "/v1/messages",
+            json={"model": "claude-x", "max_tokens": 5, "messages": [{"role": "user", "content": "hi"}]},
+            headers={"x-api-key": RAW_KEY},
+        )
+    clear_settings_cache()
+    assert resp.status_code == 200
+    sent = http.post.await_args.kwargs["json"]
+    assert sent["messages"][-1]["content"][0]["cache_control"] == {"type": "ephemeral"}

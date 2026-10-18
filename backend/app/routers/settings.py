@@ -18,6 +18,8 @@ class GatewaySettingsBody(BaseModel):
     sticky_session_ttl: int = Field(ge=60, le=86400)
     routing_strategy: Literal["weighted", "least_busy", "latency"] = "weighted"
     model_fallbacks: dict[str, list[str]] | None = None
+    auto_cache_control: bool | None = None
+    budget_downgrade: dict | None = None
 
 
 @router.get("")
