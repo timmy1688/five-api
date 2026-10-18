@@ -13,7 +13,7 @@ from app.dependencies import get_redis
 KEY_PREFIX = "five:sticky:"
 
 # 兼容常见客户端与 sub2api 的会话头（Starlette Headers 取值大小写不敏感）
-SESSION_HEADERS = ("x-session-id", "session_id", "x-conversation-id")
+SESSION_HEADERS = ("x-session-id", "session_id", "x-conversation-id", "x-claude-code-session-id")
 
 
 def _fingerprint_from_body(body: dict[str, Any]) -> str | None:
@@ -40,6 +40,33 @@ def _fingerprint_from_body(body: dict[str, Any]) -> str | None:
     return hashlib.sha256("\x1f".join(parts).encode("utf-8")).hexdigest()[:32]
 
 
+def _metadata_session(body: dict[str, Any]) -> str | None:
+    """Claude Code puts "..._session_<uuid>" into metadata.user_id."""
+    metadata = body.get("metadata")
+    user_id = metadata.get("user_id") if isinstance(metadata, dict) else None
+    if isinstance(user_id, str) and "session_" in user_id:
+        return user_id.rsplit("session_", 1)[1].strip() or None
+    return None
+
+
+def session_identity(headers: Any, body: dict[str, Any]) -> str | None:
+    for h in SESSION_HEADERS:
+        v = headers.get(h)
+        if v:
+            return v.strip()
+    if not isinstance(body, dict):
+        return None
+    return _metadata_session(body) or _fingerprint_from_body(body)
+
+
+def session_log_id(api_key_id: int, headers: Any, body: dict[str, Any]) -> str:
+    """Stable id written to request logs, so spend can be grouped by session."""
+    raw = session_identity(headers, body)
+    if not raw:
+        return ""
+    return hashlib.sha256(f"{api_key_id}\x1f{raw}".encode("utf-8")).hexdigest()[:32]
+
+
 async def make_session_key(api_key_id: int, headers: Any, body: dict[str, Any]) -> str | None:
     """构造 Redis 会话键；未启用或无法识别会话时返回 None。"""
     from app.services.settings_service import gateway_config
@@ -47,16 +74,7 @@ async def make_session_key(api_key_id: int, headers: Any, body: dict[str, Any]) 
     if not (await gateway_config())["sticky_session_enabled"]:
         return None
 
-    session_id = None
-    for h in SESSION_HEADERS:
-        v = headers.get(h)
-        if v:
-            session_id = v.strip()
-            break
-
-    if not session_id:
-        session_id = _fingerprint_from_body(body)
-
+    session_id = session_identity(headers, body)
     if not session_id:
         return None
 

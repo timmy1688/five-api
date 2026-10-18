@@ -31,7 +31,7 @@ from app.services.proxy import (
     stream_with_failover,
 )
 from app.services.error_detail import upstream_json_error
-from app.services.sticky_session import get_sticky_channel, make_session_key
+from app.services.sticky_session import get_sticky_channel, make_session_key, session_log_id
 from app.utils.ip_check import get_client_ip
 
 router = APIRouter(tags=["anthropic-proxy"])
@@ -172,6 +172,7 @@ async def messages(
         if audit is not None:
             audit.set_request(raw_body)
         session_key = await make_session_key(api_key.id, request.headers, raw_body)
+        session_id = session_log_id(api_key.id, request.headers, raw_body)
         sticky_channel_id = await get_sticky_channel(session_key)
 
         candidates = await resolve_with_fallbacks(
@@ -234,6 +235,7 @@ async def messages(
                 request_id, start_time, ip, _anthropic_error_event,
                 concurrency_lease_id,
                 session_key=session_key,
+                session_id=session_id,
                 audit=audit,
                 security_hits=security_hits,
                 budget=budget,
@@ -253,6 +255,7 @@ async def messages(
         request_id, start_time, ip, anthropic_error,
         concurrency_lease_id,
         session_key=session_key,
+        session_id=session_id,
         audit=audit,
         security_hits=security_hits,
         budget=budget,

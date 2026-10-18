@@ -39,6 +39,9 @@ async def save_request_log(
     audit_request: str = "",
     security_hit: str = "",
     team_id: int = 0,
+    session_id: str = "",
+    cache_savings: Decimal = Decimal(0),
+    cost_detail: dict | None = None,
 ) -> None:
     has_audit = bool(audit_request)
     async with in_transaction():
@@ -69,6 +72,9 @@ async def save_request_log(
             failed_over=failed_over,
             has_audit=has_audit,
             security_hit=security_hit[:128],
+            session_id=session_id[:32],
+            cache_savings=cache_savings,
+            cost_detail=cost_detail,
         )
         if has_audit:
             await RequestLogAudit.create(
@@ -88,6 +94,9 @@ async def save_request_log(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             cost=cost,
+            cached_tokens=cached_tokens,
+            cache_write_tokens=cache_write_tokens,
+            cache_savings=cache_savings,
             when=log.created_at,
         )
     except Exception:

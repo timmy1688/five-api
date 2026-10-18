@@ -35,7 +35,7 @@ from app.services.error_detail import (
 )
 from app.services.key_pool import KEY_STATUSES, retry_after_seconds
 from app.services.logging_service import save_request_log
-from app.services.pricing import calculate_cost, count_text_tokens
+from app.services.pricing import cost_breakdown, count_text_tokens
 from app.services.quota import RequestLease, deduct_quota
 from app.services.sticky_session import bind_sticky_channel
 
@@ -234,21 +234,27 @@ async def _bill_and_log(
     security_hit: str = "",
     budget: RequestLease | None = None,
     request_units: int = 0,
+    session_id: str = "",
 ):
     """计费 + 扣费 + 写日志。"""
     latency_ms = int((time.monotonic() - start_time) * 1000)
     cost = Decimal(0)
+    cache_savings = Decimal(0)
+    cost_detail = None
     try:
         if (
             prompt_tokens > 0 or completion_tokens > 0 or cached_tokens > 0
             or cache_write_tokens > 0 or request_units > 0
         ):
-            cost = await calculate_cost(
+            breakdown = await cost_breakdown(
                 model_actual, prompt_tokens, completion_tokens, channel,
                 cached_tokens=cached_tokens,
                 cache_write_tokens=cache_write_tokens,
                 request_units=request_units,
             )
+            cost = breakdown["cost"]
+            cache_savings = breakdown["cache_savings"]
+            cost_detail = breakdown["detail"]
     except Exception:
         logger.exception("billing failed for request %s", request_id)
     try:
@@ -287,6 +293,9 @@ async def _bill_and_log(
             audit_request=audit.request_text if audit else "",
             security_hit=security_hit,
             team_id=budget.team_id if budget is not None else (api_key.team_id or 0),
+            session_id=session_id,
+            cache_savings=cache_savings,
+            cost_detail=cost_detail,
         )
     except Exception:
         logger.exception("request logging failed for request %s", request_id)
@@ -328,6 +337,7 @@ async def execute_with_failover(
     concurrency_lease_id: str,
     session_key: str | None = None,
     audit: AuditBuffer | None = None,
+    session_id: str = "",
     security_hits: list[str] | None = None,
     budget: RequestLease | None = None,
 ) -> Any:
@@ -386,6 +396,7 @@ async def execute_with_failover(
                     audit=audit,
                     security_hit=format_hits(hits),
                     budget=budget,
+                    session_id=session_id,
                     request_units=request_units,
                 )
                 await _quiet(record_success(channel.id), "health reset")
@@ -409,6 +420,7 @@ async def execute_with_failover(
                     audit=audit,
                     security_hit=format_hits(security_hits),
                     budget=budget,
+                    session_id=session_id,
                     **failure,
                 )
                 passed = upstream_json_error(e)
@@ -443,6 +455,7 @@ async def stream_with_failover(
     concurrency_lease_id: str,
     session_key: str | None = None,
     audit: AuditBuffer | None = None,
+    session_id: str = "",
     security_hits: list[str] | None = None,
     budget: RequestLease | None = None,
     upstream_headers: dict[str, str] | None = None,
@@ -578,6 +591,7 @@ async def stream_with_failover(
             audit=audit,
             security_hit=format_hits(hits),
             budget=budget,
+            session_id=session_id,
         )
         if budget is not None:
             await _quiet(budget.release(), "budget release")

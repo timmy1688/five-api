@@ -5,6 +5,8 @@ import { useAuthStore } from '@/stores/auth'
 
 const viewComponents: Record<NavigationName, () => Promise<unknown>> = {
   Dashboard: () => import('@/views/Dashboard.vue'),
+  Insights: () => import('@/views/Insights.vue'),
+  Onboarding: () => import('@/views/Onboarding.vue'),
   Channels: () => import('@/views/Channels.vue'),
   Models: () => import('@/views/Models.vue'),
   ApiKeys: () => import('@/views/ApiKeys.vue'),

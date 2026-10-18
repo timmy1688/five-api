@@ -22,7 +22,7 @@ from app.services.proxy import (
     stream_with_failover,
 )
 from app.services.error_detail import upstream_json_error
-from app.services.sticky_session import get_sticky_channel, make_session_key
+from app.services.sticky_session import get_sticky_channel, make_session_key, session_log_id
 from app.utils.ip_check import get_client_ip
 
 router = APIRouter(tags=["openai-proxy"])
@@ -133,6 +133,7 @@ async def _proxy(
             openai_error(400, "invalid_request_error", "model_required", "model is required")
         await run_pre_checks(api_key, model)
         session_key = await make_session_key(api_key.id, request.headers, body_dict)
+        session_id = session_log_id(api_key.id, request.headers, body_dict)
         sticky_channel_id = await get_sticky_channel(session_key)
 
         candidates = await resolve_with_fallbacks(
@@ -197,6 +198,7 @@ async def _proxy(
                 request_id, start_time, ip, error_event,
                 concurrency_lease_id,
                 session_key=session_key,
+                session_id=session_id,
                 audit=audit,
                 security_hits=security_hits,
                 budget=budget,
@@ -210,6 +212,7 @@ async def _proxy(
         request_id, start_time, ip, openai_error,
         concurrency_lease_id,
         session_key=session_key,
+        session_id=session_id,
         audit=audit,
         security_hits=security_hits,
         budget=budget,

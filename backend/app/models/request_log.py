@@ -31,6 +31,11 @@ class RequestLog(Model):
     has_audit = fields.BooleanField(default=False)
     ai_review = fields.CharField(max_length=32, default="")
     security_hit = fields.CharField(max_length=128, default="")
+    # Hash of the client session (header or conversation prefix), empty when unknown.
+    session_id = fields.CharField(max_length=32, default="", index=True)
+    cache_savings = fields.DecimalField(max_digits=16, decimal_places=6, default=0)
+    # Prices, token buckets and line items behind cost.
+    cost_detail = fields.JSONField(null=True)
     created_at = fields.DatetimeField(auto_now_add=True, index=True)
 
     class Meta:

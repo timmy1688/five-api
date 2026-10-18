@@ -74,7 +74,7 @@ import type { NavigationIcon } from '@/config/navigation'
 import { useAuthStore } from '@/stores/auth'
 import { useI18n } from '@/i18n'
 import LangSwitch from '@/components/LangSwitch.vue'
-import { DataBoard, Connection, Key, Document, PriceTag, Menu, FolderOpened, Lock, Expand, User, Warning, Memo, Setting, UserFilled } from '@element-plus/icons-vue'
+import { DataBoard, Connection, Key, Document, PriceTag, Menu, FolderOpened, Lock, Expand, User, Warning, Memo, Setting, UserFilled, TrendCharts, Guide } from '@element-plus/icons-vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -83,6 +83,8 @@ const { t, roleLabel } = useI18n()
 const mobileMenuOpen = ref(false)
 const navigationIcons: Record<NavigationIcon, unknown> = {
   dashboard: DataBoard,
+  insights: TrendCharts,
+  onboarding: Guide,
   channels: Connection,
   models: Menu,
   keys: Key,

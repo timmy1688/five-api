@@ -40,6 +40,9 @@ class LogResponse(BaseModel):
     has_audit: bool
     ai_review: str
     keyword_hit: bool
+    session_id: str = ""
+    cache_savings: float = 0
+    cost_detail: dict | None = None
     created_at: datetime
 
 
@@ -83,6 +86,8 @@ def _to_log(r: RequestLog) -> LogResponse:
         has_audit=r.has_audit,
         ai_review=r.ai_review,
         keyword_hit=keyword_was_hit(r.security_hit),
+        session_id=r.session_id,
+        cache_savings=float(r.cache_savings),
         created_at=r.created_at,
     )
 
@@ -128,7 +133,7 @@ async def list_logs(
             "cache_write_tokens", "cost",
             "is_stream", "status_code", "latency_ms", "error_message", "error_origin",
             "upstream_status_code", "upstream_error", "ip_address", "failed_over",
-            "has_audit", "ai_review", "security_hit", "created_at",
+            "has_audit", "ai_review", "security_hit", "session_id", "cache_savings", "created_at",
         )
     )
     return LogListResponse(total=total, items=[_to_log(r) for r in items])
@@ -139,7 +144,7 @@ async def get_log(request_id: str, _: User = require_permission("log:read")):
     r = await RequestLog.get_or_none(request_id=request_id)
     if r is None:
         raise HTTPException(status_code=404, detail="Log not found")
-    return _to_log(r)
+    return _to_log(r).model_copy(update={"cost_detail": r.cost_detail})
 
 
 @router.get("/{request_id}/audit", response_model=LogAuditResponse)

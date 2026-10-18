@@ -22,6 +22,9 @@ class UsageDaily(Model):
     prompt_tokens = fields.BigIntField(default=0)
     completion_tokens = fields.BigIntField(default=0)
     total_tokens = fields.BigIntField(default=0)
+    cached_tokens = fields.BigIntField(default=0)
+    cache_write_tokens = fields.BigIntField(default=0)
+    cache_savings = fields.DecimalField(max_digits=18, decimal_places=6, default=0)
     cost = fields.DecimalField(max_digits=18, decimal_places=6, default=0)
 
     class Meta:

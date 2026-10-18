@@ -59,6 +59,14 @@ async def resolve_prices(
     channel: Channel | None = None,
 ) -> tuple[Decimal, Decimal, Decimal, Decimal]:
     """Return prompt, completion, cache-read, and cache-write prices per 1M tokens."""
+    prices, _ = await _resolve_prices_with_source(model, channel)
+    return prices
+
+
+async def _resolve_prices_with_source(
+    model: str,
+    channel: Channel | None = None,
+) -> tuple[tuple[Decimal, Decimal, Decimal, Decimal], str]:
     prompt_price = Decimal(0)
     completion_price = Decimal(0)
     cached_price = Decimal(0)
@@ -77,15 +85,16 @@ async def resolve_prices(
                 completion_price,
                 cached_price,
                 _write_price(pricing, prompt_price),
-            )
+            ), "channel"
 
     mp = await ModelPrice.get_or_none(model=model, is_active=True)
-    if mp:
-        prompt_price = Decimal(str(mp.prompt_price))
-        completion_price = Decimal(str(mp.completion_price))
-        cached_price = Decimal(str(mp.cached_price))
-        write_price = Decimal(str(mp.cache_write_price))
-    return prompt_price, completion_price, cached_price, write_price
+    if mp is None:
+        return (prompt_price, completion_price, cached_price, write_price), "none"
+    prompt_price = Decimal(str(mp.prompt_price))
+    completion_price = Decimal(str(mp.completion_price))
+    cached_price = Decimal(str(mp.cached_price))
+    write_price = Decimal(str(mp.cache_write_price))
+    return (prompt_price, completion_price, cached_price, write_price), "global"
 
 
 async def resolve_request_price(model: str, channel: Channel | None = None) -> Decimal:
@@ -234,19 +243,70 @@ async def calculate_cost(
     is priced on its own. A missing write price uses the input price.
     request_units counts images or audio calls billed per unit.
     """
-    prompt_price, completion_price, cached_price, write_price = await resolve_prices(
-        model, channel
+    detail = await cost_breakdown(
+        model, prompt_tokens, completion_tokens, channel,
+        cached_tokens=cached_tokens, cache_write_tokens=cache_write_tokens,
+        request_units=request_units,
+    )
+    return detail["cost"]
+
+
+async def cost_breakdown(
+    model: str,
+    prompt_tokens: int,
+    completion_tokens: int,
+    channel: Channel | None = None,
+    cached_tokens: int = 0,
+    cache_write_tokens: int = 0,
+    request_units: int = 0,
+) -> dict:
+    """Cost plus every number that produced it, kept on the log for later review.
+
+    cache_savings compares with billing every cached token as fresh input, minus
+    the extra paid for cache writes. It can be negative when writes dominate.
+    """
+    (prompt_price, completion_price, cached_price, write_price), source = (
+        await _resolve_prices_with_source(model, channel)
     )
     fresh_input = max(prompt_tokens - cached_tokens - cache_write_tokens, 0)
-    cost = (
-        Decimal(fresh_input) * prompt_price
-        + Decimal(cached_tokens) * cached_price
-        + Decimal(cache_write_tokens) * write_price
-        + Decimal(completion_tokens) * completion_price
-    ) / MILLION
+    lines = {
+        "input": Decimal(fresh_input) * prompt_price / MILLION,
+        "cache_read": Decimal(cached_tokens) * cached_price / MILLION,
+        "cache_write": Decimal(cache_write_tokens) * write_price / MILLION,
+        "output": Decimal(completion_tokens) * completion_price / MILLION,
+    }
+    request_price = Decimal(0)
     if request_units:
-        cost += Decimal(request_units) * await resolve_request_price(model, channel)
-    return cost.quantize(Decimal("0.000001"))
+        request_price = await resolve_request_price(model, channel)
+        lines["request"] = Decimal(request_units) * request_price
+    cost = sum(lines.values(), Decimal(0)).quantize(Decimal("0.000001"))
+    savings = (
+        Decimal(cached_tokens) * (prompt_price - cached_price)
+        - Decimal(cache_write_tokens) * (write_price - prompt_price)
+    ) / MILLION
+    return {
+        "cost": cost,
+        "cache_savings": savings.quantize(Decimal("0.000001")),
+        "detail": {
+            "model": model,
+            "price_source": source,
+            "prices": {
+                "input": float(prompt_price),
+                "output": float(completion_price),
+                "cache_read": float(cached_price),
+                "cache_write": float(write_price),
+                "request": float(request_price),
+            },
+            "tokens": {
+                "input": fresh_input,
+                "cache_read": cached_tokens,
+                "cache_write": cache_write_tokens,
+                "output": completion_tokens,
+                "request_units": request_units,
+            },
+            "lines": {name: float(value.quantize(Decimal("0.000001"))) for name, value in lines.items()},
+        },
+    }
 
 
 MODEL_PRICE_CATALOG_VERSION = "2026-10-18"
