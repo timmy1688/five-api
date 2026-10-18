@@ -134,7 +134,7 @@ docker compose down
 
 创建 Key 后复制 `sk-xxx`（只显示一次）。模型定价页同步一次内置价格。渠道上某档价格设成 0，这一档就免费。
 
-请求里没写的字段不会补上，上游用自己的默认值。上游的限流响应头（`x-ratelimit-*`、`anthropic-ratelimit-*`、`retry-after`、`request-id`）原样交回，SDK 的退避逻辑照常工作。上游的 `x-request-id` 改名为 `x-upstream-request-id`，网关自己的 `X-Request-ID` 用来查日志。Claude Code 调的 `/v1/messages/count_tokens` 转发到 Anthropic 渠道，不计费，上游没有这个接口时返回本地估算。
+请求里没写的字段不会补上，上游用自己的默认值。上游的 `x-request-id` 改名为 `x-upstream-request-id`，网关自己的 `X-Request-ID` 用来查日志。Claude Code 调的 `/v1/messages/count_tokens` 转发到 Anthropic 渠道，不计费，上游没有这个接口时返回本地估算。
 
 | 接口 | 渠道 | 计费 |
 |---|---|---|
@@ -168,4 +168,4 @@ cost  = (fresh × 输入价 + cache_read × 缓存读价 + cache_write × 缓存
 cd backend && ../.venv/bin/pytest -m smoke && ../.venv/bin/pytest -m regression
 ```
 
-可选的环境变量见 [.env.example](.env.example)。架构见 [CLAUDE.md](CLAUDE.md)。[MIT License](LICENSE)。费用是估算，可能和上游账单不一致，说明见 [法律风险与免责声明](DISCLAIMER.md)。
+可选的环境变量见 [.env.example](.env.example)。开发说明见 [CLAUDE.md](CLAUDE.md)。[MIT License](LICENSE)。费用是估算，可能和上游账单不一致，说明见 [法律风险与免责声明](DISCLAIMER.md)。
