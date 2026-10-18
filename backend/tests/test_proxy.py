@@ -1,11 +1,14 @@
+import time
 from decimal import Decimal
 from unittest.mock import AsyncMock, patch
 
-import pytest
+import anyio
 import httpx
+import pytest
 
 from app.models import APIKey, Channel, ModelGroup, ModelPrice, RequestLog, RequestLogAudit
 from app.services.auth import hash_api_key
+from app.services.proxy import stream_with_failover
 from app.services.settings_service import set_inference_audit_enabled
 from tests.conftest import auth_header
 
@@ -792,3 +795,31 @@ async def test_inference_audit_records_only_when_enabled(client):
     audit = await RequestLogAudit.get(request_log_id=audited_log.id)
     assert "hi" in audit.audit_request
     assert not hasattr(audit, "audit_response")
+
+
+async def test_stream_cleanup_survives_client_disconnect(client):
+    ch, api_key, _ = await _setup_proxy_env()
+    stalled = anyio.Event()
+
+    async def stream_fn(_provider, _channel):
+        yield 'data: {"choices":[{"delta":{"content":"hello world"}}]}\n\n', {}
+        await stalled.wait()
+
+    provider = AsyncMock()
+    provider.apply_model_mapping = lambda model: model
+    provider.close = AsyncMock()
+    events = stream_with_failover(
+        [(ch, lambda _: provider)], stream_fn, api_key, "/v1/chat/completions", "gpt-4o",
+        "req-disconnect", time.monotonic(), "127.0.0.1", lambda _e: "", "lease-1",
+    )
+    with patch("app.services.proxy.concurrency_limiter.release", new=AsyncMock()) as release:
+        # Starlette cancels the response task while the stream awaits upstream.
+        with anyio.CancelScope() as scope:
+            async for _ in events:
+                scope.cancel()
+
+    release.assert_awaited_once()
+    provider.close.assert_awaited()
+    log = await RequestLog.get(request_id="req-disconnect")
+    assert log.completion_tokens > 0
+    assert log.cost > 0

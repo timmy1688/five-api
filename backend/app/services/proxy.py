@@ -10,6 +10,7 @@ from collections.abc import AsyncIterator, Callable
 from decimal import Decimal
 from typing import Any
 
+import anyio
 import httpx
 from fastapi import HTTPException
 from fastapi.responses import JSONResponse, Response, StreamingResponse
@@ -30,6 +31,8 @@ from app.services.content_filter import (
     visible_sse_text,
 )
 from app.services.error_detail import (
+    client_message,
+    client_status,
     describe_upstream_failure,
     gateway_failure,
     upstream_json_error,
@@ -183,6 +186,35 @@ def _with_headers(response: Any, headers: dict[str, str]) -> Any:
     return JSONResponse(content=response, headers=headers)
 
 
+class _UpstreamStream(StreamingResponse):
+    """Closes the upstream stream once the response ends, however it ends.
+
+    On client disconnect Starlette cancels the send loop and leaves the body
+    generator suspended, so its cleanup (billing, log, concurrency release)
+    would wait for garbage collection. anyio also keeps cancelling every await
+    in that task, hence the shield.
+    """
+
+    def __init__(self, events: AsyncIterator[str], first: str | None, headers: dict[str, str]):
+        self._events = events
+
+        async def body():
+            if first is not None:
+                yield first
+            async for chunk in events:
+                yield chunk
+
+        super().__init__(body(), media_type="text/event-stream", headers=headers)
+
+    async def __call__(self, scope, receive, send):
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            with anyio.move_on_after(30, shield=True):
+                await self.body_iterator.aclose()
+                await self._events.aclose()
+
+
 async def open_stream(events: AsyncIterator[str], upstream_headers: dict[str, str]) -> StreamingResponse:
     """Read the first SSE chunk before sending headers.
 
@@ -194,20 +226,9 @@ async def open_stream(events: AsyncIterator[str], upstream_headers: dict[str, st
         first = await events.__anext__()
     except StopAsyncIteration:
         pass
-
-    async def body():
-        try:
-            if first is not None:
-                yield first
-            async for chunk in events:
-                yield chunk
-        finally:
-            await events.aclose()
-
-    return StreamingResponse(
-        body(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", **upstream_headers},
+    return _UpstreamStream(
+        events, first,
+        {"Cache-Control": "no-cache", "X-Accel-Buffering": "no", **upstream_headers},
     )
 
 
@@ -417,7 +438,7 @@ async def execute_with_failover(
                     continue
 
                 model_actual = provider.apply_model_mapping(model_requested)
-                status_code = upstream_status(e) or 502
+                status_code = client_status(e)
                 failure = describe_upstream_failure(e, channel.base_url)
                 await _bill_and_log(
                     model_actual, 0, 0, 0, 0,
@@ -432,12 +453,11 @@ async def execute_with_failover(
                 )
                 passed = upstream_json_error(e)
                 if passed is not None:
-                    status, body = passed
                     return JSONResponse(
-                        status_code=status, content=body,
+                        status_code=status_code, content=passed[1],
                         headers=forwardable_headers(e.response),
                     )
-                format_error(status_code, "api_error", "upstream_error", f"Upstream error: {e}")
+                format_error(status_code, "api_error", "upstream_error", client_message(e))
             finally:
                 await _quiet(provider.close(), "provider close")
     finally:
@@ -561,7 +581,7 @@ async def stream_with_failover(
             raise last_error
 
     except Exception as e:
-        status_code = upstream_status(e) or 502
+        status_code = client_status(e)
         if channel is not None:
             failure = describe_upstream_failure(e, channel.base_url)
         else:
@@ -574,33 +594,36 @@ async def stream_with_failover(
             upstream_headers.update(forwardable_headers(e.response))
         yield format_error_event(e)
     finally:
-        if active_channel_id is not None:
-            await end_attempt(active_channel_id)
-        await _quiet(
-            concurrency_limiter.release(api_key.id, concurrency_lease_id),
-            "concurrency release",
-        )
-        # A client disconnect or a missing usage event would bill nothing.
-        # Fall back to what was actually forwarded.
-        if data_yielded and completion_tokens == 0:
-            completion_tokens = meter.tokens
-        if data_yielded and prompt_tokens == 0 and budget is not None:
-            prompt_tokens = budget.estimated_input
-        await _bill_and_log(
-            model_actual, prompt_tokens, completion_tokens, cached_tokens, cache_write_tokens,
-            channel, api_key, request_id, endpoint, model_requested,
-            is_stream=True, status_code=status_code, start_time=start_time, ip=ip,
-            error_message=error_msg,
-            error_origin=error_origin,
-            upstream_status_code=upstream_status_code,
-            upstream_error=upstream_error,
-            failed_over=failed_over,
-            audit=audit,
-            security_hit=format_hits(hits),
-            budget=budget,
-            session_id=session_id,
-        )
-        if budget is not None:
-            await _quiet(budget.release(), "budget release")
-        if provider:
-            await _quiet(provider.close(), "provider close")
+        # A client disconnect cancels this generator mid-await, and anyio then
+        # cancels every later await too, so cleanup runs shielded.
+        with anyio.move_on_after(30, shield=True):
+            if active_channel_id is not None:
+                await _quiet(end_attempt(active_channel_id), "attempt end")
+            await _quiet(
+                concurrency_limiter.release(api_key.id, concurrency_lease_id),
+                "concurrency release",
+            )
+            # A client disconnect or a missing usage event would bill nothing.
+            # Fall back to what was actually forwarded.
+            if data_yielded and completion_tokens == 0:
+                completion_tokens = meter.tokens
+            if data_yielded and prompt_tokens == 0 and budget is not None:
+                prompt_tokens = budget.estimated_input
+            await _bill_and_log(
+                model_actual, prompt_tokens, completion_tokens, cached_tokens, cache_write_tokens,
+                channel, api_key, request_id, endpoint, model_requested,
+                is_stream=True, status_code=status_code, start_time=start_time, ip=ip,
+                error_message=error_msg,
+                error_origin=error_origin,
+                upstream_status_code=upstream_status_code,
+                upstream_error=upstream_error,
+                failed_over=failed_over,
+                audit=audit,
+                security_hit=format_hits(hits),
+                budget=budget,
+                session_id=session_id,
+            )
+            if budget is not None:
+                await _quiet(budget.release(), "budget release")
+            if provider:
+                await _quiet(provider.close(), "provider close")

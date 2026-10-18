@@ -13,6 +13,7 @@ async def _columns(db: BaseDBAsyncClient, table: str) -> set[str]:
     return {row["Field"] for row in rows}
 
 
+# Fresh databases never had these columns; MySQL rejects an empty query.
 async def upgrade(db: BaseDBAsyncClient) -> str:
     api_key_columns = await _columns(db, "api_keys")
     channel_columns = await _columns(db, "channels")
@@ -22,7 +23,7 @@ async def upgrade(db: BaseDBAsyncClient) -> str:
             statements.append(f"ALTER TABLE `api_keys` DROP COLUMN `{column}`;")
     if "group" in channel_columns:
         statements.append("ALTER TABLE `channels` DROP COLUMN `group`;")
-    return "\n".join(statements)
+    return "\n".join(statements) or "SELECT 1;"
 
 
 async def downgrade(db: BaseDBAsyncClient) -> str:
@@ -41,4 +42,4 @@ async def downgrade(db: BaseDBAsyncClient) -> str:
         statements.append(
             "ALTER TABLE `channels` ADD COLUMN `group` VARCHAR(64) NOT NULL DEFAULT '';"
         )
-    return "\n".join(statements)
+    return "\n".join(statements) or "SELECT 1;"

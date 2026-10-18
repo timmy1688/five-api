@@ -21,7 +21,7 @@ from app.services.proxy import (
     open_stream,
     stream_with_failover,
 )
-from app.services.error_detail import upstream_json_error
+from app.services.error_detail import client_message, upstream_json_error
 from app.services.routing import plan_route
 from app.utils.ip_check import get_client_ip
 
@@ -33,7 +33,7 @@ def _openai_error_event(e: Exception) -> str:
     passed = upstream_json_error(e)
     err = passed[1] if passed is not None else {
         "error": {
-            "message": f"Upstream error: {e}",
+            "message": client_message(e),
             "type": "server_error",
             "code": "upstream_error",
         }
@@ -47,7 +47,7 @@ def _responses_error_event(e: Exception) -> str:
     event = {
         "type": "error",
         "code": error.get("code") or "upstream_error",
-        "message": error.get("message") or f"Upstream error: {e}",
+        "message": error.get("message") or client_message(e),
         "param": error.get("param"),
     }
     return f"event: error\ndata: {json.dumps(event)}\n\n"

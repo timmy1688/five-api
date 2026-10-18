@@ -39,11 +39,12 @@ def _upsert_sql(dialect: str) -> str:
             "team_id = excluded.team_id"
         )
     values = ", ".join("%s" for _ in _COLUMNS)
-    sums = ", ".join(f"{c} = {c} + VALUES({c})" for c in _SUMMED)
+    # Row alias needs MySQL 8.0.19+. VALUES(col) is deprecated and warns on every insert.
+    sums = ", ".join(f"{c} = usage_daily.{c} + new.{c}" for c in _SUMMED)
     return (
-        f"INSERT INTO usage_daily ({cols}) VALUES ({values}) "
-        f"ON DUPLICATE KEY UPDATE {sums}, api_key_name = VALUES(api_key_name), "
-        "channel_name = VALUES(channel_name), team_id = VALUES(team_id)"
+        f"INSERT INTO usage_daily ({cols}) VALUES ({values}) AS new "
+        f"ON DUPLICATE KEY UPDATE {sums}, api_key_name = new.api_key_name, "
+        "channel_name = new.channel_name, team_id = new.team_id"
     )
 
 

@@ -108,6 +108,23 @@ def upstream_json_error(exc: Exception) -> tuple[int, dict] | None:
     return status, data
 
 
+def client_status(exc: Exception) -> int:
+    """Status sent downstream: upstream 4xx JSON keeps its code, the rest is 502."""
+    passed = upstream_json_error(exc)
+    return passed[0] if passed is not None else 502
+
+
+def client_message(exc: Exception) -> str:
+    """Client-facing summary. httpx messages carry the upstream URL, which stays in the log."""
+    if isinstance(exc, httpx.HTTPStatusError):
+        return f"Upstream error: HTTP {exc.response.status_code}"
+    if isinstance(exc, httpx.TimeoutException):
+        return "Upstream error: timeout"
+    if isinstance(exc, httpx.NetworkError):
+        return "Upstream error: network unreachable"
+    return "Upstream error"
+
+
 def gateway_failure(message: str) -> dict:
     return {
         "error_origin": "gateway",

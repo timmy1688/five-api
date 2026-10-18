@@ -25,7 +25,7 @@ from app.services.proxy import (
     open_stream,
     stream_with_failover,
 )
-from app.services.error_detail import upstream_json_error
+from app.services.error_detail import client_message, upstream_json_error
 from app.services.auto_cache import with_cache_control
 from app.services.routing import plan_route
 from app.services.settings_service import gateway_config
@@ -62,7 +62,7 @@ def _anthropic_error_event(e: Exception) -> str:
     passed = upstream_json_error(e)
     err = passed[1] if passed is not None else {
         "type": "error",
-        "error": {"type": "api_error", "message": f"Upstream error: {e}"},
+        "error": {"type": "api_error", "message": client_message(e)},
     }
     return f"event: error\ndata: {json.dumps(err)}\n\n"
 
@@ -136,7 +136,7 @@ async def count_tokens(
                     status_code=status, content=error_body,
                     headers=forwardable_headers(exc.response),
                 )
-            anthropic_error(502, "api_error", "upstream_error", f"Upstream error: {exc}")
+            anthropic_error(502, "api_error", "upstream_error", client_message(exc))
 
     input_tokens, _ = estimate_request_tokens(raw_body)
     return {"input_tokens": input_tokens}
