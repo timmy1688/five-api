@@ -1,6 +1,6 @@
 # Five API
 
-[English](README.en.md) · [更新记录](CHANGELOG.md)
+[更新记录](CHANGELOG.md)
 
 [![CI](https://github.com/timmy1688/five-api/actions/workflows/ci.yml/badge.svg)](https://github.com/timmy1688/five-api/actions/workflows/ci.yml)
 
@@ -168,4 +168,10 @@ cost  = (fresh × 输入价 + cache_read × 缓存读价 + cache_write × 缓存
 cd backend && ../.venv/bin/pytest -m smoke && ../.venv/bin/pytest -m regression
 ```
 
-可选的环境变量见 [.env.example](.env.example)。开发说明见 [CLAUDE.md](CLAUDE.md)。[MIT License](LICENSE)。费用是估算，可能和上游账单不一致，说明见 [法律风险与免责声明](DISCLAIMER.md)。
+可选的环境变量见 [.env.example](.env.example)。开发说明见 [CLAUDE.md](CLAUDE.md)。[MIT License](LICENSE)。
+
+## 免责声明
+
+Five API 是通用的开源网关软件，不提供模型服务，与任何上游厂商无隶属或背书关系。部署者自行确保使用方式符合当地法律和上游服务协议，不得用于未授权访问、转售密钥或绕过技术限制，并负责用户数据授权、访问控制和密钥轮换。
+
+费用按上游返回的用量和配置价格估算，可能因计量口径、调价、舍入或缺失用量而和厂商账单不同，额度也可能小幅超出。请同时在上游账户设置预算和告警。模型输出由第三方提供，可能不准确，高风险场景须经专业复核。本软件按 MIT License 原样提供，不作任何保证，维护者不对服务中断、数据丢失、密钥泄露或额外费用承担责任。
