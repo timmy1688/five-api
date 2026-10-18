@@ -84,6 +84,30 @@ def describe_upstream_failure(exc: Exception, base_url: str) -> dict:
     }
 
 
+def upstream_json_error(exc: Exception) -> tuple[int, dict] | None:
+    """4xx JSON from the upstream, returned to the client without rewriting.
+
+    5xx and non-JSON bodies stay on the gateway's own error shape. A body
+    larger than the log clip is not forwarded, so a huge page cannot become
+    the client response.
+    """
+    if not isinstance(exc, httpx.HTTPStatusError):
+        return None
+    status = exc.response.status_code
+    if status < 400 or status >= 500:
+        return None
+    text = _response_text(exc.response)
+    if not text or len(text) > MAX_ERROR_CHARS:
+        return None
+    try:
+        data = json.loads(text)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    return status, data
+
+
 def gateway_failure(message: str) -> dict:
     return {
         "error_origin": "gateway",

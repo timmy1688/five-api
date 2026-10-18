@@ -28,8 +28,70 @@ async def create_admin(username: str, password: str = "pw") -> User:
 class FakeRedis:
     def __init__(self):
         self.data = {}
+        self.hashes: dict[str, dict[str, int]] = {}
 
-    async def eval(self, *_):
+    async def ping(self):
+        return True
+
+    async def eval(self, script, numkeys, *keys_and_args):
+        key = keys_and_args[0]
+        args = keys_and_args[int(numkeys):]
+        if "HVALS" in script:
+            return self._quota_reserve(key, args)
+        if "HDEL" in script:
+            return self._quota_release(key, args)
+        if "EXISTS" in script and "INCRBY" in script:
+            return self._tpm_adjust(key, args)
+        if "INCRBY" in script:
+            return self._tpm_reserve(key, args)
+        if "INCR" in script:
+            return self._rpm(key, args)
+        return 1
+
+    def _quota_reserve(self, key, args):
+        request_id, estimate, used, total, _ttl = args
+        bucket = self.hashes.setdefault(key, {})
+        if request_id in bucket:
+            return 1
+        held = sum(bucket.values())
+        estimate, used, total = int(estimate), int(used), int(total)
+        if used >= total or used + held + estimate > total:
+            return 0
+        bucket[request_id] = estimate
+        return 1
+
+    def _quota_release(self, key, args):
+        bucket = self.hashes.get(key, {})
+        bucket.pop(args[0], None)
+        if not bucket:
+            self.hashes.pop(key, None)
+        return 1
+
+    def _tpm_reserve(self, key, args):
+        limit, amount, _window = (int(args[0]), int(args[1]), int(args[2]))
+        current = int(self.data.get(key, 0))
+        if current + amount > limit:
+            return 0
+        self.data[key] = str(current + amount)
+        return 1
+
+    def _tpm_adjust(self, key, args):
+        delta = int(args[0])
+        if key not in self.data or delta == 0:
+            return 1
+        nxt = int(self.data[key]) + delta
+        if nxt <= 0:
+            del self.data[key]
+        else:
+            self.data[key] = str(nxt)
+        return 1
+
+    def _rpm(self, key, args):
+        limit = int(args[0])
+        current = int(self.data.get(key, 0)) + 1
+        if current > limit:
+            return 0
+        self.data[key] = str(current)
         return 1
 
     async def get(self, key):
@@ -126,6 +188,7 @@ def mock_redis():
         "app.dependencies.get_redis",
         "app.services.concurrency.get_redis",
         "app.services.rate_limit.get_redis",
+        "app.services.quota.get_redis",
         "app.services.sticky_session.get_redis",
         "app.services.channel_health.get_redis",
     ]
@@ -133,7 +196,8 @@ def mock_redis():
          patch(targets[1], return_value=fake), \
          patch(targets[2], return_value=fake), \
          patch(targets[3], return_value=fake), \
-         patch(targets[4], return_value=fake):
+         patch(targets[4], return_value=fake), \
+         patch(targets[5], return_value=fake):
         yield fake
 
 

@@ -94,6 +94,8 @@ async def test_official_upstream_error_is_logged(client):
     assert log.upstream_status_code == 429
     assert log.error_message == "Rate limit reached"
     assert "Rate limit reached" in log.upstream_error
+    assert resp.json()["error"]["message"] == "Rate limit reached"
+    assert "detail" not in resp.json()
 
 
 async def test_reseller_upstream_error_is_logged(client):
@@ -122,6 +124,7 @@ async def test_reseller_upstream_error_is_logged(client):
     assert log.error_origin == "reseller"
     assert log.upstream_status_code == 502
     assert "bad gateway from relay" in log.upstream_error
+    assert resp.json()["detail"]["error"]["code"] == "upstream_error"
 
 
 async def test_system_audit_switch_records_content(client):

@@ -27,6 +27,11 @@ const router = createRouter({
       component: () => import('@/views/Login.vue'),
     },
     {
+      path: '/password',
+      name: 'ChangePassword',
+      component: () => import('@/views/ChangePassword.vue'),
+    },
+    {
       path: '/',
       component: () => import('@/layouts/AdminLayout.vue'),
       children: [
@@ -63,6 +68,11 @@ router.beforeEach(async (to) => {
   } catch {
     return { name: 'Login' }
   }
+
+  if (auth.mustChangePassword) {
+    return to.name === 'ChangePassword' ? undefined : { name: 'ChangePassword' }
+  }
+  if (to.name === 'ChangePassword') return
 
   const fallback = firstAllowedPath(auth.hasPermission)
   if (to.name === 'Login') {

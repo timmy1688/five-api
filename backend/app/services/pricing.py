@@ -25,19 +25,147 @@ def find_channel_pricing(
 
 
 def catalog_prices(model: str) -> dict[str, float]:
-    """Input, output, and cache-read prices.
+    """Input, output, cache-read, and cache-write prices per 1M tokens.
 
-    Cache writes stay inside the input price. cache_write is returned equal
-    to the input price so older rows stay aligned, and billing does not read it.
+    Anthropic bills a 5-minute cache write at 1.25 times the input price.
+    Other vendors bill that write as ordinary input. An explicit catalog
+    cache_write overrides the multiplier.
     """
     raw = DEFAULT_MODEL_PRICES[model]
     prompt = float(raw["prompt"])
+    if "cache_write" in raw:
+        write = float(raw["cache_write"])
+    elif model.startswith("claude-"):
+        write = prompt * 1.25
+    else:
+        write = prompt
     return {
         "prompt": prompt,
         "completion": float(raw["completion"]),
         "cached": float(raw.get("cached", 0)),
-        "cache_write": prompt,
+        "cache_write": write,
     }
+
+
+def _write_price(pricing: dict, prompt_price: Decimal) -> Decimal:
+    """Missing write price means the vendor bills writes as input. Explicit 0 is free."""
+    if "cache_write" in pricing:
+        return Decimal(str(pricing.get("cache_write", 0)))
+    return prompt_price
+
+
+async def resolve_prices(
+    model: str,
+    channel: Channel | None = None,
+) -> tuple[Decimal, Decimal, Decimal, Decimal]:
+    """Return prompt, completion, cache-read, and cache-write prices per 1M tokens."""
+    prompt_price = Decimal(0)
+    completion_price = Decimal(0)
+    cached_price = Decimal(0)
+    write_price = Decimal(0)
+
+    if channel:
+        pricing = find_channel_pricing(
+            model, channel.model_pricing, channel.model_mapping
+        )
+        if pricing is not None:
+            prompt_price = Decimal(str(pricing.get("prompt", 0)))
+            completion_price = Decimal(str(pricing.get("completion", 0)))
+            cached_price = Decimal(str(pricing.get("cached", 0)))
+            return (
+                prompt_price,
+                completion_price,
+                cached_price,
+                _write_price(pricing, prompt_price),
+            )
+
+    mp = await ModelPrice.get_or_none(model=model, is_active=True)
+    if mp:
+        prompt_price = Decimal(str(mp.prompt_price))
+        completion_price = Decimal(str(mp.completion_price))
+        cached_price = Decimal(str(mp.cached_price))
+        write_price = Decimal(str(mp.cache_write_price))
+    return prompt_price, completion_price, cached_price, write_price
+
+
+async def upper_rates(model: str) -> tuple[Decimal, Decimal]:
+    """Highest input and output prices configured for a model, for a quota hold."""
+    prompt_price, completion_price, _, _ = await resolve_prices(model)
+    channels = await Channel.filter(is_enabled=True)
+    for channel in channels:
+        pricing = find_channel_pricing(
+            model, channel.model_pricing, channel.model_mapping
+        )
+        if pricing is None:
+            continue
+        prompt_price = max(prompt_price, Decimal(str(pricing.get("prompt", 0))))
+        completion_price = max(
+            completion_price, Decimal(str(pricing.get("completion", 0)))
+        )
+    return prompt_price, completion_price
+
+
+def estimate_request_tokens(body: dict | None) -> tuple[int, int]:
+    """Upper-bound input tokens and the requested output cap.
+
+    CJK characters count as one token. Other text counts as four characters
+    per token. Output uses max_tokens, or 4096 when a chat request omits it.
+    """
+    if not body:
+        return 1, 0
+    raw_out = body.get("max_tokens")
+    if raw_out is None:
+        raw_out = body.get("max_completion_tokens")
+    if raw_out is None:
+        output = 4096 if body.get("messages") or body.get("system") else 0
+    else:
+        try:
+            output = int(raw_out)
+        except (TypeError, ValueError):
+            output = 4096
+    output = min(max(output, 0), 128_000)
+    text_parts = (
+        body.get("messages"),
+        body.get("system"),
+        body.get("prompt"),
+        body.get("input"),
+        body.get("tools"),
+    )
+    cjk = 0
+    other = 0
+
+    def walk(value) -> None:
+        nonlocal cjk, other
+        if isinstance(value, str):
+            for char in value:
+                if "\u4e00" <= char <= "\u9fff":
+                    cjk += 1
+                else:
+                    other += 1
+            return
+        if isinstance(value, dict):
+            for item in value.values():
+                walk(item)
+            return
+        if isinstance(value, list):
+            for item in value:
+                walk(item)
+
+    for part in text_parts:
+        walk(part)
+    input_tokens = max(1, cjk + (other + 3) // 4) if (cjk or other) else 1
+    return input_tokens, output
+
+
+async def estimate_upper_cost(model: str, body: dict | None) -> Decimal:
+    """Cost hold before the upstream responds. Cache discounts are not assumed."""
+    input_tokens, output_tokens = estimate_request_tokens(body)
+    prompt_price, completion_price = await upper_rates(model)
+    cost = (
+        Decimal(input_tokens) * prompt_price
+        + Decimal(output_tokens) * completion_price
+    ) / MILLION
+    return cost
 
 
 async def calculate_cost(
@@ -48,44 +176,25 @@ async def calculate_cost(
     cached_tokens: int = 0,
     cache_write_tokens: int = 0,
 ) -> Decimal:
-    """Bill input, cache reads, and output.
+    """Bill fresh input, cache reads, cache writes, and output.
 
-    Write tokens are ordinary input: they are already inside prompt_tokens,
-    and only cache reads are subtracted. cache_write_tokens is ignored.
+    prompt_tokens already includes cache reads and cache writes. Each bucket
+    is priced on its own. A missing write price uses the input price.
     """
-    del cache_write_tokens
-    prompt_price = Decimal(0)
-    completion_price = Decimal(0)
-    cached_price = Decimal(0)
-
-    has_channel_pricing = False
-    if channel:
-        pricing = find_channel_pricing(
-            model, channel.model_pricing, channel.model_mapping
-        )
-        if pricing is not None:
-            has_channel_pricing = True
-            prompt_price = Decimal(str(pricing.get("prompt", 0)))
-            completion_price = Decimal(str(pricing.get("completion", 0)))
-            cached_price = Decimal(str(pricing.get("cached", 0)))
-
-    if not has_channel_pricing:
-        mp = await ModelPrice.get_or_none(model=model, is_active=True)
-        if mp:
-            prompt_price = Decimal(str(mp.prompt_price))
-            completion_price = Decimal(str(mp.completion_price))
-            cached_price = Decimal(str(mp.cached_price))
-
-    fresh_input = max(prompt_tokens - cached_tokens, 0)
+    prompt_price, completion_price, cached_price, write_price = await resolve_prices(
+        model, channel
+    )
+    fresh_input = max(prompt_tokens - cached_tokens - cache_write_tokens, 0)
     cost = (
         Decimal(fresh_input) * prompt_price
         + Decimal(cached_tokens) * cached_price
+        + Decimal(cache_write_tokens) * write_price
         + Decimal(completion_tokens) * completion_price
     ) / MILLION
     return cost.quantize(Decimal("0.000001"))
 
 
-MODEL_PRICE_CATALOG_VERSION = "2026-07-25"
+MODEL_PRICE_CATALOG_VERSION = "2026-10-18"
 
 # Standard USD prices per 1M tokens. For providers with regional or context-tiered
 # pricing, this catalog uses the standard short-context price; channel pricing can
@@ -173,8 +282,11 @@ DEFAULT_MODEL_PRICES: dict[str, dict[str, float]] = {
     "qwen-turbo": {"prompt": 0.3, "completion": 0.6, "cached": 0.03},
     "qwen-long": {"prompt": 0.5, "completion": 2.0, "cached": 0.05},
     # ── DeepSeek V4 ──
-    "deepseek-v4-flash": {"prompt": 0.14, "completion": 0.28, "cached": 0.0028},
-    "deepseek-v4-pro": {"prompt": 0.435, "completion": 0.87, "cached": 0.003625},
+    # Peak rates. Off-peak is half; the gateway bills one rate per model, so
+    # off-peak traffic is charged at the higher price.
+    "deepseek-flash": {"prompt": 0.3, "completion": 1.2, "cached": 0.006},
+    "deepseek-v4-flash": {"prompt": 0.3, "completion": 1.2, "cached": 0.006},
+    "deepseek-v4-pro": {"prompt": 1.32, "completion": 3.96, "cached": 0.044},
     "deepseek-r1": {"prompt": 0.55, "completion": 2.19, "cached": 0.055},
     # ── xAI Grok (short context) ──
     "grok-4.5": {"prompt": 2.0, "completion": 6.0, "cached": 0.3},

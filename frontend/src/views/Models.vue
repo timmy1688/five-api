@@ -125,7 +125,8 @@ function sortByCompletion(a: any, b: any) {
 function channelPriceLabel(channel: any) {
   if (!channel.pricing) return `${channel.name}: unpriced`
   const p = channel.pricing
-  return `${channel.name}: $${p.prompt} input / $${p.completion} output / $${p.cached} cache read (${channel.pricing_source})`
+  const write = p.cache_write ?? p.prompt
+  return `${channel.name}: $${p.prompt} input / $${p.completion} output / $${p.cached} cache read / $${write} cache write (${channel.pricing_source})`
 }
 
 async function load() {

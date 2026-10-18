@@ -8,7 +8,7 @@ class ModelPriceCreate(BaseModel):
     prompt_price: float = Field(0, ge=0, allow_inf_nan=False)
     completion_price: float = Field(0, ge=0, allow_inf_nan=False)
     cached_price: float = Field(0, ge=0, allow_inf_nan=False)
-    cache_write_price: float = Field(0, ge=0, allow_inf_nan=False)
+    cache_write_price: float | None = Field(None, ge=0, allow_inf_nan=False)
     currency: str = Field("USD", min_length=1, max_length=8)
     is_active: bool = True
 

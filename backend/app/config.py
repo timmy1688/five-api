@@ -49,6 +49,8 @@ class Settings(BaseSettings):
     STICKY_SESSION_ENABLED: bool = True
     STICKY_SESSION_TTL: int = 900
 
+    METRICS_TOKEN: str = ""
+
     @property
     def database_url(self) -> str:
         return (

@@ -92,7 +92,7 @@ def resolve_frontend_file(static_dir: Path, full_path: str) -> Path | None:
     """
     normalized = full_path.lstrip("/")
     if (
-        normalized == "metrics"
+        normalized in {"metrics", "healthz"}
         or normalized.startswith(("api/", "v1/"))
         or normalized in {"docs", "redoc", "openapi.json"}
     ):
@@ -130,7 +130,7 @@ def _mount_frontend(app: FastAPI) -> None:
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="Five API Gateway", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title="Five API Gateway", version="0.2.0", lifespan=lifespan)
 
     app.add_middleware(
         CORSMiddleware,

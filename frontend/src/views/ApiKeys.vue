@@ -59,6 +59,12 @@
             <span v-else>{{ row.rpm_limit }}</span>
           </template>
         </el-table-column>
+        <el-table-column :label="t('keys.tpm')" width="80" align="center">
+          <template #default="{ row }">
+            <span v-if="row.tpm_limit === -1" style="color: #c0c4cc">-</span>
+            <span v-else>{{ row.tpm_limit }}</span>
+          </template>
+        </el-table-column>
         <el-table-column :label="t('keys.audit')" width="76" align="center">
           <template #default="{ row }">
             <el-switch
@@ -126,6 +132,10 @@
         <el-form-item :label="t('keys.rpmLabel')">
           <el-input-number v-model="form.rpm_limit" :min="-1" :step="10" style="width: 100%" />
           <div style="font-size: 12px; color: #909399">{{ t('keys.rpmHint') }}</div>
+        </el-form-item>
+        <el-form-item :label="t('keys.tpmLabel')">
+          <el-input-number v-model="form.tpm_limit" :min="-1" :step="1000" style="width: 100%" />
+          <div style="font-size: 12px; color: #909399">{{ t('keys.tpmHint') }}</div>
         </el-form-item>
         <el-form-item :label="t('keys.allowedModels')">
           <el-select v-model="form.allowed_models" multiple filterable allow-create style="width: 100%" :placeholder="t('keys.allowedModelsPlaceholder')" :disabled="!!form.model_group_id">
@@ -221,6 +231,10 @@
             <div class="detail-card-label">{{ t('keys.rpm') }}</div>
             <div class="detail-card-value">{{ detailRow.rpm_limit === -1 ? t('common.unlimited') : detailRow.rpm_limit }}</div>
           </div>
+          <div class="detail-card">
+            <div class="detail-card-label">{{ t('keys.tpm') }}</div>
+            <div class="detail-card-value">{{ detailRow.tpm_limit === -1 ? t('common.unlimited') : detailRow.tpm_limit }}</div>
+          </div>
         </div>
 
         <div class="detail-section-title">{{ t('keys.modelGroup') }}</div>
@@ -293,7 +307,7 @@ async function copyText(text: string) {
 }
 
 const emptyForm = () => ({
-  name: '', quota_total: -1, concurrent_limit: 5, rpm_limit: -1,
+  name: '', quota_total: -1, concurrent_limit: 5, rpm_limit: -1, tpm_limit: -1,
   allowed_models: [] as string[],
   allowed_ips: [] as string[],
   model_group_id: null as number | null,
@@ -334,6 +348,7 @@ function openEdit(row: any) {
     quota_total: row.quota_total,
     concurrent_limit: row.concurrent_limit,
     rpm_limit: row.rpm_limit,
+    tpm_limit: row.tpm_limit ?? -1,
     allowed_models: [...row.allowed_models],
     allowed_ips: [...(row.allowed_ips || [])],
     model_group_id: row.model_group_id ?? null,

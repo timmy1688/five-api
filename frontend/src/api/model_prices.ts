@@ -5,7 +5,7 @@ export const modelPricesApi = {
     const { data } = await client.get('/model-prices', { params: { page, size } })
     return data
   },
-  create: async (body: { model: string; prompt_price: number; completion_price: number; cached_price: number; currency?: string }) => {
+  create: async (body: { model: string; prompt_price: number; completion_price: number; cached_price: number; cache_write_price?: number | null; currency?: string }) => {
     const { data } = await client.post('/model-prices', body)
     return data
   },

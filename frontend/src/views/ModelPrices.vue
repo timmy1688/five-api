@@ -49,6 +49,13 @@
             </span>
           </template>
         </el-table-column>
+        <el-table-column :label="t('prices.cacheWrite')" width="150" align="right">
+          <template #default="{ row }">
+            <span :style="{ fontWeight: 500, color: row.cache_write_price > 0 ? '#6366f1' : '#cbd5e1' }">
+              {{ row.cache_write_price }}
+            </span>
+          </template>
+        </el-table-column>
         <el-table-column :label="t('prices.active')" width="76" align="center">
           <template #default="{ row }">
             <el-switch v-model="row.is_active" :disabled="!auth.hasPermission('model_price:write')" @change="toggleActive(row)" />
@@ -94,6 +101,10 @@
           <el-input-number v-model="form.cached_price" :min="0" :precision="4" :step="0.1" style="width: 100%" />
           <div class="form-hint">{{ t('prices.cacheReadHint') }}</div>
         </el-form-item>
+        <el-form-item :label="t('prices.cacheWrite')">
+          <el-input-number v-model="form.cache_write_price" :min="0" :precision="4" :step="0.1" :value-on-clear="null" style="width: 100%" />
+          <div class="form-hint">{{ t('prices.cacheWriteHint') }}</div>
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="dialogVisible = false">{{ t('common.cancel') }}</el-button>
@@ -125,7 +136,9 @@ const syncing = ref(false)
 const editingId = ref<number | null>(null)
 const unpricedModels = ref<{ model: string; channels: string[] }[]>([])
 
-const emptyForm = () => ({ model: '', prompt_price: 0, completion_price: 0, cached_price: 0 })
+const emptyForm = () => ({
+  model: '', prompt_price: 0, completion_price: 0, cached_price: 0, cache_write_price: null as number | null,
+})
 const form = ref(emptyForm())
 
 async function load() {
@@ -163,17 +176,27 @@ function openCreate() {
 
 function openEdit(row: any) {
   editingId.value = row.id
-  form.value = { model: row.model, prompt_price: row.prompt_price, completion_price: row.completion_price, cached_price: row.cached_price }
+  form.value = {
+    model: row.model,
+    prompt_price: row.prompt_price,
+    completion_price: row.completion_price,
+    cached_price: row.cached_price,
+    cache_write_price: row.cache_write_price,
+  }
   dialogVisible.value = true
 }
 
 async function handleSave() {
   saving.value = true
   try {
+    const payload = { ...form.value }
+    if (payload.cache_write_price == null) {
+      payload.cache_write_price = payload.prompt_price
+    }
     if (editingId.value) {
-      await modelPricesApi.update(editingId.value, form.value)
+      await modelPricesApi.update(editingId.value, payload)
     } else {
-      await modelPricesApi.create(form.value)
+      await modelPricesApi.create(payload)
     }
     dialogVisible.value = false
     ElMessage.success(t('common.saved'))

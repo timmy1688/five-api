@@ -20,6 +20,7 @@ class APIKeyCreate(BaseModel):
     quota_total: float = Field(-1, allow_inf_nan=False)
     concurrent_limit: int = Field(5, ge=1, le=1000)
     rpm_limit: int = Field(-1, le=1_000_000)
+    tpm_limit: int = Field(-1, le=100_000_000)
     allowed_models: list[str] = Field(default_factory=list)
     allowed_ips: list[str] = Field(default_factory=list)
     model_group_id: int | None = None
@@ -46,6 +47,13 @@ class APIKeyCreate(BaseModel):
             raise ValueError("rpm_limit must be -1 or at least 1")
         return v
 
+    @field_validator("tpm_limit")
+    @classmethod
+    def validate_tpm(cls, v):
+        if v != -1 and v < 1:
+            raise ValueError("tpm_limit must be -1 or at least 1")
+        return v
+
     @field_validator("audit_policy")
     @classmethod
     def validate_policy(cls, v):
@@ -59,6 +67,7 @@ class APIKeyUpdate(BaseModel):
     quota_total: float | None = Field(None, allow_inf_nan=False)
     concurrent_limit: int | None = Field(None, ge=1, le=1000)
     rpm_limit: int | None = Field(None, le=1_000_000)
+    tpm_limit: int | None = Field(None, le=100_000_000)
     allowed_models: list[str] | None = None
     allowed_ips: list[str] | None = None
     model_group_id: int | None = None
@@ -86,6 +95,13 @@ class APIKeyUpdate(BaseModel):
             raise ValueError("rpm_limit must be -1 or at least 1")
         return v
 
+    @field_validator("tpm_limit")
+    @classmethod
+    def validate_tpm(cls, v):
+        if v is not None and v != -1 and v < 1:
+            raise ValueError("tpm_limit must be -1 or at least 1")
+        return v
+
     @field_validator("audit_policy")
     @classmethod
     def validate_policy(cls, v):
@@ -103,6 +119,7 @@ class APIKeyResponse(BaseModel):
     quota_remaining: float
     concurrent_limit: int
     rpm_limit: int
+    tpm_limit: int
     allowed_models: list[str]
     allowed_ips: list[str]
     model_group_id: int | None

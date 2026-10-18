@@ -2,7 +2,6 @@ import json
 import time
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import StreamingResponse
 
 from app.models import APIKey, ModelPrice
 from app.providers.registry import list_available_models, resolve_candidates
@@ -11,13 +10,17 @@ from app.services.audit import open_audit, security_exempt
 from app.services.content_filter import collect_request_hits, format_hits
 from app.services.auth import verify_api_key
 from app.services.concurrency import ConcurrencyExceeded, concurrency_limiter
+from app.services.quota import QuotaExceeded, begin_request_budget
+from app.services.rate_limit import TPMExceeded
 from app.services.pre_checks import get_effective_allowed_models, openai_error, run_pre_checks
 from app.services.proxy import (
     execute_with_failover,
     extract_openai_usage,
     log_rejected_request,
+    open_stream,
     stream_with_failover,
 )
+from app.services.error_detail import upstream_json_error
 from app.services.sticky_session import get_sticky_channel, make_session_key
 from app.utils.ip_check import get_client_ip
 
@@ -25,8 +28,15 @@ router = APIRouter(tags=["openai-proxy"])
 
 
 def _openai_error_event(e: Exception) -> str:
-    """生成 OpenAI 格式的 SSE 错误事件。"""
-    err = {"error": {"message": f"Upstream error: {e}", "type": "server_error", "code": "upstream_error"}}
+    """生成 OpenAI 格式的 SSE 错误事件。上游 4xx JSON 原样放进事件。"""
+    passed = upstream_json_error(e)
+    err = passed[1] if passed is not None else {
+        "error": {
+            "message": f"Upstream error: {e}",
+            "type": "server_error",
+            "code": "upstream_error",
+        }
+    }
     return f"data: {json.dumps(err)}\n\ndata: [DONE]\n\n"
 
 
@@ -35,7 +45,8 @@ async def _proxy_endpoint(request: Request, body, endpoint: str, api_key: APIKey
     request_id = getattr(request.state, "request_id", "")
     ip = get_client_ip(request)
     start_time = time.monotonic()
-    body_dict = body.model_dump()
+    # Unset fields stay out, so the upstream applies its own defaults.
+    body_dict = body.model_dump(exclude_unset=True)
     audit = await open_audit(api_key, body_dict)
     security_hits = await collect_request_hits(body_dict, exempt=security_exempt(api_key))
 
@@ -66,17 +77,34 @@ async def _proxy_endpoint(request: Request, body, endpoint: str, api_key: APIKey
         )
         raise
 
+    budget = None
     try:
+        budget = await begin_request_budget(api_key, request_id, body_dict)
         concurrency_lease_id = await concurrency_limiter.acquire(
             api_key.id, api_key.concurrent_limit
         )
     except ConcurrencyExceeded:
+        if budget is not None:
+            await budget.release()
         await log_rejected_request(
             api_key, request_id, endpoint, body.model, 429,
             start_time, ip, "Too many concurrent requests", audit=audit,
             security_hit=format_hits(security_hits),
         )
         openai_error(429, "rate_limit_error", "concurrent_limit", "Too many concurrent requests")
+    except (QuotaExceeded, TPMExceeded) as exc:
+        message = (
+            "Spending quota exceeded"
+            if isinstance(exc, QuotaExceeded)
+            else "Tokens per minute limit exceeded"
+        )
+        code = "quota_exceeded" if isinstance(exc, QuotaExceeded) else "tpm_limit"
+        await log_rejected_request(
+            api_key, request_id, endpoint, body.model, 429,
+            start_time, ip, message, audit=audit,
+            security_hit=format_hits(security_hits),
+        )
+        openai_error(429, "rate_limit_error", code, message)
 
     if getattr(body, "stream", False):
         async def _stream_fn(provider, channel):
@@ -89,7 +117,8 @@ async def _proxy_endpoint(request: Request, body, endpoint: str, api_key: APIKey
                         pass
                 yield line, usage
 
-        return StreamingResponse(
+        upstream_headers: dict[str, str] = {}
+        return await open_stream(
             stream_with_failover(
                 candidates, _stream_fn, api_key, endpoint, body.model,
                 request_id, start_time, ip, _openai_error_event,
@@ -97,9 +126,10 @@ async def _proxy_endpoint(request: Request, body, endpoint: str, api_key: APIKey
                 session_key=session_key,
                 audit=audit,
                 security_hits=security_hits,
+                budget=budget,
+                upstream_headers=upstream_headers,
             ),
-            media_type="text/event-stream",
-            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+            upstream_headers,
         )
 
     async def _send_fn(provider, channel):
@@ -113,6 +143,7 @@ async def _proxy_endpoint(request: Request, body, endpoint: str, api_key: APIKey
         session_key=session_key,
         audit=audit,
         security_hits=security_hits,
+        budget=budget,
     )
 
 
@@ -172,6 +203,7 @@ async def get_key_info(api_key: APIKey = Depends(verify_api_key)):
             "prompt": float(mp.prompt_price),
             "completion": float(mp.completion_price),
             "cached": float(mp.cached_price),
+            "cache_write": float(mp.cache_write_price),
         }
         for mp in all_prices
     }
@@ -183,6 +215,8 @@ async def get_key_info(api_key: APIKey = Depends(verify_api_key)):
         "quota_total": total,
         "quota_used": used,
         "quota_remaining": remaining,
+        "rpm_limit": api_key.rpm_limit,
+        "tpm_limit": api_key.tpm_limit,
         "models": model_ids,
         "model_prices": model_prices,
         "model_prices_source": "global_defaults",

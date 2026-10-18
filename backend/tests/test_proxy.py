@@ -172,7 +172,7 @@ async def test_anthropic_cache_read_and_write_are_deducted(client):
 
     assert resp.status_code == 200
     expected = (
-        800 * Decimal("10") + 200 * Decimal("1") + 40 * Decimal("50")
+        500 * Decimal("10") + 200 * Decimal("1") + 300 * Decimal("12.5") + 40 * Decimal("50")
     ) / Decimal("1000000")
     expected = expected.quantize(Decimal("0.000001"))
     await api_key.refresh_from_db()
@@ -250,6 +250,68 @@ async def test_cross_channel_failover_is_logged(client):
     log = await RequestLog.get(request_id=resp.headers["x-request-id"])
     assert log.channel_id == second.id
     assert log.failed_over is True
+
+
+async def test_estimated_quota_hold_rejects_before_upstream(client):
+    ch, _, _ = await _setup_proxy_env()
+    raw = "sk-hold-reject"
+    await APIKey.create(
+        name="hold-reject",
+        key_hash=hash_api_key(raw),
+        key_prefix=raw[:8],
+        quota_total=Decimal("0.01"),
+        quota_used=Decimal("0"),
+    )
+    http = AsyncMock()
+    http.is_closed = False
+    http.post = AsyncMock()
+    with patch("app.providers.base._shared_http_client", return_value=http):
+        resp = await client.post(
+            "/v1/chat/completions",
+            json={"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}]},
+            headers=auth_header(raw),
+        )
+    assert resp.status_code == 429
+    assert resp.json()["detail"]["error"]["code"] == "quota_exceeded"
+    http.post.assert_not_awaited()
+    assert ch.id
+
+
+async def test_tpm_limit_rejects_before_upstream(client):
+    await _setup_proxy_env()
+    raw = "sk-tpm-reject"
+    await APIKey.create(
+        name="tpm-reject",
+        key_hash=hash_api_key(raw),
+        key_prefix=raw[:8],
+        quota_total=Decimal("-1"),
+        tpm_limit=10,
+    )
+    http = AsyncMock()
+    http.is_closed = False
+    http.post = AsyncMock(return_value=type("Resp", (), {
+        "raise_for_status": lambda self: None,
+        "json": lambda self: MOCK_COMPLETION_RESPONSE,
+    })())
+    with patch("app.providers.base._shared_http_client", return_value=http):
+        blocked = await client.post(
+            "/v1/chat/completions",
+            json={"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}]},
+            headers=auth_header(raw),
+        )
+        allowed = await client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "gpt-4o",
+                "max_tokens": 1,
+                "messages": [{"role": "user", "content": "hi"}],
+            },
+            headers=auth_header(raw),
+        )
+    assert blocked.status_code == 429
+    assert blocked.json()["detail"]["error"]["code"] == "tpm_limit"
+    assert allowed.status_code == 200
+    http.post.assert_awaited()
 
 
 async def test_chat_completions_quota_exceeded(client):
@@ -402,6 +464,227 @@ async def test_list_models_filtered_by_allowed(client):
     model_ids = [m["id"] for m in resp.json()["data"]]
     assert "gpt-4o" in model_ids
     assert "gpt-4o-mini" not in model_ids
+
+
+async def test_embeddings_and_completions_accept_token_arrays(client):
+    ch = await Channel.create(
+        name="token-ch", provider="openai",
+        base_url="https://api.openai.com", api_key="sk-up",
+        models=["text-embedding-3-small", "gpt-3.5-turbo"],
+        is_enabled=True, timeout=60,
+    )
+    raw_key = "sk-tokenarrays"
+    await APIKey.create(
+        name="token-key",
+        key_hash=hash_api_key(raw_key),
+        key_prefix=raw_key[:8],
+        quota_total=Decimal("-1"),
+    )
+    seen = []
+
+    async def send_request(body, endpoint):
+        seen.append((endpoint, body.get("input"), body.get("prompt")))
+        if endpoint == "/v1/embeddings":
+            return {
+                "object": "list",
+                "data": [{"object": "embedding", "index": 0, "embedding": [0.1]}],
+                "usage": {"prompt_tokens": 2, "total_tokens": 2},
+            }
+        return MOCK_COMPLETION_RESPONSE
+
+    provider = AsyncMock()
+    provider.send_request = AsyncMock(side_effect=send_request)
+    provider.apply_model_mapping = lambda model: model
+    provider.close = AsyncMock()
+    with patch("app.routers.openai_proxy.resolve_candidates", return_value=[(ch, lambda _: provider)]):
+        embedded = await client.post(
+            "/v1/embeddings",
+            json={"model": "text-embedding-3-small", "input": [[11, 22], [33]]},
+            headers=auth_header(raw_key),
+        )
+        completed = await client.post(
+            "/v1/completions",
+            json={"model": "gpt-3.5-turbo", "prompt": [5, 6, 7]},
+            headers=auth_header(raw_key),
+        )
+    assert embedded.status_code == 200
+    assert completed.status_code == 200
+    assert seen[0][1] == [[11, 22], [33]]
+    assert seen[1][2] == [5, 6, 7]
+
+
+async def test_unknown_anthropic_beta_is_forwarded(client):
+    await Channel.create(
+        name="beta-ch",
+        provider="anthropic",
+        base_url="https://upstream.anthropic.test",
+        api_key="sk-ant",
+        models=["claude-sonnet"],
+    )
+    raw = "sk-beta-forward"
+    await APIKey.create(
+        name="beta-key",
+        key_hash=hash_api_key(raw),
+        key_prefix=raw[:8],
+        quota_total=Decimal("-1"),
+    )
+    http = AsyncMock()
+    http.is_closed = False
+    http.post = AsyncMock(return_value=_Upstream({
+        "content": [{"type": "text", "text": "ok"}],
+        "stop_reason": "end_turn",
+        "usage": {"input_tokens": 1, "output_tokens": 1},
+    }))
+    with patch("app.providers.base._shared_http_client", return_value=http):
+        resp = await client.post(
+            "/v1/messages",
+            json={
+                "model": "claude-sonnet",
+                "max_tokens": 16,
+                "messages": [{"role": "user", "content": "hi"}],
+            },
+            headers={
+                **auth_header(raw),
+                "anthropic-beta": "claude-code-20250219, interleaved-thinking-2025-05-14",
+            },
+        )
+    assert resp.status_code == 200
+    sent = http.post.await_args.kwargs["headers"]["anthropic-beta"]
+    assert sent == "claude-code-20250219, interleaved-thinking-2025-05-14"
+
+
+async def test_stream_forwards_upstream_4xx_json(client):
+    ch, _, raw_key = await _setup_proxy_env()
+    request = httpx.Request("POST", "https://api.openai.com/v1/chat/completions")
+    response = httpx.Response(
+        400,
+        json={"error": {"message": "max_tokens is too large", "type": "invalid_request_error", "code": "invalid_request_error"}},
+        request=request,
+    )
+
+    async def send_stream(_body, _endpoint):
+        raise httpx.HTTPStatusError("400", request=request, response=response)
+        yield ""
+
+    provider = AsyncMock()
+    provider.send_stream = send_stream
+    provider.apply_model_mapping = lambda model: model
+    provider.close = AsyncMock()
+    with patch("app.routers.openai_proxy.resolve_candidates", return_value=[(ch, lambda _: provider)]):
+        resp = await client.post(
+            "/v1/chat/completions",
+            json={"model": "gpt-4o", "stream": True, "messages": [{"role": "user", "content": "hi"}]},
+            headers=auth_header(raw_key),
+        )
+    assert resp.status_code == 200
+    assert "max_tokens is too large" in resp.text
+    assert "Upstream error" not in resp.text
+
+
+def _http_response(status: int, payload: dict, headers: dict | None = None) -> httpx.Response:
+    request = httpx.Request("POST", "https://upstream.test/v1/x")
+    return httpx.Response(status, json=payload, headers=headers or {}, request=request)
+
+
+async def test_openai_forwards_only_sent_fields_and_rate_limit_headers(client):
+    await _setup_proxy_env()
+    http = AsyncMock()
+    http.is_closed = False
+    http.post = AsyncMock(return_value=_http_response(200, MOCK_COMPLETION_RESPONSE, {
+        "x-ratelimit-remaining-requests": "99",
+        "x-request-id": "req_upstream",
+        "set-cookie": "secret=1",
+    }))
+    with patch("app.providers.base._shared_http_client", return_value=http):
+        resp = await client.post(
+            "/v1/chat/completions",
+            json={"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}]},
+            headers=auth_header("sk-proxytest123456"),
+        )
+    assert resp.status_code == 200
+    sent = http.post.await_args.kwargs["json"]
+    assert set(sent) == {"model", "messages"}
+    assert resp.headers["x-ratelimit-remaining-requests"] == "99"
+    assert resp.headers["x-upstream-request-id"] == "req_upstream"
+    assert resp.headers["x-request-id"] != "req_upstream"
+    assert "set-cookie" not in resp.headers
+
+
+async def _anthropic_env(base_url: str = "https://upstream.anthropic.test") -> str:
+    await Channel.create(
+        name="ant-ch", provider="anthropic", base_url=base_url,
+        api_key="sk-ant", models=["claude-sonnet"],
+    )
+    raw = "sk-anthropic-env"
+    await APIKey.create(
+        name="ant-key", key_hash=hash_api_key(raw), key_prefix=raw[:8],
+        quota_total=Decimal("-1"),
+    )
+    return raw
+
+
+async def test_anthropic_stream_passes_rate_limit_headers(client):
+    raw = await _anthropic_env()
+    sse = (
+        'event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":3}}}\n\n'
+        'event: message_delta\ndata: {"type":"message_delta","usage":{"output_tokens":2}}\n\n'
+        'event: message_stop\ndata: {"type":"message_stop"}\n\n'
+    )
+    upstream = httpx.Response(
+        200, content=sse.encode(),
+        headers={"anthropic-ratelimit-tokens-remaining": "5000", "request-id": "req_ant"},
+        request=httpx.Request("POST", "https://upstream.anthropic.test/v1/messages"),
+    )
+    http = AsyncMock()
+    http.is_closed = False
+    http.build_request = lambda *args, **kwargs: None
+    http.send = AsyncMock(return_value=upstream)
+    with patch("app.providers.base._shared_http_client", return_value=http):
+        resp = await client.post(
+            "/v1/messages",
+            json={
+                "model": "claude-sonnet", "max_tokens": 16, "stream": True,
+                "messages": [{"role": "user", "content": "hi"}],
+            },
+            headers=auth_header(raw),
+        )
+    assert resp.status_code == 200
+    assert "message_stop" in resp.text
+    assert resp.headers["anthropic-ratelimit-tokens-remaining"] == "5000"
+    assert resp.headers["request-id"] == "req_ant"
+
+
+async def test_count_tokens_forwards_to_anthropic_channel(client):
+    raw = await _anthropic_env("https://upstream.anthropic.test/v1")
+    http = AsyncMock()
+    http.is_closed = False
+    http.post = AsyncMock(return_value=_http_response(200, {"input_tokens": 42}))
+    with patch("app.providers.base._shared_http_client", return_value=http):
+        resp = await client.post(
+            "/v1/messages/count_tokens",
+            json={"model": "claude-sonnet", "messages": [{"role": "user", "content": "hi"}]},
+            headers=auth_header(raw),
+        )
+    assert resp.status_code == 200
+    assert resp.json() == {"input_tokens": 42}
+    assert http.post.await_args.args[0] == "/messages/count_tokens"
+    assert await RequestLog.all().count() == 0
+
+
+async def test_count_tokens_estimates_when_upstream_lacks_it(client):
+    raw = await _anthropic_env()
+    http = AsyncMock()
+    http.is_closed = False
+    missing = _http_response(404, {"error": "not found"})
+    http.post = AsyncMock(return_value=missing)
+    with patch("app.providers.base._shared_http_client", return_value=http):
+        resp = await client.post(
+            "/v1/messages/count_tokens",
+            json={"model": "claude-sonnet", "messages": [{"role": "user", "content": "你好"}]},
+            headers=auth_header(raw),
+        )
+    assert resp.status_code == 200
+    assert resp.json()["input_tokens"] >= 2
 
 
 async def test_embeddings_non_stream(client):

@@ -52,6 +52,7 @@
             </div>
             <template #dropdown>
               <el-dropdown-menu>
+                <el-dropdown-item @click="router.push('/password')">{{ t('password.title') }}</el-dropdown-item>
                 <el-dropdown-item @click="handleLogout">{{ t('common.logout') }}</el-dropdown-item>
               </el-dropdown-menu>
             </template>

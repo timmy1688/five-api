@@ -11,6 +11,7 @@ class APIKey(Model):
     quota_used = fields.DecimalField(max_digits=16, decimal_places=6, default=0)
     concurrent_limit = fields.IntField(default=5)
     rpm_limit = fields.IntField(default=-1)
+    tpm_limit = fields.IntField(default=-1)
     allowed_models = fields.JSONField(default=list)
     allowed_ips = fields.JSONField(default=list)
     model_group_id = fields.IntField(null=True, default=None)

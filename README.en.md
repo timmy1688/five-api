@@ -1,6 +1,8 @@
 # Five API
 
-[中文](README.md)
+[中文](README.md) · [Changelog](CHANGELOG.md)
+
+[![CI](https://github.com/timmy1688/five-api/actions/workflows/ci.yml/badge.svg)](https://github.com/timmy1688/five-api/actions/workflows/ci.yml)
 
 A self-hosted AI gateway for a team. Upstream keys stay in the gateway. Each person gets a key with its own USD quota, model list, and rate limit. Claude Code and the OpenAI SDK only change the base URL.
 
@@ -13,7 +15,7 @@ export ANTHROPIC_BASE_URL=http://your-server
 export ANTHROPIC_API_KEY=sk-your-gateway-key
 ```
 
-**You can match what each person spent to the vendor bill.** Quota is USD on the key. One request has three prices: input, cache read, and output. Cache writes are billed as input.
+**You can match what each person spent to the vendor bill.** Quota is USD on the key. One request has four prices: input, cache read, cache write, and output. Claude cache writes are 1.25× input. Other models bill writes at the input price. The gateway reserves an estimate when the request starts and settles the real usage when it finishes. A key can limit requests per minute and tokens per minute.
 
 **Security checks do not stop the call. Review one person when you need to.** Keywords look only at the outgoing request. Secret patterns check the request and the reply for private keys, AWS access keys, GitHub tokens, and Slack tokens. The log stores the pattern name, not the secret. After a hit, the request and the reply both continue. Quota, model permission, and rate limits are what reject a call.
 
@@ -22,10 +24,10 @@ Inference audit stores the request only for keys that have audit on. Replies are
 | | Five API | A typical gateway |
 |---|---|---|
 | Claude Code | The request arrives unchanged, with tools and thinking | Converted into another format, then forwarded |
-| Billing | Per person. Only cache reads have their own price | Separate read and write prices that still miss vendor rules |
+| Billing | Per person. Cache writes follow the vendor price, and quota is reserved before the call | Totals only, so parallel calls can overspend |
 | Security | A hit is only logged. Each saved request is reviewed alone, as a short excerpt | A hit stops the request |
 | Failure | Same-protocol failover, then a circuit breaker | Often tries a channel that speaks another protocol |
-| Code | About 12,000 lines, Python and Vue 3, 19 permissions | Often tens of thousands of lines |
+| Code | About 14,000 lines, Python and Vue 3, 19 permissions | Often tens of thousands of lines |
 
 ## Screenshots
 
@@ -53,14 +55,19 @@ Install Docker, then from the project directory:
 docker compose up -d
 ```
 
-No `.env` file is required. The admin UI and the API share one port, host port 80 by default. Open `http://your-server`. The first login is `admin` / `admin123`. Change that password in the admin UI after logging in. The database, Redis, and the signing key live in `./data`. `docker compose down` leaves that directory in place.
+No `.env` file is required. Compose pulls `ghcr.io/timmy1688/five-api` when a release exists and builds from source otherwise. The admin UI and the API share one port, host port 80 by default. Open `http://your-server`. The first login is `admin` / `admin123`, and the UI asks for a new password before anything else. The database, Redis, and the signing key live in `./data`. `docker compose down` leaves that directory in place.
+
+The gateway waits for MySQL and Redis before it runs migrations. `/healthz` reports both, and the Docker health check uses it. `/metrics` answers only inside the container by default. To scrape it from Prometheus, set `METRICS_TOKEN` in `docker-compose.yml` and send `Authorization: Bearer <token>`.
 
 To change the published port or a password, edit the values in `docker-compose.yml`, then run `docker compose up -d` again. `INIT_ADMIN_PASSWORD` applies only when the admin account is created.
 
 ```bash
+docker compose up -d --build   # rebuild after changing the source
 docker compose logs -f gateway
 docker compose down
 ```
+
+After an upgrade, click Sync latest prices on Model Pricing once. Changes per version are in [CHANGELOG.md](CHANGELOG.md).
 
 ## Development
 
@@ -86,6 +93,8 @@ The database account matches the values in `docker-compose.yml`. To change a pas
 
 Copy `sk-xxx` when the key is created; it is shown once. Sync the built-in prices on Model Pricing. A channel price of 0 makes that tier free.
 
+Fields the client left out stay out, so the upstream applies its own defaults. Upstream rate-limit headers (`x-ratelimit-*`, `anthropic-ratelimit-*`, `retry-after`, `request-id`) come back unchanged, so SDK backoff keeps working. The upstream `x-request-id` is renamed `x-upstream-request-id`; the gateway's own `X-Request-ID` is for log lookup. `/v1/messages/count_tokens`, which Claude Code calls, goes to an Anthropic channel and is not billed. When the upstream lacks it, the gateway returns a local estimate.
+
 ```python
 from openai import OpenAI
 client = OpenAI(api_key="sk-your-gateway-key", base_url="http://your-server/v1")
@@ -93,11 +102,11 @@ client.chat.completions.create(model="gpt-4o", messages=[{"role": "user", "conte
 ```
 
 ```
-fresh = prompt - cache_read
-cost  = (fresh × input + cache_read × cache_read_price + completion × output) / 1_000_000
+fresh = prompt - cache_read - cache_write
+cost  = (fresh × input + cache_read × cache_read_price + cache_write × cache_write_price + completion × output) / 1_000_000
 ```
 
-The channel price is used first, then the global price. Quota is deducted after the response.
+Channel price wins, then the global price. A channel row without a write price uses that channel's input price. An explicit 0 makes writes free. Quota is reserved up front and settled from the real usage. Sync default prices once so Claude write prices become 1.25× input.
 
 ## Rest
 

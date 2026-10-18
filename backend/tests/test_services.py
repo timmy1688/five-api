@@ -20,7 +20,15 @@ from app.services.pricing import calculate_cost, catalog_prices
 from app.services.settings_service import set_gateway_config
 from app.services.sticky_session import make_session_key
 from app.services.proxy import extract_openai_usage
-from app.services.quota import check_quota, deduct_quota, reset_expired_quotas
+from app.services.quota import (
+    QuotaExceeded,
+    check_quota,
+    deduct_quota,
+    release_quota,
+    reserve_quota,
+    reset_expired_quotas,
+)
+from app.services.rate_limit import TPMExceeded, rate_limiter
 from app.utils.secrets import decrypt_secret, encrypt_secret, mask_secret
 from app.utils.upstream_url import upstream_url
 import httpx
@@ -172,7 +180,7 @@ async def test_extract_deepseek_cache_usage():
     }
 
 
-async def test_cache_writes_are_billed_as_input():
+async def test_cache_writes_use_the_write_price():
     await ModelPrice.create(
         model="cache-split-model",
         prompt_price=Decimal("10"),
@@ -184,8 +192,10 @@ async def test_cache_writes_are_billed_as_input():
         "cache-split-model", 1000, 0, None,
         cached_tokens=200, cache_write_tokens=300,
     )
-    # Writes stay in the 800 input tokens. The stored write price is ignored.
-    expected = (800 * Decimal("10") + 200 * Decimal("1")) / Decimal("1000000")
+    # 500 fresh input, 200 cache reads, 300 writes at the write price.
+    expected = (
+        500 * Decimal("10") + 200 * Decimal("1") + 300 * Decimal("12.5")
+    ) / Decimal("1000000")
     assert cost == expected.quantize(Decimal("0.000001"))
 
 
@@ -210,12 +220,12 @@ async def test_missing_channel_write_price_uses_prompt_price():
     cost = await calculate_cost(
         "channel-write-fallback", 1000, 0, ch, cache_write_tokens=400,
     )
-    # The 400 write tokens stay inside the 1000 input tokens at $10, not the global $99.
+    # A channel price without cache_write bills those tokens at the channel input price.
     expected = (1000 * Decimal("10")) / Decimal("1000000")
     assert cost == expected.quantize(Decimal("0.000001"))
 
 
-async def test_channel_write_price_does_not_change_the_bill():
+async def test_explicit_zero_write_price_is_free():
     await ModelPrice.create(
         model="free-write-model",
         prompt_price=Decimal("10"),
@@ -237,7 +247,7 @@ async def test_channel_write_price_does_not_change_the_bill():
     cost = await calculate_cost(
         "free-write-model", 1000, 0, ch, cache_write_tokens=400,
     )
-    expected = (1000 * Decimal("10")) / Decimal("1000000")
+    expected = (600 * Decimal("10")) / Decimal("1000000")
     assert cost == expected.quantize(Decimal("0.000001"))
 
 
@@ -252,7 +262,7 @@ async def test_cache_tokens_above_prompt_do_not_make_negative_cost():
     cost = await calculate_cost(
         "clamp-model", 100, 0, None, cached_tokens=80, cache_write_tokens=50,
     )
-    expected = (20 * Decimal("10") + 80 * Decimal("1")) / Decimal("1000000")
+    expected = (80 * Decimal("1") + 50 * Decimal("12.5")) / Decimal("1000000")
     assert cost == expected.quantize(Decimal("0.000001"))
 
 
@@ -266,8 +276,10 @@ async def test_inactive_price_is_not_billed():
     assert await calculate_cost("inactive-price", 1000, 500, None) == Decimal("0.000000")
 
 
-async def test_catalog_write_price_matches_input_price():
-    for model in ("claude-sonnet-4-6", "deepseek-v4-flash", "gpt-4o", "gpt-5.6"):
+async def test_catalog_write_price_matches_vendor_rule():
+    claude = catalog_prices("claude-sonnet-4-6")
+    assert claude["cache_write"] == claude["prompt"] * 1.25
+    for model in ("deepseek-v4-flash", "gpt-4o", "gpt-5.6"):
         prices = catalog_prices(model)
         assert prices["cache_write"] == prices["prompt"]
 
@@ -298,7 +310,7 @@ async def test_anthropic_usage_is_billed_on_openai_token_basis():
                                  cached_tokens=usage["cached_tokens"],
                                  cache_write_tokens=usage["cache_write_tokens"])
     expected = (
-        800 * Decimal("10") + 200 * Decimal("1") + 40 * Decimal("50")
+        500 * Decimal("10") + 200 * Decimal("1") + 300 * Decimal("12.5") + 40 * Decimal("50")
     ) / Decimal("1000000")
     assert cost == expected.quantize(Decimal("0.000001"))
 
@@ -391,6 +403,26 @@ async def test_check_quota_exceeded():
         quota_total=Decimal("10"), quota_used=Decimal("10"),
     )
     assert await check_quota(k) is False
+
+
+async def test_quota_hold_blocks_a_second_reservation():
+    k = await APIKey.create(
+        name="hold", key_hash=hash_api_key("sk-hold"), key_prefix="sk-hold0",
+        quota_total=Decimal("1"), quota_used=Decimal("0.40"),
+    )
+    assert await reserve_quota(k, "req-a", Decimal("0.50")) is True
+    with pytest.raises(QuotaExceeded):
+        await reserve_quota(k, "req-b", Decimal("0.20"))
+    await release_quota(k.id, "req-a")
+    assert await reserve_quota(k, "req-b", Decimal("0.20")) is True
+
+
+async def test_tpm_reservation_rejects_and_refunds():
+    with pytest.raises(TPMExceeded):
+        await rate_limiter.reserve_tpm(7, 10, 11)
+    await rate_limiter.reserve_tpm(7, 10, 6)
+    await rate_limiter.adjust_tpm(7, 10, -4)
+    await rate_limiter.reserve_tpm(7, 10, 8)
 
 
 async def test_deduct_quota():

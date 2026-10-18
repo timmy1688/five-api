@@ -22,7 +22,7 @@ docker compose up -d               # 不需要 .env
 docker compose logs -f gateway     # 查看日志
 ```
 
-启动后管理后台和 API 都在 `http://localhost`（容器内 8000，默认映射到宿主机 80），默认管理员 `admin` / `admin123`（Super Admin 角色）
+启动后管理后台和 API 都在 `http://localhost`（容器内 8000，默认映射到宿主机 80），默认管理员 `admin` / `admin123`（Super Admin 角色），首次登录必须先改密码
 
 ### 本地开发
 
@@ -221,6 +221,8 @@ async def _send_fn(provider, channel):
         ...
 ```
 
+**请求字段与响应头**：OpenAI 路由用 `model_dump(exclude_unset=True)`，客户端没传的字段不会以 null 发给上游。Provider 把上游的 `x-ratelimit-*`、`anthropic-ratelimit-*`、`retry-after(-ms)`、`request-id` 存进 `response_headers`（`x-request-id` 改名 `x-upstream-request-id`），非流式成功和 4xx JSON 透传时带回客户端。流式由 `open_stream()` 先取第一段再发响应头，所以流式也能带上。
+
 ### Anthropic 代理的两条路径
 
 | 条件 | 路径 | 说明 |
@@ -329,8 +331,9 @@ async def create(body: ..., user: User = require_permission("channel:write")):
 | 401 | `invalid_api_key` / `key_disabled` / `key_expired` | Key 认证失败 |
 | 403 | `model_not_allowed` / `Permission denied` | Key 无权访问模型 / 管理员无权限 |
 | 404 | `model_not_found` | 无启用渠道支持该模型 |
-| 429 | `quota_exceeded` / `rpm_limit` / `concurrent_limit` | 配额/速率/并发超限 |
-| 502 | `upstream_error` | 所有候选渠道均失败 |
+| 429 | `quota_exceeded` / `rpm_limit` / `tpm_limit` / `concurrent_limit` | 配额/每分钟请求/每分钟 token/并发超限 |
+| 4xx | 上游 JSON | 上游 4xx 且正文是 JSON 时原样返回。配额、限流、没有渠道仍用网关自己的 `detail` |
+| 502 | `upstream_error` | 上游 5xx、超时，或 4xx 正文不是 JSON |
 
 ---
 
@@ -388,6 +391,7 @@ async def create(body: ..., user: User = require_permission("channel:write")):
 | quota_used | decimal(16,6) | 已消耗金额 |
 | concurrent_limit | int | 最大并发数，默认 5 |
 | rpm_limit | int | 每分钟最大请求数，-1 = 不限制 |
+| tpm_limit | int | 每分钟最大 token 数，-1 = 不限制。请求前按估算占用，结束后按实际 prompt+completion 调整 |
 | allowed_models | JSON | 模型白名单，未关联模型组时空 = 全部允许 |
 | model_group_id | int FK NULL | 关联模型分组，优先于 allowed_models；空组/失效引用均拒绝全部模型 |
 | allowed_ips | JSON | IP 白名单，空 = 不限制 |
@@ -414,7 +418,7 @@ async def create(body: ..., user: User = require_permission("channel:write")):
 | prompt_price | decimal(16,6) | $/1M tokens |
 | completion_price | decimal(16,6) | $/1M tokens |
 | cached_price | decimal(16,6) | 缓存读取价 $/1M tokens |
-| cache_write_price | decimal(16,6) | 保留字段，计费不读。同步内置价格时写成与输入价相同。缓存写入按输入价计 |
+| cache_write_price | decimal(16,6) | 缓存写入价 $/1M tokens。Claude 内置价是输入价的 1.25 倍，其他模型与输入价相同。显式 0 表示写入免费 |
 | is_active | bool | |
 
 ### request_logs（请求日志）
@@ -442,13 +446,13 @@ async def create(body: ..., user: User = require_permission("channel:write")):
 ### 计费
 
 ```
-cost = (fresh × prompt_price + cache_read × cached_price + completion × completion_price) / 1M
-fresh = prompt - cache_read
+cost = (fresh × prompt_price + cache_read × cached_price + cache_write × cache_write_price + completion × completion_price) / 1M
+fresh = prompt - cache_read - cache_write
 ```
 
-定价优先级：Channel `model_pricing` → 全局 `model_prices` 表（查价用 `model_actual`，即经 `model_mapping` 后的真实上游模型名）。渠道显式配置 `0` 是有效覆盖，不回退全局价格。扣减使用 `F()` 原子操作。
+定价优先级：Channel `model_pricing` → 全局 `model_prices` 表（查价用 `model_actual`，即经 `model_mapping` 后的真实上游模型名）。渠道显式配置 `0` 是有效覆盖，不回退全局价格。渠道没填 `cache_write` 时，写入按该渠道的输入价计。扣减使用 `F()` 原子操作。
 
-配额按上游响应中的实际用量后扣，是软上限。检查和扣费本身并发安全，但多个请求在达到上限前已同时放行时，最终用量允许小幅超额；若要严格硬上限，需要引入请求前额度预留与响应后结算机制，当前精简实现不做额度账本。
+配额在请求发出前按估算费用写入 Redis 预留（`five:quota:hold:{key_id}`），响应后先把实际费用加到 `quota_used`，再释放预留。无限配额不预留，仍累计 `quota_used`。估算用当前最高输入价和输出价，不含缓存折扣。预留覆盖并发超额；价格未知时估算为 0，只挡住已经用满的额度。
 
 内置价格表（`services/pricing.py` `DEFAULT_MODEL_PRICES`）含 80+ 个主流模型，版本由
 `MODEL_PRICE_CATALOG_VERSION` 标记。管理后台“同步最新价格”会新增缺失项并刷新内置
@@ -464,7 +468,7 @@ fresh = prompt - cache_read
 | DeepSeek（OpenAI 兼容） | **含** | `prompt_cache_hit_tokens` |
 | Anthropic | **不含** | `cache_read_input_tokens`（读）、`cache_creation_input_tokens`（写） |
 
-因此凡是从 **Anthropic 上游** 取 usage 的路径，都必须把读取和写入补进 `prompt_tokens`。计费只把读取按缓存价扣，写入留在输入价里。漏加写入会少计：
+因此凡是从 **Anthropic 上游** 取 usage 的路径，都必须把读取和写入补进 `prompt_tokens`。读取按缓存价扣，写入按 `cache_write_price` 扣。漏加写入会少计：
 
 ```
 prompt_tokens = input_tokens + cache_read_input_tokens + cache_creation_input_tokens
@@ -496,6 +500,7 @@ cache_write_tokens = cache_creation_input_tokens
 | GET | `/v1/models` | Bearer | 当前 Key 可用模型 |
 | GET | `/v1/me` | Bearer | Key 配额/模型/定价信息 |
 | POST | `/v1/messages` | x-api-key 或 Bearer | Anthropic Messages（支持 stream） |
+| POST | `/v1/messages/count_tokens` | x-api-key 或 Bearer | 转发到 anthropic 渠道，不计费、不限流、不写日志。上游 404/405/501 时返回本地估算 |
 
 请求示例：
 
@@ -530,7 +535,7 @@ export ANTHROPIC_API_KEY=sk-your-five-api-key
 |------|------|------|------|
 | POST | `/api/login` | — | 登录 → access_token |
 | GET | `/api/me` | 登录即可 | 当前管理员信息（含角色、权限列表） |
-| PUT | `/api/password` | 登录即可 | 修改密码 |
+| PUT | `/api/password` | 登录即可 | 修改密码，新密码至少 8 位，返回新 token。用 `admin123` 登录的 token 带 `pwd` 标记，`require_permission` 一律返回 403 `Password change required`，改完才放行 |
 | GET/POST | `/api/channels` | channel:read / channel:write | 渠道列表/创建 |
 | GET/PUT/DELETE | `/api/channels/{id}` | channel:read / channel:write | 渠道详情/更新/删除 |
 | POST | `/api/channels/{id}/test` | channel:read | 测试渠道连通性 |
@@ -575,7 +580,8 @@ export ANTHROPIC_API_KEY=sk-your-five-api-key
 | GET | `/api/roles/all` | 登录即可 | 全量角色列表（下拉框用） |
 | GET | `/api/roles/permissions` | 登录即可 | 所有可用权限定义 |
 | GET/PUT/DELETE | `/api/roles/{id}` | role:read / role:write | 角色详情/更新/删除 |
-| GET | `/metrics` | 无需认证 | Prometheus 指标 |
+| GET | `/metrics` | `METRICS_TOKEN` 或本机 | Prometheus 指标。设了令牌凭 Bearer 访问，没设只允许 loopback。反代和 Docker 端口转发会让外部请求像私网地址，所以不按私网放行 |
+| GET | `/healthz` | 无需认证 | MySQL 和 Redis 都可用返回 200，否则 503。Docker HEALTHCHECK 使用 |
 
 分页: `?page=1&size=20`。日志过滤: `?api_key_id=&model=&status_code=&start_date=&end_date=`
 
@@ -592,6 +598,7 @@ export ANTHROPIC_API_KEY=sk-your-five-api-key
 | `INIT_ADMIN_USERNAME/PASSWORD` | `admin`/`admin123` | 首次启动创建（Super Admin 角色） |
 | `STICKY_SESSION_ENABLED` | `true` | 粘性会话默认开关。后台系统设置保存后以保存值为准 |
 | `STICKY_SESSION_TTL` | `900` | 会话绑定默认秒数。后台保存后以保存值为准 |
+| `METRICS_TOKEN` | 空 | 填了才能从容器外抓 `/metrics` |
 | `LOG_RETENTION_DAYS` | `90` | 日志保留默认天数。后台保存后以保存值为准 |
 | `CHANNEL_HEALTH_THRESHOLD` | `3` | 连续失败熔断默认次数。后台保存后以保存值为准 |
 | `CHANNEL_HEALTH_CHECK_INTERVAL` | `60` | 熔断探测默认间隔秒数。后台保存后以保存值为准 |
@@ -634,8 +641,8 @@ DeepSeek 同时提供 OpenAI 端点（`/v1/chat/completions`）和 Anthropic 端
 
 | 渠道 | provider | base_url | models |
 |------|----------|----------|--------|
-| DeepSeek-OpenAI | `openai` | `https://api.deepseek.com` | `deepseek-v4-flash`、`deepseek-v4-pro` |
-| DeepSeek-Anthropic | `anthropic` | `https://api.deepseek.com/anthropic` | `deepseek-v4-flash`、`deepseek-v4-pro` |
+| DeepSeek-OpenAI | `openai` | `https://api.deepseek.com` | `deepseek-flash`、`deepseek-v4-pro` |
+| DeepSeek-Anthropic | `anthropic` | `https://api.deepseek.com/anthropic` | `deepseek-flash`、`deepseek-v4-pro` |
 
 路由行为：
 - 客户端走 `/v1/chat/completions`（OpenAI SDK） → 优先命中 **DeepSeek-OpenAI** 渠道，透传。
@@ -647,7 +654,7 @@ Claude Code 直连时，配 `provider=anthropic` 的那条渠道即可：
 ```bash
 export ANTHROPIC_BASE_URL=http://your-gateway:8000
 export ANTHROPIC_API_KEY=sk-your-five-api-key
-# 请求模型名用 deepseek-v4-flash / deepseek-v4-pro
+# 请求模型名用 deepseek-flash / deepseek-v4-pro
 ```
 
 ### 2. 创建 API Key
@@ -755,7 +762,7 @@ IP 白名单读取 `request.client`；部署反向代理时只能通过 Uvicorn
 
 ## 常见问题
 
-**首次启动没有管理员？** 检查 `.env` 中 `INIT_ADMIN_USERNAME/PASSWORD`，应用启动时 admins 表为空则自动创建（Super Admin 角色）。同时自动创建预置角色（Super Admin、Viewer）。
+**首次启动没有管理员？** 检查 `.env` 中 `INIT_ADMIN_USERNAME/PASSWORD`，应用启动时 admins 表为空则自动创建（Super Admin 角色）。同时自动创建预置角色（Super Admin、Viewer）。用默认密码登录后会被引导到 `/password` 改密码。
 
 **流式响应不工作？** 默认部署由网关进程直接输出 SSE。如果前面又加了 Nginx 或其他反代，需要关闭响应缓冲（Nginx 的 `proxy_buffering off`）。
 

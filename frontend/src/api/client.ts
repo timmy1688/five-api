@@ -19,6 +19,9 @@ client.interceptors.response.use(
       const auth = useAuthStore()
       auth.logout()
       router.push('/login')
+    } else if (err.response?.status === 403 && err.response.data?.detail === 'Password change required') {
+      useAuthStore().mustChangePassword = true
+      router.push('/password')
     }
     return Promise.reject(err)
   }

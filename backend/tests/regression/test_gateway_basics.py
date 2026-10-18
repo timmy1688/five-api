@@ -5,7 +5,9 @@ from decimal import Decimal
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from httpx import ASGITransport, AsyncClient
 
+from app.config import settings
 from app.models import APIKey, Channel
 from app.services.auth import hash_api_key
 from tests.conftest import auth_header
@@ -99,3 +101,27 @@ async def test_rpm_limit_rejects_the_extra_request(client, mock_redis):
     assert first.status_code == 429 or second.status_code == 429
     blocked = second if second.status_code == 429 else first
     assert blocked.json()["detail"]["error"]["code"] == "rpm_limit"
+
+
+async def test_metrics_is_local_only_without_a_token(app, client):
+    assert (await client.get("/metrics")).status_code == 200
+    remote = AsyncClient(
+        transport=ASGITransport(app=app, client=("203.0.113.9", 1234)),
+        base_url="http://test",
+    )
+    async with remote:
+        assert (await remote.get("/metrics")).status_code == 403
+
+
+async def test_metrics_token_is_required_when_set(client):
+    with patch.object(settings, "METRICS_TOKEN", "scrape-secret"):
+        assert (await client.get("/metrics")).status_code == 401
+        ok = await client.get("/metrics", headers={"Authorization": "Bearer scrape-secret"})
+    assert ok.status_code == 200
+    assert "five_requests_total" in ok.text
+
+
+async def test_healthz_reports_mysql_and_redis(client, mock_redis):
+    resp = await client.get("/healthz")
+    assert resp.status_code == 200
+    assert resp.json() == {"status": "ok", "mysql": "ok", "redis": "ok"}

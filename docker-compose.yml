@@ -1,9 +1,11 @@
 # 启动：docker compose up -d
-# 打开 http://localhost ，账号 admin / admin123
+# 打开 http://localhost ，账号 admin / admin123，首次登录会要求改密码
 # 改端口或密码时，直接改下面的值。
 
 services:
   gateway:
+    # 有发布镜像时直接拉取；拉不到就用本地源码构建
+    image: ghcr.io/timmy1688/five-api:latest
     build: .
     restart: always
     ports:
@@ -18,9 +20,14 @@ services:
       REDIS_URL: redis://redis:6379/0
       INIT_ADMIN_USERNAME: admin
       INIT_ADMIN_PASSWORD: admin123
+      # 填了才能从容器外抓 /metrics，Prometheus 用 Bearer 令牌访问
+      METRICS_TOKEN: ""
+    stop_grace_period: 40s
     depends_on:
-      - mysql
-      - redis
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
 
   redis:
     image: redis:7-alpine
@@ -29,6 +36,11 @@ services:
       - "6379:6379"
     volumes:
       - ./data/redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
 
   mysql:
     image: mysql:8.0
@@ -42,3 +54,10 @@ services:
       - ./data/mysql:/var/lib/mysql
     ports:
       - "3306:3306"
+    healthcheck:
+      # 用 TCP 检查。首次初始化时 MySQL 先起一个不开网络的临时实例，socket 检查会提前通过。
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-proot_password"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 30s

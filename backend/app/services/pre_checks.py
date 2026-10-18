@@ -29,14 +29,18 @@ async def get_effective_allowed_models(api_key: APIKey) -> list[str] | None:
     return api_key.allowed_models or None
 
 
+async def check_model_access(api_key: APIKey, model: str, raise_error=openai_error) -> None:
+    effective_models = await get_effective_allowed_models(api_key)
+    if effective_models is not None and model not in effective_models:
+        raise_error(403, "invalid_request_error", "model_not_allowed", f"Model {model} not allowed for this key")
+
+
 async def run_pre_checks(api_key: APIKey, model: str, raise_error=openai_error) -> None:
     """统一前置检查管线：quota → model_access → RPM。"""
     if not await check_quota(api_key):
         raise_error(429, "rate_limit_error", "quota_exceeded", "Spending quota exceeded")
 
-    effective_models = await get_effective_allowed_models(api_key)
-    if effective_models is not None and model not in effective_models:
-        raise_error(403, "invalid_request_error", "model_not_allowed", f"Model {model} not allowed for this key")
+    await check_model_access(api_key, model, raise_error)
 
     try:
         await rate_limiter.check_rpm(api_key.id, api_key.rpm_limit)

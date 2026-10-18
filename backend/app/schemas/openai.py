@@ -27,7 +27,8 @@ class CompletionRequest(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     model: str
-    prompt: str | list[str]
+    # 字符串、字符串列表，或 token id 数组。形状由上游校验。
+    prompt: str | list
     max_tokens: int | None = None
     temperature: float | None = None
     top_p: float | None = None
@@ -39,5 +40,6 @@ class EmbeddingRequest(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     model: str
-    input: str | list[str]
+    # 字符串、字符串列表，或 token id 数组。形状由上游校验。
+    input: str | list
     encoding_format: str | None = None

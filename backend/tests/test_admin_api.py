@@ -50,10 +50,11 @@ async def test_change_password(client):
     token = create_access_token({"sub": str(admin.id)})
     resp = await client.put(
         "/api/password",
-        json={"old_password": "old123", "new_password": "new456"},
+        json={"old_password": "old123", "new_password": "new45678"},
         headers=auth_header(token),
     )
     assert resp.status_code == 200
+    assert resp.json()["access_token"]
 
 
 async def test_change_password_wrong_old(client):
@@ -61,10 +62,38 @@ async def test_change_password_wrong_old(client):
     token = create_access_token({"sub": str(admin.id)})
     resp = await client.put(
         "/api/password",
-        json={"old_password": "wrong", "new_password": "new456"},
+        json={"old_password": "wrong", "new_password": "new45678"},
         headers=auth_header(token),
     )
     assert resp.status_code == 400
+
+
+async def test_default_password_must_be_changed_before_admin_apis(client):
+    await create_admin("fresh", "admin123")
+    login = await client.post("/api/login", json={"username": "fresh", "password": "admin123"})
+    assert login.json()["must_change_password"] is True
+    token = login.json()["access_token"]
+
+    me = await client.get("/api/me", headers=auth_header(token))
+    assert me.json()["must_change_password"] is True
+    blocked = await client.get("/api/channels", headers=auth_header(token))
+    assert blocked.status_code == 403
+    assert blocked.json()["detail"] == "Password change required"
+
+    same = await client.put(
+        "/api/password",
+        json={"old_password": "admin123", "new_password": "admin123"},
+        headers=auth_header(token),
+    )
+    assert same.status_code == 400
+    changed = await client.put(
+        "/api/password",
+        json={"old_password": "admin123", "new_password": "a-better-secret"},
+        headers=auth_header(token),
+    )
+    assert changed.status_code == 200
+    fresh_token = changed.json()["access_token"]
+    assert (await client.get("/api/channels", headers=auth_header(fresh_token))).status_code == 200
 
 
 # ── channels ────────────────────────────────────────────────
@@ -177,6 +206,7 @@ async def test_key_crud(client):
     assert data["quota_total"] == 50.0
     assert data["quota_remaining"] == 50.0
     assert data["quota_reset_day"] == 15
+    assert data["tpm_limit"] == -1
     assert data["quota_last_reset_at"] is not None
     key_id = data["id"]
 
@@ -382,7 +412,7 @@ async def test_model_price_sync_updates_only_builtin_prices(client):
     )
     data = resp.json()
     assert resp.status_code == 200
-    assert data["catalog_version"] == "2026-07-25"
+    assert data["catalog_version"] == "2026-10-18"
     assert data["updated"] == 1
     assert data["total"] >= 70
 
@@ -393,7 +423,7 @@ async def test_model_price_sync_updates_only_builtin_prices(client):
     assert builtin.cache_write_price == Decimal("0.05")
     assert builtin.is_active is False
     claude = await ModelPrice.get(model="claude-sonnet-4-6")
-    assert claude.cache_write_price == Decimal("3.0")
+    assert claude.cache_write_price == Decimal("3.75")
     assert custom.prompt_price == Decimal("0.25")
 
 

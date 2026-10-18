@@ -40,6 +40,10 @@ BUILTIN_ROLES = [
 ]
 
 
+DEFAULT_ADMIN_PASSWORD = "admin123"
+PASSWORD_CHANGE_REQUIRED = "Password change required"
+
+
 def verify_password(plain: str, hashed: str) -> bool:
     return pwd_context.verify(plain, hashed)
 
@@ -73,12 +77,19 @@ async def get_current_admin(
     admin = await User.get_or_none(id=admin_id, is_active=True).select_related("role")
     if admin is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Admin not found")
+    # Set at login when the public default password was used.
+    admin.must_change_password = bool(payload.get("pwd"))
     return admin
 
 
 def require_permission(*required: str):
     """权限检查依赖工厂。用法: admin = require_permission("channel:write")"""
     async def checker(admin: User = Depends(get_current_admin)) -> User:
+        if admin.must_change_password:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=PASSWORD_CHANGE_REQUIRED,
+            )
         user_perms = set(admin.role.permissions or [])
         if not set(required).issubset(user_perms):
             raise HTTPException(

@@ -187,7 +187,9 @@
             <span class="pricing-label">C:</span>
             <el-input-number :model-value="val.completion" disabled :controls="false" style="width: 20%" />
             <span class="pricing-label">R:</span>
-            <el-input-number :model-value="val.cached" disabled :controls="false" style="width: 16%" />
+            <el-input-number :model-value="val.cached" disabled :controls="false" style="width: 14%" />
+            <span class="pricing-label">W:</span>
+            <el-input-number :model-value="val.cache_write ?? val.prompt" disabled :controls="false" style="width: 14%" />
             <el-button text type="danger" @click="removePricing(key as string)">X</el-button>
           </div>
           <div style="display: flex; gap: 6px; align-items: center">
@@ -197,7 +199,9 @@
             <span class="pricing-label">C:</span>
             <el-input-number v-model="newPricingCompletion" :min="0" :precision="4" :controls="false" placeholder="10.0" style="width: 20%" />
             <span class="pricing-label">R:</span>
-            <el-input-number v-model="newPricingCached" :min="0" :precision="4" :controls="false" placeholder="0.3" style="width: 16%" />
+            <el-input-number v-model="newPricingCached" :min="0" :precision="4" :controls="false" placeholder="0.3" style="width: 14%" />
+            <span class="pricing-label">W:</span>
+            <el-input-number v-model="newPricingWrite" :min="0" :precision="4" :controls="false" :value-on-clear="null" placeholder="W" style="width: 14%" />
             <el-button text type="primary" @click="addPricing">+</el-button>
           </div>
         </el-form-item>
@@ -237,6 +241,7 @@ const newPricingModel = ref('')
 const newPricingPrompt = ref(0)
 const newPricingCompletion = ref(0)
 const newPricingCached = ref(0)
+const newPricingWrite = ref<number | null>(null)
 const healthMap = ref<Record<number, { healthy: boolean; fail_count: number; disabled_at: number | null }>>({})
 const fetchingModels = ref(false)
 const providerUrlExamples: Record<string, string> = {
@@ -249,7 +254,7 @@ const baseUrlPlaceholder = computed(() => providerUrlExamples[form.value.provide
 const emptyForm = () => ({
   name: '', provider: 'openai', base_url: '', api_key: '',
   models: [] as string[], model_mapping: {} as Record<string, string>,
-  model_pricing: {} as Record<string, { prompt: number; completion: number; cached: number }>,
+  model_pricing: {} as Record<string, { prompt: number; completion: number; cached: number; cache_write?: number }>,
   priority: 0, weight: 1, timeout: 120, max_retries: 1,
 })
 const form = ref(emptyForm())
@@ -289,6 +294,7 @@ function resetDrafts() {
   newPricingPrompt.value = 0
   newPricingCompletion.value = 0
   newPricingCached.value = 0
+  newPricingWrite.value = null
 }
 
 async function load() {
@@ -384,15 +390,18 @@ function removeMapping(key: string) {
 
 function addPricing() {
   if (newPricingModel.value) {
-    form.value.model_pricing[newPricingModel.value] = {
+    const price: { prompt: number; completion: number; cached: number; cache_write?: number } = {
       prompt: newPricingPrompt.value,
       completion: newPricingCompletion.value,
       cached: newPricingCached.value,
     }
+    if (newPricingWrite.value != null) price.cache_write = newPricingWrite.value
+    form.value.model_pricing[newPricingModel.value] = price
     newPricingModel.value = ''
     newPricingPrompt.value = 0
     newPricingCompletion.value = 0
     newPricingCached.value = 0
+    newPricingWrite.value = null
   }
 }
 

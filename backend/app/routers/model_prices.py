@@ -124,7 +124,10 @@ async def create_model_price(body: ModelPriceCreate, _: User = require_permissio
     existing = await ModelPrice.get_or_none(model=body.model)
     if existing:
         raise HTTPException(status_code=409, detail=f"Price for model '{body.model}' already exists")
-    mp = await ModelPrice.create(**body.model_dump())
+    data = body.model_dump()
+    if data["cache_write_price"] is None:
+        data["cache_write_price"] = data["prompt_price"]
+    mp = await ModelPrice.create(**data)
     return _to_response(mp)
 
 

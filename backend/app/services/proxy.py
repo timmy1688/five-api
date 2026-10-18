@@ -10,10 +10,12 @@ from collections.abc import AsyncIterator, Callable
 from decimal import Decimal
 from typing import Any
 
+import httpx
 from fastapi import HTTPException
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from app.models import APIKey, Channel
-from app.providers.base import BaseProvider
+from app.providers.base import BaseProvider, forwardable_headers
 from app.services.channel_health import record_failure, record_rate_limit, record_success
 from app.services.concurrency import concurrency_limiter
 from app.services.failover import is_retryable_error, upstream_status
@@ -25,10 +27,14 @@ from app.services.content_filter import (
     remember_hit,
     visible_sse_text,
 )
-from app.services.error_detail import describe_upstream_failure, gateway_failure
+from app.services.error_detail import (
+    describe_upstream_failure,
+    gateway_failure,
+    upstream_json_error,
+)
 from app.services.logging_service import save_request_log
 from app.services.pricing import calculate_cost
-from app.services.quota import deduct_quota
+from app.services.quota import RequestLease, deduct_quota
 from app.services.sticky_session import bind_sticky_channel
 
 logger = logging.getLogger(__name__)
@@ -74,6 +80,48 @@ def extract_openai_usage(data: dict) -> dict:
     }
 
 
+def _provider_headers(provider: Any) -> dict[str, str]:
+    headers = getattr(provider, "response_headers", None)
+    return headers if isinstance(headers, dict) else {}
+
+
+def _with_headers(response: Any, headers: dict[str, str]) -> Any:
+    if not headers:
+        return response
+    if isinstance(response, Response):
+        response.headers.update(headers)
+        return response
+    return JSONResponse(content=response, headers=headers)
+
+
+async def open_stream(events: AsyncIterator[str], upstream_headers: dict[str, str]) -> StreamingResponse:
+    """Read the first SSE chunk before sending headers.
+
+    Response headers go out before the body, so the upstream rate-limit
+    headers are only known once the first chunk has arrived.
+    """
+    first: str | None = None
+    try:
+        first = await events.__anext__()
+    except StopAsyncIteration:
+        pass
+
+    async def body():
+        try:
+            if first is not None:
+                yield first
+            async for chunk in events:
+                yield chunk
+        finally:
+            await events.aclose()
+
+    return StreamingResponse(
+        body(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", **upstream_headers},
+    )
+
+
 async def _bill_and_log(
     model_actual: str,
     prompt_tokens: int,
@@ -96,6 +144,7 @@ async def _bill_and_log(
     failed_over: bool = False,
     audit: AuditBuffer | None = None,
     security_hit: str = "",
+    budget: RequestLease | None = None,
 ):
     """计费 + 扣费 + 写日志。"""
     latency_ms = int((time.monotonic() - start_time) * 1000)
@@ -107,10 +156,15 @@ async def _bill_and_log(
                 cached_tokens=cached_tokens,
                 cache_write_tokens=cache_write_tokens,
             )
-            if cost > 0:
-                await deduct_quota(api_key.id, cost)
     except Exception:
         logger.exception("billing failed for request %s", request_id)
+    try:
+        if budget is not None:
+            await budget.settle(cost, prompt_tokens + completion_tokens)
+        elif cost > 0:
+            await deduct_quota(api_key.id, cost)
+    except Exception:
+        logger.exception("budget settle failed for request %s", request_id)
 
     try:
         await save_request_log(
@@ -181,6 +235,7 @@ async def execute_with_failover(
     session_key: str | None = None,
     audit: AuditBuffer | None = None,
     security_hits: list[str] | None = None,
+    budget: RequestLease | None = None,
 ) -> Any:
     """非流式通用编排：故障转移 → 计费 → 日志。
 
@@ -227,10 +282,11 @@ async def execute_with_failover(
                     failed_over=i > 0,
                     audit=audit,
                     security_hit=format_hits(hits),
+                    budget=budget,
                 )
                 await _quiet(record_success(channel.id), "health reset")
                 await _quiet(bind_sticky_channel(session_key, channel.id), "sticky binding")
-                return response
+                return _with_headers(response, _provider_headers(provider))
 
             except HTTPException:
                 raise
@@ -248,12 +304,22 @@ async def execute_with_failover(
                     failed_over=i > 0,
                     audit=audit,
                     security_hit=format_hits(security_hits),
+                    budget=budget,
                     **failure,
                 )
+                passed = upstream_json_error(e)
+                if passed is not None:
+                    status, body = passed
+                    return JSONResponse(
+                        status_code=status, content=body,
+                        headers=forwardable_headers(e.response),
+                    )
                 format_error(status_code, "api_error", "upstream_error", f"Upstream error: {e}")
             finally:
                 await _quiet(provider.close(), "provider close")
     finally:
+        if budget is not None:
+            await _quiet(budget.release(), "budget release")
         await _quiet(
             concurrency_limiter.release(api_key.id, concurrency_lease_id),
             "concurrency release",
@@ -274,6 +340,8 @@ async def stream_with_failover(
     session_key: str | None = None,
     audit: AuditBuffer | None = None,
     security_hits: list[str] | None = None,
+    budget: RequestLease | None = None,
+    upstream_headers: dict[str, str] | None = None,
 ) -> AsyncIterator[str]:
     """流式通用编排：故障转移 → 逐行 yield → 计费 → 日志。
 
@@ -312,6 +380,8 @@ async def stream_with_failover(
                                 provider = prov
                                 model_actual = prov.apply_model_mapping(model_requested)
                                 data_yielded = True
+                                if upstream_headers is not None:
+                                    upstream_headers.update(_provider_headers(prov))
                             if usage:
                                 prompt_tokens = usage.get("prompt_tokens", prompt_tokens)
                                 completion_tokens = usage.get("completion_tokens", completion_tokens)
@@ -364,6 +434,8 @@ async def stream_with_failover(
         error_origin = failure["error_origin"]
         upstream_status_code = failure["upstream_status_code"]
         upstream_error = failure["upstream_error"]
+        if upstream_headers is not None and not data_yielded and isinstance(e, httpx.HTTPStatusError):
+            upstream_headers.update(forwardable_headers(e.response))
         yield format_error_event(e)
     finally:
         await _quiet(
@@ -381,6 +453,9 @@ async def stream_with_failover(
             failed_over=failed_over,
             audit=audit,
             security_hit=format_hits(hits),
+            budget=budget,
         )
+        if budget is not None:
+            await _quiet(budget.release(), "budget release")
         if provider:
             await _quiet(provider.close(), "provider close")

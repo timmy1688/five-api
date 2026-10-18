@@ -20,4 +20,7 @@ COPY --from=frontend /src/dist ./static
 
 EXPOSE 8000
 
-CMD ["sh", "-c", "aerich upgrade && exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips '127.0.0.1,172.16.0.0/12'"]
+HEALTHCHECK --interval=15s --timeout=5s --start-period=60s --retries=3 \
+  CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=4)"
+
+CMD ["sh", "-c", "python -m app.wait_for_services && aerich upgrade && exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips '127.0.0.1,172.16.0.0/12' --timeout-graceful-shutdown 30"]

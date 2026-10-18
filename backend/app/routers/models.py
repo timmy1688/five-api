@@ -17,6 +17,7 @@ async def list_models(_: User = require_permission("channel:read")):
             "prompt": float(mp.prompt_price),
             "completion": float(mp.completion_price),
             "cached": float(mp.cached_price),
+            "cache_write": float(mp.cache_write_price),
         }
         for mp in await ModelPrice.filter(is_active=True)
     }
@@ -41,10 +42,16 @@ async def list_models(_: User = require_permission("channel:read")):
                 channel_price = prices.get(actual) or prices.get(model)
                 source = "global" if channel_price is not None else "unpriced"
             if channel_price is not None:
+                prompt = float(channel_price.get("prompt", 0))
+                if "cache_write" in channel_price:
+                    write = float(channel_price.get("cache_write", 0))
+                else:
+                    write = float(channel_price.get("cache_write_price", prompt))
                 channel_price = {
-                    "prompt": float(channel_price.get("prompt", 0)),
+                    "prompt": prompt,
                     "completion": float(channel_price.get("completion", 0)),
                     "cached": float(channel_price.get("cached", 0)),
+                    "cache_write": write,
                 }
             entry["channels"].append({
                 "id": ch["id"],
@@ -63,6 +70,7 @@ async def list_models(_: User = require_permission("channel:read")):
                 p["prompt"],
                 p["completion"],
                 p["cached"],
+                p["cache_write"],
             )
             if p is not None else None
             for p in m.pop("channel_prices")
@@ -70,11 +78,12 @@ async def list_models(_: User = require_permission("channel:read")):
         pricing_varies = len(variants) > 1
         pricing = None
         if len(variants) == 1 and None not in variants:
-            prompt, completion, cached = next(iter(variants))
+            prompt, completion, cached, cache_write = next(iter(variants))
             pricing = {
                 "prompt": prompt,
                 "completion": completion,
                 "cached": cached,
+                "cache_write": cache_write,
             }
         result.append({
             "model": m["model"],
