@@ -8,6 +8,7 @@ const viewComponents: Record<NavigationName, () => Promise<unknown>> = {
   Channels: () => import('@/views/Channels.vue'),
   Models: () => import('@/views/Models.vue'),
   ApiKeys: () => import('@/views/ApiKeys.vue'),
+  Teams: () => import('@/views/Teams.vue'),
   ModelGroups: () => import('@/views/ModelGroups.vue'),
   ModelPrices: () => import('@/views/ModelPrices.vue'),
   Logs: () => import('@/views/Logs.vue'),

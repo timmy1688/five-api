@@ -27,6 +27,8 @@ services:
       INIT_ADMIN_PASSWORD: admin123
       # 填了才能从容器外抓 /metrics，Prometheus 用 Bearer 令牌访问
       METRICS_TOKEN: ""
+      # 只信任这些地址发来的 X-Forwarded-For。前面有反向代理时填它的地址，例如 172.18.0.5
+      FORWARDED_ALLOW_IPS: "127.0.0.1"
     stop_grace_period: 40s
     depends_on:
       mysql:
@@ -37,8 +39,9 @@ services:
   redis:
     image: redis:7-alpine
     restart: always
+    # 只给本机开发用，外部机器连不上。网关走容器内网，不经过这个端口。
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     volumes:
       - ./data/redis:/data
     healthcheck:
@@ -58,7 +61,7 @@ services:
     volumes:
       - ./data/mysql:/var/lib/mysql
     ports:
-      - "3306:3306"
+      - "127.0.0.1:3306:3306"
     healthcheck:
       # 用 TCP 检查。首次初始化时 MySQL 先起一个不开网络的临时实例，socket 检查会提前通过。
       test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-proot_password"]

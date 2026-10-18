@@ -88,6 +88,29 @@ async def resolve_prices(
     return prompt_price, completion_price, cached_price, write_price
 
 
+async def resolve_request_price(model: str, channel: Channel | None = None) -> Decimal:
+    """USD per billed unit (one image, one speech or transcription call).
+
+    A channel row with a request price wins. Rows saved before this field
+    existed fall back to the global price.
+    """
+    if channel:
+        pricing = find_channel_pricing(model, channel.model_pricing, channel.model_mapping)
+        if pricing is not None and "request" in pricing:
+            return Decimal(str(pricing.get("request", 0)))
+    mp = await ModelPrice.get_or_none(model=model, is_active=True)
+    return Decimal(str(mp.request_price)) if mp else Decimal(0)
+
+
+async def upper_request_price(model: str) -> Decimal:
+    price = await resolve_request_price(model)
+    for channel in await Channel.filter(is_enabled=True):
+        pricing = find_channel_pricing(model, channel.model_pricing, channel.model_mapping)
+        if pricing is not None and "request" in pricing:
+            price = max(price, Decimal(str(pricing.get("request", 0))))
+    return price
+
+
 async def upper_rates(model: str) -> tuple[Decimal, Decimal]:
     """Highest input and output prices configured for a model, for a quota hold."""
     prompt_price, completion_price, _, _ = await resolve_prices(model)
@@ -105,19 +128,29 @@ async def upper_rates(model: str) -> tuple[Decimal, Decimal]:
     return prompt_price, completion_price
 
 
-def estimate_request_tokens(body: dict | None) -> tuple[int, int]:
+def estimate_request_tokens(
+    body: dict | None, default_output: int | None = None,
+) -> tuple[int, int]:
     """Upper-bound input tokens and the requested output cap.
 
     CJK characters count as one token. Other text counts as four characters
-    per token. Output uses max_tokens, or 4096 when a chat request omits it.
+    per token. Output uses the request's cap. Without one, chat requests use
+    4096 and the caller may pass its own default.
     """
     if not body:
         return 1, 0
-    raw_out = body.get("max_tokens")
+    raw_out = next(
+        (
+            body[name] for name in ("max_tokens", "max_completion_tokens", "max_output_tokens")
+            if body.get(name) is not None
+        ),
+        None,
+    )
     if raw_out is None:
-        raw_out = body.get("max_completion_tokens")
-    if raw_out is None:
-        output = 4096 if body.get("messages") or body.get("system") else 0
+        if default_output is not None:
+            output = default_output
+        else:
+            output = 4096 if body.get("messages") or body.get("system") else 0
     else:
         try:
             output = int(raw_out)
@@ -127,44 +160,62 @@ def estimate_request_tokens(body: dict | None) -> tuple[int, int]:
     text_parts = (
         body.get("messages"),
         body.get("system"),
+        body.get("instructions"),
         body.get("prompt"),
         body.get("input"),
+        body.get("query"),
+        body.get("documents"),
         body.get("tools"),
     )
+    input_tokens = max(1, count_text_tokens(text_parts))
+    return input_tokens, output
+
+
+def count_text_tokens(value) -> int:
+    """Rough token count of every string inside value.
+
+    CJK characters count as one token. Other text counts as four characters
+    per token. Used when an upstream does not report usage.
+    """
     cjk = 0
     other = 0
 
-    def walk(value) -> None:
+    def walk(item) -> None:
         nonlocal cjk, other
-        if isinstance(value, str):
-            for char in value:
+        if isinstance(item, str):
+            for char in item:
                 if "\u4e00" <= char <= "\u9fff":
                     cjk += 1
                 else:
                     other += 1
             return
-        if isinstance(value, dict):
-            for item in value.values():
-                walk(item)
+        if isinstance(item, dict):
+            for child in item.values():
+                walk(child)
             return
-        if isinstance(value, list):
-            for item in value:
-                walk(item)
+        if isinstance(item, (list, tuple)):
+            for child in item:
+                walk(child)
 
-    for part in text_parts:
-        walk(part)
-    input_tokens = max(1, cjk + (other + 3) // 4) if (cjk or other) else 1
-    return input_tokens, output
+    walk(value)
+    return cjk + (other + 3) // 4
 
 
-async def estimate_upper_cost(model: str, body: dict | None) -> Decimal:
+async def estimate_upper_cost(
+    model: str,
+    body: dict | None,
+    default_output: int | None = None,
+    request_units: int = 0,
+) -> Decimal:
     """Cost hold before the upstream responds. Cache discounts are not assumed."""
-    input_tokens, output_tokens = estimate_request_tokens(body)
+    input_tokens, output_tokens = estimate_request_tokens(body, default_output)
     prompt_price, completion_price = await upper_rates(model)
     cost = (
         Decimal(input_tokens) * prompt_price
         + Decimal(output_tokens) * completion_price
     ) / MILLION
+    if request_units:
+        cost += Decimal(request_units) * await upper_request_price(model)
     return cost
 
 
@@ -175,11 +226,13 @@ async def calculate_cost(
     channel: Channel | None = None,
     cached_tokens: int = 0,
     cache_write_tokens: int = 0,
+    request_units: int = 0,
 ) -> Decimal:
-    """Bill fresh input, cache reads, cache writes, and output.
+    """Bill fresh input, cache reads, cache writes, output, and per-unit calls.
 
     prompt_tokens already includes cache reads and cache writes. Each bucket
     is priced on its own. A missing write price uses the input price.
+    request_units counts images or audio calls billed per unit.
     """
     prompt_price, completion_price, cached_price, write_price = await resolve_prices(
         model, channel
@@ -191,6 +244,8 @@ async def calculate_cost(
         + Decimal(cache_write_tokens) * write_price
         + Decimal(completion_tokens) * completion_price
     ) / MILLION
+    if request_units:
+        cost += Decimal(request_units) * await resolve_request_price(model, channel)
     return cost.quantize(Decimal("0.000001"))
 
 

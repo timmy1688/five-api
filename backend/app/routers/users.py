@@ -84,6 +84,9 @@ async def update_admin(admin_id: int, body: UserUpdate, current: User = require_
         pw = update_data.pop("password")
         if pw:
             update_data["hashed_password"] = hash_password(pw)
+            update_data["token_version"] = a.token_version + 1
+    if update_data.get("is_active") is False:
+        update_data["token_version"] = a.token_version + 1
     if update_data:
         await User.filter(id=admin_id).update(**update_data)
         a = await User.get(id=admin_id).select_related("role")

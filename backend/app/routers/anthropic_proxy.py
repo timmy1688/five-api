@@ -197,18 +197,17 @@ async def messages(
         )
         anthropic_error(429, "rate_limit_error", "concurrent_limit", "Too many concurrent requests")
     except (QuotaExceeded, TPMExceeded) as exc:
-        message = (
-            "Spending quota exceeded"
-            if isinstance(exc, QuotaExceeded)
-            else "Tokens per minute limit exceeded"
-        )
-        code = "quota_exceeded" if isinstance(exc, QuotaExceeded) else "tpm_limit"
+        if isinstance(exc, QuotaExceeded):
+            status, code, message = exc.status, exc.code, exc.message
+        else:
+            status, code, message = 429, "tpm_limit", "Tokens per minute limit exceeded"
+        error_type = "permission_error" if status == 403 else "rate_limit_error"
         await log_rejected_request(
-            api_key, request_id, "/v1/messages", body.model, 429,
+            api_key, request_id, "/v1/messages", body.model, status,
             start_time, ip, message, audit=audit,
             security_hit=format_hits(security_hits),
         )
-        anthropic_error(429, "rate_limit_error", code, message)
+        anthropic_error(status, error_type, code, message)
 
     extra_headers = {
         k: v for k, v in request.headers.items()

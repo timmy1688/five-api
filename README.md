@@ -15,7 +15,7 @@ export ANTHROPIC_BASE_URL=http://your-server
 export ANTHROPIC_API_KEY=sk-your-gateway-key
 ```
 
-**每个人花了多少钱，能和厂商账单对上。** 额度按美元记在 Key 上。一次请求四档：输入、缓存读取、缓存写入、输出。Claude 的缓存写入按输入价的 1.25 倍计，其他模型与输入价相同。请求开始时按估计金额预留额度，结束后按实际用量结算。Key 可以限制每分钟请求数和每分钟 token 数。
+**每个人花了多少钱，能和厂商账单对上。** 额度按美元记在 Key 上。一次请求四档：输入、缓存读取、缓存写入、输出。Claude 的缓存写入按输入价的 1.25 倍计，其他模型与输入价相同。请求开始时按估计金额预留额度，结束后按实际用量结算。流式请求中途断开或上游没给用量时，按已经转发的内容估算。Key 可以加入团队，团队有自己的美元预算，团队里所有 Key 一起扣。Key 可以限制每分钟请求数和每分钟 token 数。
 
 **安全检查不打断调用。要查一个人，再按 Key 审。** 关键词只看即将发出的请求。密钥模式检查请求和回复里的私钥、AWS 访问密钥、GitHub token 和 Slack token，日志只写模式名，密钥原文不入库。命中之后请求和回复都继续。配额、模型权限和限流才会拒绝。
 
@@ -26,8 +26,8 @@ export ANTHROPIC_API_KEY=sk-your-gateway-key
 | Claude Code | 请求原样到达上游，工具和 thinking 还在 | 转成另一种格式后再转发 |
 | 计费 | 按人记账，缓存写入按厂商规则单独计价，额度先预留再结算 | 只记总量，并发时会超额 |
 | 安全 | 命中只记日志。按 Key 逐条审，每条只送一小段摘录 | 命中就中断这次请求 |
-| 故障 | 同协议渠道切换，连续失败后熔断 | 常常跨协议找下一家 |
-| 代码 | 约 1.4 万行，Python + Vue 3，19 项权限 | 往往数万行 |
+| 故障 | 同协议渠道切换，连续失败后熔断。同优先级可按权重、最少并发或最低延迟选 | 常常跨协议找下一家 |
+| 代码 | 约 1.5 万行，Python + Vue 3，21 项权限 | 往往数万行 |
 
 ## 界面
 
@@ -57,9 +57,11 @@ docker compose up -d
 
 不需要复制 `.env`。有发布镜像时直接拉取 `ghcr.io/timmy1688/five-api`，拉不到就用本地源码构建。管理后台和 API 在同一个端口，默认是宿主机的 80，浏览器打开 `http://服务器地址`。首次登录 `admin` / `admin123`，系统会先要求改密码，改完才能进后台。数据库、Redis 和签名密钥都在 `./data`，`docker compose down` 不会删掉这个目录。
 
+MySQL 和 Redis 的端口只绑在 `127.0.0.1`，其他机器连不上，网关走容器内网。网关只信任本机发来的 `X-Forwarded-For`；前面有 Nginx 等反向代理时，把它的地址填进 `docker-compose.yml` 的 `FORWARDED_ALLOW_IPS`。
+
 网关等 MySQL 和 Redis 就绪后才执行迁移。`/healthz` 返回两者的状态，Docker 健康检查用的就是它。`/metrics` 默认只允许容器内访问；Prometheus 要从外面抓，在 `docker-compose.yml` 填 `METRICS_TOKEN`，抓取时带 `Authorization: Bearer <令牌>`。
 
-要改对外端口或密码，直接改 `docker-compose.yml` 里的对应值，然后重新执行 `docker compose up -d`。管理员账号已经创建之后，再改 `INIT_ADMIN_PASSWORD` 不会更新已有密码。
+要改对外端口或密码，直接改 `docker-compose.yml` 里的对应值，然后重新执行 `docker compose up -d`。管理员账号已经创建之后，再改 `INIT_ADMIN_PASSWORD` 不会更新已有密码。改密码后旧的登录凭证立即失效。同一 IP 或同一用户名 15 分钟内登录失败 10 次，暂停登录 15 分钟。
 
 ```bash
 docker compose up -d --build   # 改了源码后重新构建
@@ -96,6 +98,18 @@ docker compose down
 创建 Key 后复制 `sk-xxx`（只显示一次）。模型定价页同步一次内置价格。渠道上某档价格设成 0，这一档就免费。
 
 请求里没写的字段不会补上，上游用自己的默认值。上游的限流响应头（`x-ratelimit-*`、`anthropic-ratelimit-*`、`retry-after`、`request-id`）原样交回，SDK 的退避逻辑照常工作。上游的 `x-request-id` 改名为 `x-upstream-request-id`，网关自己的 `X-Request-ID` 用来查日志。Claude Code 调的 `/v1/messages/count_tokens` 转发到 Anthropic 渠道，不计费，上游没有这个接口时返回本地估算。
+
+| 接口 | 渠道 | 计费 |
+|---|---|---|
+| `/v1/chat/completions` `/v1/completions` `/v1/embeddings` | openai | token |
+| `/v1/responses`（含流式） | openai | token，读 `response.completed` 里的用量 |
+| `/v1/messages` | anthropic | token |
+| `/v1/images/generations` `/v1/images/edits` `/v1/images/variations` | openai | 每张图按次价，上游返回 token 时另计 token |
+| `/v1/audio/speech` | openai | 输入字符数按输入价计（填每百万字符价），另加按次价 |
+| `/v1/audio/transcriptions` `/v1/audio/translations` | openai | 按次价，上游返回 token 时另计 token |
+| `/v1/rerank` | openai | 上游返回的 token，另加按次价 |
+
+按次价在「模型定价」或渠道定价的 Q 列填写。
 
 ```python
 from openai import OpenAI

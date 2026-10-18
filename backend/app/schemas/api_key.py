@@ -24,6 +24,7 @@ class APIKeyCreate(BaseModel):
     allowed_models: list[str] = Field(default_factory=list)
     allowed_ips: list[str] = Field(default_factory=list)
     model_group_id: int | None = None
+    team_id: int | None = None
     quota_reset_day: int | None = Field(None, ge=1, le=31)
     expires_at: datetime | None = None
     audit_policy: str = "on"
@@ -71,6 +72,7 @@ class APIKeyUpdate(BaseModel):
     allowed_models: list[str] | None = None
     allowed_ips: list[str] | None = None
     model_group_id: int | None = None
+    team_id: int | None = None
     is_enabled: bool | None = None
     audit_policy: str | None = None
     quota_reset_day: int | None = Field(None, ge=1, le=31)
@@ -124,6 +126,8 @@ class APIKeyResponse(BaseModel):
     allowed_ips: list[str]
     model_group_id: int | None
     model_group_name: str | None = None
+    team_id: int | None = None
+    team_name: str | None = None
     is_enabled: bool
     audit_policy: str
     quota_reset_day: int | None

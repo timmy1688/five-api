@@ -110,6 +110,10 @@ class FakeRedis:
         self.data[key] = str(int(self.data.get(key, 0)) + 1)
         return int(self.data[key])
 
+    async def decr(self, key):
+        self.data[key] = str(int(self.data.get(key, 0)) - 1)
+        return int(self.data[key])
+
     async def expire(self, *_):
         return True
 

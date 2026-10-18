@@ -8,6 +8,8 @@ class User(Model):
     hashed_password = fields.CharField(max_length=255)
     role = fields.ForeignKeyField("models.Role", related_name="users")
     is_active = fields.BooleanField(default=True)
+    # Bumped on password change; tokens carrying an older value are rejected.
+    token_version = fields.IntField(default=0)
     created_at = fields.DatetimeField(auto_now_add=True)
     updated_at = fields.DatetimeField(auto_now=True)
 

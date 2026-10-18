@@ -82,6 +82,8 @@ async def resolve_candidates(
     若传入 sticky_channel_id 且该渠道仍在候选里，则将其提到最前。
     """
     from app.services.channel_health import is_channel_healthy
+    from app.services.channel_stats import load_scores
+    from app.services.settings_service import gateway_config
 
     if preferred_protocol == "openai":
         preferred_providers = OPENAI_PROTOCOL_PROVIDERS
@@ -117,19 +119,25 @@ async def resolve_candidates(
             },
         )
 
-    groups = [healthy_candidates]
+    strategy = (await gateway_config()).get("routing_strategy", "weighted")
+    scores: dict[int, float] = {}
+    if strategy != "weighted" and len(healthy_candidates) > 1:
+        scores = await load_scores([ch.id for ch in healthy_candidates], strategy)
 
     result: list[tuple[Channel, type[BaseProvider]]] = []
-    for group in groups:
-        tiers: dict[int, list[Channel]] = {}
-        for ch in group:
-            tiers.setdefault(ch.priority, []).append(ch)
-        for priority in sorted(tiers.keys(), reverse=True):
-            for ch in _weighted_shuffle(tiers[priority]):
-                provider_cls = PROVIDER_MAP.get(ch.provider)
-                if provider_cls is None:
-                    continue
-                result.append((ch, provider_cls))
+    tiers: dict[int, list[Channel]] = {}
+    for ch in healthy_candidates:
+        tiers.setdefault(ch.priority, []).append(ch)
+    for priority in sorted(tiers.keys(), reverse=True):
+        ordered = _weighted_shuffle(tiers[priority])
+        if scores:
+            # Stable sort: equal scores keep the weighted order.
+            ordered.sort(key=lambda ch: scores.get(ch.id, 0.0))
+        for ch in ordered:
+            provider_cls = PROVIDER_MAP.get(ch.provider)
+            if provider_cls is None:
+                continue
+            result.append((ch, provider_cls))
 
     if not result:
         raise HTTPException(

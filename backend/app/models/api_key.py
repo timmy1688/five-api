@@ -15,6 +15,7 @@ class APIKey(Model):
     allowed_models = fields.JSONField(default=list)
     allowed_ips = fields.JSONField(default=list)
     model_group_id = fields.IntField(null=True, default=None)
+    team_id = fields.IntField(null=True, default=None, index=True)
     is_enabled = fields.BooleanField(default=True)
     audit_enabled = fields.BooleanField(default=False)
     audit_policy = fields.CharField(max_length=16, default="on")

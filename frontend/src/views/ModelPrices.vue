@@ -56,6 +56,13 @@
             </span>
           </template>
         </el-table-column>
+        <el-table-column :label="t('prices.request')" width="120" align="right">
+          <template #default="{ row }">
+            <span :style="{ fontWeight: 500, color: row.request_price > 0 ? '#6366f1' : '#cbd5e1' }">
+              {{ row.request_price ?? 0 }}
+            </span>
+          </template>
+        </el-table-column>
         <el-table-column :label="t('prices.active')" width="76" align="center">
           <template #default="{ row }">
             <el-switch v-model="row.is_active" :disabled="!auth.hasPermission('model_price:write')" @change="toggleActive(row)" />
@@ -105,6 +112,10 @@
           <el-input-number v-model="form.cache_write_price" :min="0" :precision="4" :step="0.1" :value-on-clear="null" style="width: 100%" />
           <div class="form-hint">{{ t('prices.cacheWriteHint') }}</div>
         </el-form-item>
+        <el-form-item :label="t('prices.request')">
+          <el-input-number v-model="form.request_price" :min="0" :precision="4" :step="0.01" style="width: 100%" />
+          <div class="form-hint">{{ t('prices.requestHint') }}</div>
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="dialogVisible = false">{{ t('common.cancel') }}</el-button>
@@ -138,6 +149,7 @@ const unpricedModels = ref<{ model: string; channels: string[] }[]>([])
 
 const emptyForm = () => ({
   model: '', prompt_price: 0, completion_price: 0, cached_price: 0, cache_write_price: null as number | null,
+  request_price: 0,
 })
 const form = ref(emptyForm())
 
@@ -182,6 +194,7 @@ function openEdit(row: any) {
     completion_price: row.completion_price,
     cached_price: row.cached_price,
     cache_write_price: row.cache_write_price,
+    request_price: row.request_price ?? 0,
   }
   dialogVisible.value = true
 }

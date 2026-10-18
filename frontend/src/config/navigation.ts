@@ -3,6 +3,7 @@ export type NavigationName =
   | 'Channels'
   | 'Models'
   | 'ApiKeys'
+  | 'Teams'
   | 'ModelGroups'
   | 'ModelPrices'
   | 'Logs'
@@ -17,6 +18,7 @@ export type NavigationIcon =
   | 'channels'
   | 'models'
   | 'keys'
+  | 'teams'
   | 'groups'
   | 'pricing'
   | 'logs'
@@ -29,7 +31,7 @@ export type NavigationIcon =
 export interface NavigationItem {
   path: string
   name: NavigationName
-  titleKey: 'nav.overview' | 'nav.channels' | 'nav.models' | 'nav.keys' | 'nav.groups' | 'nav.pricing' | 'nav.logs' | 'nav.audit' | 'nav.security' | 'nav.admins' | 'nav.roles' | 'nav.settings'
+  titleKey: 'nav.overview' | 'nav.channels' | 'nav.models' | 'nav.keys' | 'nav.teams' | 'nav.groups' | 'nav.pricing' | 'nav.logs' | 'nav.audit' | 'nav.security' | 'nav.admins' | 'nav.roles' | 'nav.settings'
   permission: string
   icon: NavigationIcon
 }
@@ -61,6 +63,7 @@ export const navigationGroups: NavigationGroup[] = [
     titleKey: 'nav.access',
     items: [
       { path: '/keys', name: 'ApiKeys', titleKey: 'nav.keys', permission: 'key:read', icon: 'keys' },
+      { path: '/teams', name: 'Teams', titleKey: 'nav.teams', permission: 'team:read', icon: 'teams' },
       { path: '/model-groups', name: 'ModelGroups', titleKey: 'nav.groups', permission: 'model_group:read', icon: 'groups' },
     ],
   },

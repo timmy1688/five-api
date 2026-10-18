@@ -1,3 +1,5 @@
+from typing import Literal
+
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
@@ -14,6 +16,7 @@ class GatewaySettingsBody(BaseModel):
     channel_health_check_interval: int = Field(ge=10, le=86400)
     sticky_session_enabled: bool
     sticky_session_ttl: int = Field(ge=60, le=86400)
+    routing_strategy: Literal["weighted", "least_busy", "latency"] = "weighted"
 
 
 @router.get("")

@@ -6,6 +6,7 @@ export interface GatewaySettings {
   channel_health_check_interval: number
   sticky_session_enabled: boolean
   sticky_session_ttl: number
+  routing_strategy: 'weighted' | 'least_busy' | 'latency'
 }
 
 export const settingsApi = {

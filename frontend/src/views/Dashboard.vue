@@ -112,6 +112,25 @@
         </el-table-column>
       </el-table>
     </el-card>
+
+    <el-card v-if="topTeams.length > 0" shadow="never" style="margin-top: 12px">
+      <template #header><span style="font-weight: 600">{{ t('dash.topTeams', { days }) }}</span></template>
+      <el-table :data="topTeams" stripe size="small">
+        <el-table-column type="index" label="#" width="50" />
+        <el-table-column prop="team_name" :label="t('nav.teams')" min-width="180" show-overflow-tooltip />
+        <el-table-column prop="request_count" :label="t('dash.requests')" width="120" align="right">
+          <template #default="{ row }">{{ row.request_count.toLocaleString() }}</template>
+        </el-table-column>
+        <el-table-column prop="total_tokens" :label="t('dash.tokens')" width="140" align="right">
+          <template #default="{ row }">{{ row.total_tokens.toLocaleString() }}</template>
+        </el-table-column>
+        <el-table-column :label="t('dash.cost')" width="120" align="right">
+          <template #default="{ row }">
+            <span style="font-weight: 600; color: #6366f1">${{ row.cost.toFixed(4) }}</span>
+          </template>
+        </el-table-column>
+      </el-table>
+    </el-card>
   </div>
 </template>
 
@@ -140,6 +159,7 @@ const errorRate = ref<any[]>([])
 const latencyData = ref<any>({ p50: 0, p95: 0, p99: 0, trend: [] })
 const throughput = ref<any>({ current_qps: 0, current_rpm: 0, current_tpm: 0, peak_qps: 0, peak_rpm: 0 })
 const topKeys = ref<any[]>([])
+const topTeams = ref<any[]>([])
 let refreshTimer: ReturnType<typeof setInterval> | null = null
 
 const cards = computed(() => [
@@ -251,6 +271,7 @@ async function reload() {
       statsApi.latency(days.value),
       statsApi.throughput(days.value),
       statsApi.byKey(days.value),
+      statsApi.byTeam(days.value),
     ])
     if (results[0].status === 'fulfilled') overview.value = results[0].value
     if (results[1].status === 'fulfilled') usage.value = results[1].value
@@ -260,6 +281,7 @@ async function reload() {
     if (results[5].status === 'fulfilled') latencyData.value = results[5].value
     if (results[6].status === 'fulfilled') throughput.value = results[6].value
     if (results[7].status === 'fulfilled') topKeys.value = results[7].value
+    if (results[8].status === 'fulfilled') topTeams.value = results[8].value
     if (results.some(r => r.status === 'rejected')) {
       ElMessage.warning(t('dash.statsFailed'))
     }

@@ -15,7 +15,7 @@ export ANTHROPIC_BASE_URL=http://your-server
 export ANTHROPIC_API_KEY=sk-your-gateway-key
 ```
 
-**You can match what each person spent to the vendor bill.** Quota is USD on the key. One request has four prices: input, cache read, cache write, and output. Claude cache writes are 1.25× input. Other models bill writes at the input price. The gateway reserves an estimate when the request starts and settles the real usage when it finishes. A key can limit requests per minute and tokens per minute.
+**You can match what each person spent to the vendor bill.** Quota is USD on the key. One request has four prices: input, cache read, cache write, and output. Claude cache writes are 1.25× input. Other models bill writes at the input price. The gateway reserves an estimate when the request starts and settles the real usage when it finishes. If a stream is cut off or the upstream reports no usage, the gateway estimates it from what it forwarded. A key can join a team. The team has its own USD budget, and every key in it spends from that budget. A key can limit requests per minute and tokens per minute.
 
 **Security checks do not stop the call. Review one person when you need to.** Keywords look only at the outgoing request. Secret patterns check the request and the reply for private keys, AWS access keys, GitHub tokens, and Slack tokens. The log stores the pattern name, not the secret. After a hit, the request and the reply both continue. Quota, model permission, and rate limits are what reject a call.
 
@@ -26,8 +26,8 @@ Inference audit stores the request only for keys that have audit on. Replies are
 | Claude Code | The request arrives unchanged, with tools and thinking | Converted into another format, then forwarded |
 | Billing | Per person. Cache writes follow the vendor price, and quota is reserved before the call | Totals only, so parallel calls can overspend |
 | Security | A hit is only logged. Each saved request is reviewed alone, as a short excerpt | A hit stops the request |
-| Failure | Same-protocol failover, then a circuit breaker | Often tries a channel that speaks another protocol |
-| Code | About 14,000 lines, Python and Vue 3, 19 permissions | Often tens of thousands of lines |
+| Failure | Same-protocol failover, then a circuit breaker. Within one priority, pick by weight, fewest in-flight requests, or lowest latency | Often tries a channel that speaks another protocol |
+| Code | About 15,000 lines, Python and Vue 3, 21 permissions | Often tens of thousands of lines |
 
 ## Screenshots
 
@@ -57,9 +57,11 @@ docker compose up -d
 
 No `.env` file is required. Compose pulls `ghcr.io/timmy1688/five-api` when a release exists and builds from source otherwise. The admin UI and the API share one port, host port 80 by default. Open `http://your-server`. The first login is `admin` / `admin123`, and the UI asks for a new password before anything else. The database, Redis, and the signing key live in `./data`. `docker compose down` leaves that directory in place.
 
+MySQL and Redis publish their ports on `127.0.0.1` only, so other machines cannot reach them. The gateway talks to them over the container network. The gateway trusts `X-Forwarded-For` only from the local machine. If Nginx or another reverse proxy sits in front, put its address in `FORWARDED_ALLOW_IPS` in `docker-compose.yml`.
+
 The gateway waits for MySQL and Redis before it runs migrations. `/healthz` reports both, and the Docker health check uses it. `/metrics` answers only inside the container by default. To scrape it from Prometheus, set `METRICS_TOKEN` in `docker-compose.yml` and send `Authorization: Bearer <token>`.
 
-To change the published port or a password, edit the values in `docker-compose.yml`, then run `docker compose up -d` again. `INIT_ADMIN_PASSWORD` applies only when the admin account is created.
+To change the published port or a password, edit the values in `docker-compose.yml`, then run `docker compose up -d` again. `INIT_ADMIN_PASSWORD` applies only when the admin account is created. Changing a password signs out every earlier session. Ten failed logins from one IP or for one username within 15 minutes pause logins for 15 minutes.
 
 ```bash
 docker compose up -d --build   # rebuild after changing the source
@@ -96,6 +98,18 @@ The database account matches the values in `docker-compose.yml`. To change a pas
 Copy `sk-xxx` when the key is created; it is shown once. Sync the built-in prices on Model Pricing. A channel price of 0 makes that tier free.
 
 Fields the client left out stay out, so the upstream applies its own defaults. Upstream rate-limit headers (`x-ratelimit-*`, `anthropic-ratelimit-*`, `retry-after`, `request-id`) come back unchanged, so SDK backoff keeps working. The upstream `x-request-id` is renamed `x-upstream-request-id`; the gateway's own `X-Request-ID` is for log lookup. `/v1/messages/count_tokens`, which Claude Code calls, goes to an Anthropic channel and is not billed. When the upstream lacks it, the gateway returns a local estimate.
+
+| Endpoint | Channel | Billing |
+|---|---|---|
+| `/v1/chat/completions` `/v1/completions` `/v1/embeddings` | openai | tokens |
+| `/v1/responses` (streaming too) | openai | tokens, from `response.completed` when streaming |
+| `/v1/messages` | anthropic | tokens |
+| `/v1/images/generations` `/v1/images/edits` `/v1/images/variations` | openai | per-request price for each image, plus tokens when the upstream reports them |
+| `/v1/audio/speech` | openai | input characters at the input price (enter the per-million-character price), plus the per-request price |
+| `/v1/audio/transcriptions` `/v1/audio/translations` | openai | per-request price, plus tokens when the upstream reports them |
+| `/v1/rerank` | openai | tokens the upstream reports, plus the per-request price |
+
+Enter per-request prices on Model Pricing, or in column Q of a channel's pricing.
 
 ```python
 from openai import OpenAI

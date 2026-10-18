@@ -38,6 +38,14 @@ class KeyUsage(BaseModel):
     cost: float
 
 
+class TeamUsage(BaseModel):
+    team_id: int
+    team_name: str
+    total_tokens: int
+    request_count: int
+    cost: float
+
+
 class ChannelUsage(BaseModel):
     channel_id: int | None
     channel_name: str

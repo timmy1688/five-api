@@ -130,7 +130,7 @@ def _mount_frontend(app: FastAPI) -> None:
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="Five API Gateway", version="0.2.0", lifespan=lifespan)
+    app = FastAPI(title="Five API Gateway", version="0.3.0", lifespan=lifespan)
 
     app.add_middleware(
         CORSMiddleware,
@@ -147,7 +147,7 @@ def create_app() -> FastAPI:
     from app.routers import (
         auth, channels, keys, logs,
         model_groups, model_prices, models,
-        roles, stats, users,
+        roles, stats, teams, users,
         openai_proxy, anthropic_proxy, metrics,
     )
 
@@ -170,6 +170,7 @@ def create_app() -> FastAPI:
 
     app.include_router(settings_router.router)
     app.include_router(stats.router)
+    app.include_router(teams.router)
     app.include_router(users.router)
     app.include_router(metrics.router)
     _mount_frontend(app)

@@ -12,8 +12,10 @@ def _validate_model_pricing(value):
     for model, prices in value.items():
         if not model or len(model) > 64:
             raise ValueError("model pricing keys must contain 1-64 characters")
-        for field in ("prompt", "completion", "cached"):
-            price = prices.get(field, 0)
+        for field in ("prompt", "completion", "cached", "cache_write", "request"):
+            if field not in prices:
+                continue
+            price = prices[field]
             if not isinstance(price, (int, float)) or not math.isfinite(price) or price < 0:
                 raise ValueError(f"{model}.{field} must be a non-negative number")
     return value

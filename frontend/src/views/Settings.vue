@@ -31,6 +31,14 @@
         <el-form-item :label="t('settings.stickyTtl')">
           <el-input-number v-model="form.sticky_session_ttl" :min="60" :max="86400" :step="60" />
         </el-form-item>
+        <el-form-item :label="t('settings.strategy')">
+          <el-radio-group v-model="form.routing_strategy">
+            <el-radio-button value="weighted">{{ t('settings.strategyWeighted') }}</el-radio-button>
+            <el-radio-button value="least_busy">{{ t('settings.strategyLeastBusy') }}</el-radio-button>
+            <el-radio-button value="latency">{{ t('settings.strategyLatency') }}</el-radio-button>
+          </el-radio-group>
+          <p class="hint">{{ t('settings.strategyHint') }}</p>
+        </el-form-item>
 
         <h4>{{ t('settings.health') }}</h4>
         <el-form-item :label="t('settings.healthThreshold')">
@@ -63,6 +71,7 @@ const form = reactive<GatewaySettings>({
   channel_health_check_interval: 60,
   sticky_session_enabled: true,
   sticky_session_ttl: 900,
+  routing_strategy: 'weighted',
 })
 
 function apply(data: GatewaySettings) {
@@ -71,6 +80,7 @@ function apply(data: GatewaySettings) {
   form.channel_health_check_interval = data.channel_health_check_interval
   form.sticky_session_enabled = data.sticky_session_enabled
   form.sticky_session_ttl = data.sticky_session_ttl
+  form.routing_strategy = data.routing_strategy ?? 'weighted'
 }
 
 async function load() {

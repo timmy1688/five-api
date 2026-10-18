@@ -52,6 +52,12 @@
             <el-tag v-else size="small" type="info">{{ t('keys.defaultGroup') }}</el-tag>
           </template>
         </el-table-column>
+        <el-table-column :label="t('nav.teams')" min-width="100">
+          <template #default="{ row }">
+            <el-tag v-if="row.team_name" size="small">{{ row.team_name }}</el-tag>
+            <span v-else style="color: #c0c4cc">-</span>
+          </template>
+        </el-table-column>
         <el-table-column prop="concurrent_limit" :label="t('keys.concurrency')" width="72" align="center" />
         <el-table-column :label="t('keys.rpm')" width="72" align="center">
           <template #default="{ row }">
@@ -150,6 +156,12 @@
             </el-option>
           </el-select>
           <div style="font-size: 12px; color: #909399">{{ t('keys.groupHint') }}</div>
+        </el-form-item>
+        <el-form-item :label="t('nav.teams')">
+          <el-select v-model="form.team_id" clearable :placeholder="t('keys.noTeam')" style="width: 100%">
+            <el-option v-for="team in teams" :key="team.id" :label="team.name" :value="team.id" :disabled="!team.is_enabled" />
+          </el-select>
+          <div style="font-size: 12px; color: #909399">{{ t('keys.teamHint') }}</div>
         </el-form-item>
         <el-form-item :label="t('keys.auditLabel')">
           <el-switch
@@ -264,6 +276,7 @@
 import { ref, onMounted } from 'vue'
 import { keysApi } from '@/api/keys'
 import { modelGroupsApi } from '@/api/model_groups'
+import { teamsApi } from '@/api/teams'
 import { modelsApi } from '@/api/models'
 import { useAuthStore } from '@/stores/auth'
 import { useI18n } from '@/i18n'
@@ -286,6 +299,7 @@ const newKey = ref('')
 const detailVisible = ref(false)
 const detailRow = ref<any>(null)
 const modelGroups = ref<any[]>([])
+const teams = ref<any[]>([])
 const availableModels = ref<string[]>([])
 
 function formatTime(t: string) {
@@ -311,6 +325,7 @@ const emptyForm = () => ({
   allowed_models: [] as string[],
   allowed_ips: [] as string[],
   model_group_id: null as number | null,
+  team_id: null as number | null,
   quota_reset_day: null as number | null,
   audit_policy: 'on',
 })
@@ -352,6 +367,7 @@ function openEdit(row: any) {
     allowed_models: [...row.allowed_models],
     allowed_ips: [...(row.allowed_ips || [])],
     model_group_id: row.model_group_id ?? null,
+    team_id: row.team_id ?? null,
     quota_reset_day: row.quota_reset_day ?? null,
     audit_policy: row.audit_policy === 'off' ? 'off' : 'on',
   }
@@ -435,6 +451,14 @@ async function loadModelGroups() {
   }
 }
 
+async function loadTeams() {
+  try {
+    teams.value = await teamsApi.listAll()
+  } catch {
+    // silent
+  }
+}
+
 async function loadAvailableModels() {
   try {
     const res = await modelsApi.list()
@@ -442,7 +466,7 @@ async function loadAvailableModels() {
   } catch { /* ignore */ }
 }
 
-onMounted(() => { load(); loadModelGroups(); loadAvailableModels() })
+onMounted(() => { load(); loadModelGroups(); loadTeams(); loadAvailableModels() })
 </script>
 
 <style scoped>

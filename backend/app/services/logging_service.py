@@ -7,6 +7,7 @@ from tortoise.transactions import in_transaction
 
 from app.models import RequestLog, RequestLogAudit
 from app.services.metrics import record_request_metrics
+from app.services.usage_stats import record_daily_usage
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +38,7 @@ async def save_request_log(
     failed_over: bool = False,
     audit_request: str = "",
     security_hit: str = "",
+    team_id: int = 0,
 ) -> None:
     has_audit = bool(audit_request)
     async with in_transaction():
@@ -73,6 +75,23 @@ async def save_request_log(
                 request_log=log,
                 audit_request=audit_request,
             )
+
+    try:
+        await record_daily_usage(
+            api_key_id=api_key_id,
+            api_key_name=api_key_name,
+            team_id=team_id,
+            model=model_requested,
+            channel_id=channel_id,
+            channel_name=channel_name,
+            status_code=status_code,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            cost=cost,
+            when=log.created_at,
+        )
+    except Exception:
+        logger.exception("daily usage update failed for request %s", request_id)
 
     record_request_metrics(
         model=model_actual or model_requested,

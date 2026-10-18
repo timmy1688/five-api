@@ -145,7 +145,11 @@ def default_gateway_config() -> dict:
         "channel_health_check_interval": _clamp_int(settings.CHANNEL_HEALTH_CHECK_INTERVAL, 60, 10, 86400),
         "sticky_session_enabled": bool(settings.STICKY_SESSION_ENABLED),
         "sticky_session_ttl": _clamp_int(settings.STICKY_SESSION_TTL, 900, 60, 86400),
+        "routing_strategy": "weighted",
     }
+
+
+ROUTING_STRATEGIES = ("weighted", "least_busy", "latency")
 
 
 def _normalize_gateway(value) -> dict:
@@ -162,6 +166,11 @@ def _normalize_gateway(value) -> dict:
         ),
         "sticky_session_enabled": bool(enabled),
         "sticky_session_ttl": _clamp_int(raw.get("sticky_session_ttl"), defaults["sticky_session_ttl"], 60, 86400),
+        "routing_strategy": (
+            raw.get("routing_strategy")
+            if raw.get("routing_strategy") in ROUTING_STRATEGIES
+            else defaults["routing_strategy"]
+        ),
     }
 
 

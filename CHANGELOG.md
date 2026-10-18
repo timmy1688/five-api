@@ -2,6 +2,29 @@
 
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。打 `v*` tag 后，GitHub Actions 会把对应段落发成 Release，并推送镜像到 `ghcr.io/timmy1688/five-api`。
 
+## [0.3.0] - 未发布
+
+### 新增
+
+- `/v1/responses`，流式和非流式都透传到 OpenAI 兼容渠道，按 `response.completed` 里的用量计费。
+- 图片（`/v1/images/generations`、`edits`、`variations`）、语音（`/v1/audio/speech`、`transcriptions`、`translations`）和 `/v1/rerank`。模型定价和渠道定价新增按次价。
+- 团队：共用一笔美元预算，可按月重置。团队内 Key 同时扣自己的额度和团队预算，超出返回 `team_quota_exceeded`，团队停用返回 `team_disabled`。新增权限 `team:read`、`team:write`。
+- 渠道选择策略：同优先级内按权重随机、最少进行中请求或最近延迟最低。在系统设置里切换。
+- 概览页新增团队用量。
+
+### 变更
+
+- MySQL 和 Redis 端口只绑 `127.0.0.1`。镜像只信任本机发来的 `X-Forwarded-For`，前面有反向代理时设置 `FORWARDED_ALLOW_IPS`。
+- 流式请求中途断开或上游没给用量时，按已转发的内容估算 token 计费，不再记 0。
+- 改密码、管理员被改密码或停用后，旧的登录凭证立即失效。
+- 同一 IP 或用户名 15 分钟内登录失败 10 次，暂停登录 15 分钟。
+- 统计接口改读按天汇总表，不再扫描整张请求日志。
+
+### 升级
+
+- 新增迁移 `14_add_teams_usage_daily_routing`，容器启动时自动执行，并用已有日志回填按天汇总。
+- 外部机器原来直连 3306 或 6379 的，改走 SSH 隧道，或自行改回 `docker-compose.yml` 的端口绑定。
+
 ## [0.2.0] - 2026-10-18
 
 ### 新增

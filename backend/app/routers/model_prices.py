@@ -18,6 +18,7 @@ def _to_response(mp: ModelPrice) -> ModelPriceResponse:
         completion_price=float(mp.completion_price),
         cached_price=float(mp.cached_price),
         cache_write_price=float(mp.cache_write_price),
+        request_price=float(mp.request_price),
         currency=mp.currency,
         is_active=mp.is_active,
         created_at=mp.created_at,

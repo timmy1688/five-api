@@ -24,6 +24,7 @@ ALL_PERMISSIONS = [
     "role:read", "role:write",
     "security:read", "security:write",
     "setting:read", "setting:write",
+    "team:read", "team:write",
 ]
 
 BUILTIN_ROLES = [
@@ -77,6 +78,8 @@ async def get_current_admin(
     admin = await User.get_or_none(id=admin_id, is_active=True).select_related("role")
     if admin is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Admin not found")
+    if int(payload.get("ver", 0)) != admin.token_version:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token revoked")
     # Set at login when the public default password was used.
     admin.must_change_password = bool(payload.get("pwd"))
     return admin

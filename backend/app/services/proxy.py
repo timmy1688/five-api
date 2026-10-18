@@ -17,6 +17,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from app.models import APIKey, Channel
 from app.providers.base import BaseProvider, forwardable_headers
 from app.services.channel_health import record_failure, record_rate_limit, record_success
+from app.services.channel_stats import begin_attempt, end_attempt, record_latency
 from app.services.concurrency import concurrency_limiter
 from app.services.failover import is_retryable_error, upstream_status
 from app.services.audit import AuditBuffer, security_exempt
@@ -33,7 +34,7 @@ from app.services.error_detail import (
     upstream_json_error,
 )
 from app.services.logging_service import save_request_log
-from app.services.pricing import calculate_cost
+from app.services.pricing import calculate_cost, count_text_tokens
 from app.services.quota import RequestLease, deduct_quota
 from app.services.sticky_session import bind_sticky_channel
 
@@ -78,6 +79,69 @@ def extract_openai_usage(data: dict) -> dict:
             usage.get("cache_creation_input_tokens"),
         ),
     }
+
+
+def sse_billable_text(line: str) -> str:
+    """Generated text in one SSE line, including reasoning and tool arguments.
+
+    Used to estimate output tokens when a stream ends without a usage event.
+    """
+    payload = next(
+        (part[5:].strip() for part in line.splitlines() if part.startswith("data:")),
+        "",
+    )
+    if not payload or payload == "[DONE]":
+        return ""
+    try:
+        data = json.loads(payload)
+    except json.JSONDecodeError:
+        return ""
+    if not isinstance(data, dict):
+        return ""
+
+    pieces: list[str] = []
+    for choice in data.get("choices") or []:
+        if not isinstance(choice, dict):
+            continue
+        delta = choice.get("delta") or {}
+        for name in ("content", "reasoning_content", "reasoning"):
+            value = delta.get(name)
+            if isinstance(value, str):
+                pieces.append(value)
+        for call in delta.get("tool_calls") or []:
+            if isinstance(call, dict):
+                arguments = (call.get("function") or {}).get("arguments")
+                if isinstance(arguments, str):
+                    pieces.append(arguments)
+
+    delta = data.get("delta")
+    if isinstance(delta, dict):
+        for name in ("text", "thinking", "partial_json"):
+            value = delta.get(name)
+            if isinstance(value, str):
+                pieces.append(value)
+    elif isinstance(delta, str) and str(data.get("type", "")).endswith(".delta"):
+        pieces.append(delta)
+    return "".join(pieces)
+
+
+class _OutputMeter:
+    """Running output-token estimate, same rule as count_text_tokens."""
+
+    def __init__(self):
+        self.cjk = 0
+        self.other = 0
+
+    def feed(self, text: str) -> None:
+        for char in text:
+            if "\u4e00" <= char <= "\u9fff":
+                self.cjk += 1
+            else:
+                self.other += 1
+
+    @property
+    def tokens(self) -> int:
+        return self.cjk + (self.other + 3) // 4
 
 
 def _provider_headers(provider: Any) -> dict[str, str]:
@@ -145,16 +209,21 @@ async def _bill_and_log(
     audit: AuditBuffer | None = None,
     security_hit: str = "",
     budget: RequestLease | None = None,
+    request_units: int = 0,
 ):
     """计费 + 扣费 + 写日志。"""
     latency_ms = int((time.monotonic() - start_time) * 1000)
     cost = Decimal(0)
     try:
-        if prompt_tokens > 0 or completion_tokens > 0 or cached_tokens > 0 or cache_write_tokens > 0:
+        if (
+            prompt_tokens > 0 or completion_tokens > 0 or cached_tokens > 0
+            or cache_write_tokens > 0 or request_units > 0
+        ):
             cost = await calculate_cost(
                 model_actual, prompt_tokens, completion_tokens, channel,
                 cached_tokens=cached_tokens,
                 cache_write_tokens=cache_write_tokens,
+                request_units=request_units,
             )
     except Exception:
         logger.exception("billing failed for request %s", request_id)
@@ -193,6 +262,7 @@ async def _bill_and_log(
             failed_over=failed_over,
             audit_request=audit.request_text if audit else "",
             security_hit=security_hit,
+            team_id=budget.team_id if budget is not None else (api_key.team_id or 0),
         )
     except Exception:
         logger.exception("request logging failed for request %s", request_id)
@@ -248,8 +318,11 @@ async def execute_with_failover(
             provider = provider_cls(channel)
             try:
                 for attempt in range(channel.max_retries + 1):
+                    attempt_start = time.monotonic()
+                    await begin_attempt(channel.id)
                     try:
                         response, usage = await send_fn(provider, channel)
+                        await record_latency(channel.id, (time.monotonic() - attempt_start) * 1000)
                         break
                     except Exception as exc:
                         status_code = upstream_status(exc)
@@ -264,12 +337,15 @@ async def execute_with_failover(
                         )
                         if not can_retry_same:
                             raise
+                    finally:
+                        await end_attempt(channel.id)
 
                 model_actual = provider.apply_model_mapping(model_requested)
                 prompt_tokens = usage.get("prompt_tokens", 0)
                 completion_tokens = usage.get("completion_tokens", 0)
                 cached_tokens = usage.get("cached_tokens", 0)
                 cache_write_tokens = usage.get("cache_write_tokens", 0)
+                request_units = usage.get("request_units", 0)
 
                 hits = security_hits if security_hits is not None else []
                 for label in await collect_response_hits(response, exempt=security_exempt(api_key)):
@@ -283,6 +359,7 @@ async def execute_with_failover(
                     audit=audit,
                     security_hit=format_hits(hits),
                     budget=budget,
+                    request_units=request_units,
                 )
                 await _quiet(record_success(channel.id), "health reset")
                 await _quiet(bind_sticky_channel(session_key, channel.id), "sticky binding")
@@ -366,6 +443,8 @@ async def stream_with_failover(
     failed_over = False
     hits = security_hits if security_hits is not None else []
     scanner = await open_response_scanner(exempt=security_exempt(api_key))
+    meter = _OutputMeter()
+    active_channel_id: int | None = None
 
     try:
         last_error: Exception | None = None
@@ -373,6 +452,11 @@ async def stream_with_failover(
             prov = provider_cls(ch)
             try:
                 for attempt in range(ch.max_retries + 1):
+                    attempt_start = time.monotonic()
+                    if active_channel_id is not None:
+                        await end_attempt(active_channel_id)
+                    await begin_attempt(ch.id)
+                    active_channel_id = ch.id
                     try:
                         async for line, usage in stream_fn(prov, ch):
                             if not data_yielded:
@@ -380,6 +464,7 @@ async def stream_with_failover(
                                 provider = prov
                                 model_actual = prov.apply_model_mapping(model_requested)
                                 data_yielded = True
+                                await record_latency(ch.id, (time.monotonic() - attempt_start) * 1000)
                                 if upstream_headers is not None:
                                     upstream_headers.update(_provider_headers(prov))
                             if usage:
@@ -387,6 +472,7 @@ async def stream_with_failover(
                                 completion_tokens = usage.get("completion_tokens", completion_tokens)
                                 cached_tokens = usage.get("cached_tokens", cached_tokens)
                                 cache_write_tokens = usage.get("cache_write_tokens", cache_write_tokens)
+                            meter.feed(sse_billable_text(line))
                             if scanner is not None:
                                 remember_hit(hits, scanner.feed(visible_sse_text(line)))
                             yield line
@@ -438,10 +524,18 @@ async def stream_with_failover(
             upstream_headers.update(forwardable_headers(e.response))
         yield format_error_event(e)
     finally:
+        if active_channel_id is not None:
+            await end_attempt(active_channel_id)
         await _quiet(
             concurrency_limiter.release(api_key.id, concurrency_lease_id),
             "concurrency release",
         )
+        # A client disconnect or a missing usage event would bill nothing.
+        # Fall back to what was actually forwarded.
+        if data_yielded and completion_tokens == 0:
+            completion_tokens = meter.tokens
+        if data_yielded and prompt_tokens == 0 and budget is not None:
+            prompt_tokens = budget.estimated_input
         await _bill_and_log(
             model_actual, prompt_tokens, completion_tokens, cached_tokens, cache_write_tokens,
             channel, api_key, request_id, endpoint, model_requested,
