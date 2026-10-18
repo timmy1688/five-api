@@ -39,6 +39,22 @@
           </el-radio-group>
           <p class="hint">{{ t('settings.strategyHint') }}</p>
         </el-form-item>
+        <el-form-item :label="t('settings.fallbacks')">
+          <div class="fallback-list">
+            <div v-for="(rule, index) in fallbacks" :key="index" class="fallback-row">
+              <el-select v-model="rule.source" filterable allow-create default-first-option :placeholder="t('settings.fallbackSource')" class="fallback-source">
+                <el-option v-for="m in modelOptions" :key="m" :label="m" :value="m" />
+              </el-select>
+              <span class="fallback-arrow">→</span>
+              <el-select v-model="rule.targets" multiple filterable allow-create default-first-option :multiple-limit="5" :placeholder="t('settings.fallbackTargets')" class="fallback-targets">
+                <el-option v-for="m in modelOptions" :key="m" :label="m" :value="m" :disabled="m === rule.source" />
+              </el-select>
+              <el-button text type="danger" @click="fallbacks.splice(index, 1)">{{ t('common.delete') }}</el-button>
+            </div>
+            <el-button v-if="canWrite" plain size="small" @click="fallbacks.push({ source: '', targets: [] })">{{ t('settings.fallbackAdd') }}</el-button>
+          </div>
+          <p class="hint">{{ t('settings.fallbacksHint') }}</p>
+        </el-form-item>
 
         <h4>{{ t('settings.health') }}</h4>
         <el-form-item :label="t('settings.healthThreshold')">
@@ -57,6 +73,7 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { settingsApi, type GatewaySettings } from '@/api/settings'
+import { modelsApi } from '@/api/models'
 import { useAuthStore } from '@/stores/auth'
 import { useI18n } from '@/i18n'
 
@@ -73,6 +90,8 @@ const form = reactive<GatewaySettings>({
   sticky_session_ttl: 900,
   routing_strategy: 'weighted',
 })
+const fallbacks = ref<{ source: string; targets: string[] }[]>([])
+const modelOptions = ref<string[]>([])
 
 function apply(data: GatewaySettings) {
   form.log_retention_days = data.log_retention_days
@@ -81,12 +100,27 @@ function apply(data: GatewaySettings) {
   form.sticky_session_enabled = data.sticky_session_enabled
   form.sticky_session_ttl = data.sticky_session_ttl
   form.routing_strategy = data.routing_strategy ?? 'weighted'
+  fallbacks.value = Object.entries(data.model_fallbacks ?? {}).map(([source, targets]) => ({ source, targets: [...targets] }))
+}
+
+function fallbackMap(): Record<string, string[]> {
+  const map: Record<string, string[]> = {}
+  for (const rule of fallbacks.value) {
+    const source = rule.source.trim()
+    if (source && rule.targets.length) map[source] = rule.targets
+  }
+  return map
 }
 
 async function load() {
   loading.value = true
   try {
     apply(await settingsApi.get())
+    if (auth.hasPermission('channel:read')) {
+      modelsApi.list().then(data => {
+        modelOptions.value = (data.items || []).map((item: { model: string }) => item.model)
+      }).catch(() => {})
+    }
   } catch {
     ElMessage.error(t('settings.loadFailed'))
   } finally {
@@ -97,7 +131,7 @@ async function load() {
 async function save() {
   saving.value = true
   try {
-    apply(await settingsApi.save({ ...form }))
+    apply(await settingsApi.save({ ...form, model_fallbacks: fallbackMap() }))
     ElMessage.success(t('common.saved'))
   } catch {
     ElMessage.error(t('common.saveFailed'))
@@ -119,6 +153,34 @@ h4 {
 
 h4:not(:first-child) {
   margin-top: 20px;
+}
+
+.fallback-list {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+}
+
+.fallback-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+}
+
+.fallback-source {
+  width: 220px;
+}
+
+.fallback-targets {
+  flex: 1;
+  min-width: 260px;
+}
+
+.fallback-arrow {
+  color: #8f959e;
 }
 
 .hint {

@@ -7,7 +7,8 @@ class Channel(Model):
     name = fields.CharField(max_length=128)
     provider = fields.CharField(max_length=32)  # 协议：openai | anthropic
     base_url = fields.CharField(max_length=512)
-    api_key = fields.CharField(max_length=512)
+    # Encrypted. Several keys are stored one per line.
+    api_key = fields.TextField()
     models = fields.JSONField(default=list)
     model_mapping = fields.JSONField(default=dict)
     model_pricing = fields.JSONField(default=dict)

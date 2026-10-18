@@ -37,13 +37,33 @@ def decrypt_secret(value: str) -> str:
         ) from exc
 
 
-def mask_secret(value: str) -> str:
-    plain = decrypt_secret(value)
-    if not plain:
-        return ""
+def split_keys(plain: str) -> list[str]:
+    """One key per line. Commas also separate, since keys never contain them."""
+    seen: list[str] = []
+    for part in plain.replace(",", "\n").splitlines():
+        key = part.strip()
+        if key and key not in seen:
+            seen.append(key)
+    return seen
+
+
+def channel_keys(value: str) -> list[str]:
+    return split_keys(decrypt_secret(value))
+
+
+def _mask_one(plain: str) -> str:
     if len(plain) <= 8:
         return "••••••••"
     return f"{plain[:4]}••••••••{plain[-4:]}"
+
+
+def mask_secret(value: str) -> str:
+    keys = channel_keys(value)
+    if not keys:
+        return ""
+    if len(keys) == 1:
+        return _mask_one(keys[0])
+    return f"{_mask_one(keys[0])} (+{len(keys) - 1})"
 
 
 async def encrypt_plaintext_channel_keys() -> int:

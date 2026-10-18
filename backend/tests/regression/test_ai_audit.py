@@ -72,7 +72,7 @@ async def test_ai_review_is_manual_and_keeps_only_the_latest_turn(client):
     headers = auth_header(create_access_token({"sub": str(admin.id)}))
 
     with patch("app.services.ai_audit._complete", fake_complete), patch(
-        "app.routers.openai_proxy.resolve_candidates",
+        "app.routers.openai_proxy.resolve_with_fallbacks",
         return_value=[(channel, lambda _: provider)],
     ):
         resp = await client.post("/v1/chat/completions", json=payload, headers=auth_header(raw_key))
@@ -120,7 +120,7 @@ async def test_ai_review_failure_does_not_change_the_request(client):
     admin = await create_admin("audit-failure", "pw")
     headers = auth_header(create_access_token({"sub": str(admin.id)}))
     with patch("app.services.ai_audit._complete", broken), patch(
-        "app.routers.openai_proxy.resolve_candidates",
+        "app.routers.openai_proxy.resolve_with_fallbacks",
         return_value=[(channel, lambda _: provider)],
     ):
         allowed = await client.post("/v1/chat/completions", json=payload, headers=auth_header(raw_key))
@@ -154,7 +154,7 @@ async def test_ai_review_skips_short_text_and_rejects_a_large_batch(client):
     headers = auth_header(create_access_token({"sub": str(admin.id)}))
     payload = {"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}]}
     with patch("app.services.ai_audit._complete", fake_complete), patch(
-        "app.routers.openai_proxy.resolve_candidates",
+        "app.routers.openai_proxy.resolve_with_fallbacks",
         return_value=[(channel, lambda _: provider)],
     ):
         short = await client.post("/v1/chat/completions", json=payload, headers=auth_header(raw_key))

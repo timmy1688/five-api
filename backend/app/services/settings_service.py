@@ -146,10 +146,35 @@ def default_gateway_config() -> dict:
         "sticky_session_enabled": bool(settings.STICKY_SESSION_ENABLED),
         "sticky_session_ttl": _clamp_int(settings.STICKY_SESSION_TTL, 900, 60, 86400),
         "routing_strategy": "weighted",
+        "model_fallbacks": {},
     }
 
 
 ROUTING_STRATEGIES = ("weighted", "least_busy", "latency")
+MAX_FALLBACKS = 5
+MAX_FALLBACK_RULES = 200
+
+
+def _model_name(value) -> str:
+    return " ".join(str(value or "").split())[:64]
+
+
+def _normalize_fallbacks(value) -> dict[str, list[str]]:
+    if not isinstance(value, dict):
+        return {}
+    rules: dict[str, list[str]] = {}
+    for source, targets in list(value.items())[:MAX_FALLBACK_RULES]:
+        name = _model_name(source)
+        if not name or not isinstance(targets, list):
+            continue
+        chain: list[str] = []
+        for target in targets:
+            target_name = _model_name(target)
+            if target_name and target_name != name and target_name not in chain:
+                chain.append(target_name)
+        if chain:
+            rules[name] = chain[:MAX_FALLBACKS]
+    return rules
 
 
 def _normalize_gateway(value) -> dict:
@@ -171,6 +196,7 @@ def _normalize_gateway(value) -> dict:
             if raw.get("routing_strategy") in ROUTING_STRATEGIES
             else defaults["routing_strategy"]
         ),
+        "model_fallbacks": _normalize_fallbacks(raw.get("model_fallbacks")),
     }
 
 

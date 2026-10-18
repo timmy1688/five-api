@@ -157,6 +157,50 @@ async def resolve_candidates(
     return result
 
 
+def _serving(provider_cls: type[BaseProvider], model: str):
+    def build(channel: Channel) -> BaseProvider:
+        provider = provider_cls(channel)
+        provider.model_override = model
+        return provider
+
+    return build
+
+
+async def resolve_with_fallbacks(
+    model: str,
+    preferred_protocol: str | None = None,
+    sticky_channel_id: int | None = None,
+    allowed_models: list[str] | None = None,
+) -> list[tuple[Channel, type[BaseProvider]]]:
+    """Primary candidates first, then each configured fallback model in order.
+
+    Failover walks the list on retryable errors, so the next model is tried
+    only after every channel of the previous one failed.
+    """
+    from app.services.settings_service import gateway_config
+
+    chain = (await gateway_config()).get("model_fallbacks", {}).get(model, [])
+    if allowed_models is not None:
+        chain = [target for target in chain if target in allowed_models]
+    result: list = []
+    first_error: HTTPException | None = None
+    for index, target in enumerate([model, *chain]):
+        try:
+            found = await resolve_candidates(
+                target, preferred_protocol, sticky_channel_id if index == 0 else None
+            )
+        except HTTPException as exc:
+            first_error = first_error or exc
+            continue
+        if index == 0:
+            result.extend(found)
+        else:
+            result.extend((channel, _serving(provider_cls, target)) for channel, provider_cls in found)
+    if not result and first_error is not None:
+        raise first_error
+    return result
+
+
 async def resolve_channel(model: str) -> tuple[Channel, BaseProvider]:
     """返回第一个候选渠道（最高优先级、加权随机）。保持向后兼容。"""
     candidates = await resolve_candidates(model)

@@ -33,6 +33,7 @@ from app.services.error_detail import (
     gateway_failure,
     upstream_json_error,
 )
+from app.services.key_pool import KEY_STATUSES, retry_after_seconds
 from app.services.logging_service import save_request_log
 from app.services.pricing import calculate_cost, count_text_tokens
 from app.services.quota import RequestLease, deduct_quota
@@ -142,6 +143,29 @@ class _OutputMeter:
     @property
     def tokens(self) -> int:
         return self.cjk + (self.other + 3) // 4
+
+
+async def _select_key(provider: Any, session_key: str | None) -> None:
+    if isinstance(provider, BaseProvider):
+        await _quiet(provider.select_key(session_key), "key selection")
+
+
+async def _try_next_key(provider: Any, exc: Exception, rotations: int) -> bool:
+    """Retry on the same channel with another key after a key-level error."""
+    if not isinstance(provider, BaseProvider) or upstream_status(exc) not in KEY_STATUSES:
+        return False
+    if rotations >= len(provider.keys) - 1:
+        return False
+    return bool(await _quiet(provider.rotate_key(exc), "key rotation"))
+
+
+async def _record_attempt_failure(channel_id: int, exc: Exception) -> int | None:
+    status_code = upstream_status(exc)
+    if status_code == 429:
+        await _quiet(record_rate_limit(channel_id, retry_after_seconds(exc)), "rate-limit cooldown")
+    elif is_retryable_error(exc):
+        await _quiet(record_failure(channel_id), "failure tracking")
+    return status_code
 
 
 def _provider_headers(provider: Any) -> dict[str, str]:
@@ -317,7 +341,10 @@ async def execute_with_failover(
         for i, (channel, provider_cls) in enumerate(candidates):
             provider = provider_cls(channel)
             try:
-                for attempt in range(channel.max_retries + 1):
+                await _select_key(provider, session_key)
+                attempt = 0
+                rotations = 0
+                while True:
                     attempt_start = time.monotonic()
                     await begin_attempt(channel.id)
                     try:
@@ -325,11 +352,10 @@ async def execute_with_failover(
                         await record_latency(channel.id, (time.monotonic() - attempt_start) * 1000)
                         break
                     except Exception as exc:
-                        status_code = upstream_status(exc)
-                        if status_code == 429:
-                            await _quiet(record_rate_limit(channel.id), "rate-limit cooldown")
-                        elif is_retryable_error(exc):
-                            await _quiet(record_failure(channel.id), "failure tracking")
+                        if await _try_next_key(provider, exc, rotations):
+                            rotations += 1
+                            continue
+                        status_code = await _record_attempt_failure(channel.id, exc)
                         can_retry_same = (
                             is_retryable_error(exc)
                             and status_code != 429
@@ -337,6 +363,7 @@ async def execute_with_failover(
                         )
                         if not can_retry_same:
                             raise
+                        attempt += 1
                     finally:
                         await end_attempt(channel.id)
 
@@ -451,7 +478,10 @@ async def stream_with_failover(
         for i, (ch, provider_cls) in enumerate(candidates):
             prov = provider_cls(ch)
             try:
-                for attempt in range(ch.max_retries + 1):
+                await _select_key(prov, session_key)
+                attempt = 0
+                rotations = 0
+                while True:
                     attempt_start = time.monotonic()
                     if active_channel_id is not None:
                         await end_attempt(active_channel_id)
@@ -479,13 +509,13 @@ async def stream_with_failover(
                         break
                     except Exception as exc:
                         last_error = exc
-                        code = upstream_status(exc)
-                        if code == 429:
-                            await _quiet(record_rate_limit(ch.id), "rate-limit cooldown")
-                        elif is_retryable_error(exc):
-                            await _quiet(record_failure(ch.id), "failure tracking")
+                        if not data_yielded and await _try_next_key(prov, exc, rotations):
+                            rotations += 1
+                            continue
+                        code = await _record_attempt_failure(ch.id, exc)
                         if data_yielded or not is_retryable_error(exc) or code == 429 or attempt >= ch.max_retries:
                             raise
+                        attempt += 1
 
                 if not data_yielded:
                     channel = ch

@@ -37,6 +37,9 @@
               <span class="health-dot" />
               <span>{{ !healthMap[row.id] ? t('channels.unknown') : healthMap[row.id].healthy ? t('channels.healthy') : t('channels.unhealthy') }}</span>
             </div>
+            <div v-if="row.key_count > 1" class="key-pool">
+              {{ t('channels.keyPool', { ready: row.key_count - (healthMap[row.id]?.keys_cooling || 0), total: row.key_count }) }}
+            </div>
           </template>
         </el-table-column>
         <el-table-column :label="t('nav.models')" min-width="200">
@@ -118,7 +121,7 @@
         </el-form-item>
 
         <el-form-item :label="t('channels.apiKey')">
-          <el-input v-model="form.api_key" type="password" show-password :placeholder="editingId ? t('channels.apiKeyKeep') : t('channels.apiKeyOptional')" />
+          <el-input v-model="form.api_key" type="textarea" :autosize="{ minRows: 2, maxRows: 6 }" class="secret-textarea" :placeholder="editingId ? t('channels.apiKeyKeep') : t('channels.apiKeyOptional')" />
           <div class="form-hint">{{ t('channels.apiKeyHint') }}</div>
         </el-form-item>
         </div>
@@ -247,7 +250,7 @@ const newPricingCompletion = ref(0)
 const newPricingCached = ref(0)
 const newPricingWrite = ref<number | null>(null)
 const newPricingRequest = ref<number | null>(null)
-const healthMap = ref<Record<number, { healthy: boolean; fail_count: number; disabled_at: number | null }>>({})
+const healthMap = ref<Record<number, { healthy: boolean; fail_count: number; disabled_at: number | null; keys_total?: number; keys_cooling?: number }>>({})
 const fetchingModels = ref(false)
 const providerUrlExamples: Record<string, string> = {
   openai: 'https://api.openai.com',
@@ -525,6 +528,21 @@ onMounted(load)
   color: #94a3b8;
   font-size: 12px;
   text-overflow: ellipsis;
+}
+
+.secret-textarea :deep(textarea) {
+  font-family: var(--el-font-family-mono, monospace);
+  -webkit-text-security: disc;
+}
+
+.secret-textarea :deep(textarea:focus) {
+  -webkit-text-security: none;
+}
+
+.key-pool {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
 }
 
 .health-cell {

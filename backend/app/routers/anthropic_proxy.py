@@ -8,7 +8,7 @@ from fastapi.responses import JSONResponse
 from app.models import APIKey
 from app.providers.anthropic_provider import AnthropicProvider
 from app.providers.base import BaseProvider, forwardable_headers
-from app.providers.registry import resolve_candidates
+from app.providers.registry import resolve_candidates, resolve_with_fallbacks
 from app.schemas.anthropic import AnthropicMessagesRequest
 from app.services.audit import open_audit, security_exempt
 from app.services.content_filter import collect_request_hits, format_hits
@@ -17,7 +17,12 @@ from app.services.concurrency import ConcurrencyExceeded, concurrency_limiter
 from app.services.quota import QuotaExceeded, begin_request_budget
 from app.services.rate_limit import TPMExceeded
 from app.services.failover import is_retryable_error, upstream_status
-from app.services.pre_checks import anthropic_error, check_model_access, run_pre_checks
+from app.services.pre_checks import (
+    anthropic_error,
+    check_model_access,
+    get_effective_allowed_models,
+    run_pre_checks,
+)
 from app.services.pricing import estimate_request_tokens
 from app.services.proxy import (
     execute_with_failover,
@@ -169,9 +174,10 @@ async def messages(
         session_key = await make_session_key(api_key.id, request.headers, raw_body)
         sticky_channel_id = await get_sticky_channel(session_key)
 
-        candidates = await resolve_candidates(
+        candidates = await resolve_with_fallbacks(
             body.model, preferred_protocol="anthropic",
             sticky_channel_id=sticky_channel_id,
+            allowed_models=await get_effective_allowed_models(api_key),
         )
     except HTTPException as exc:
         await log_rejected_request(

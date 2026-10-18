@@ -4,7 +4,7 @@ from collections.abc import AsyncIterator
 import httpx
 
 from app.models import Channel
-from app.utils.secrets import decrypt_secret
+from app.utils.secrets import channel_keys
 
 _http_clients: dict[tuple[str, int], httpx.AsyncClient] = {}
 
@@ -74,9 +74,31 @@ async def close_http_clients() -> None:
 class BaseProvider(ABC):
     def __init__(self, channel: Channel):
         self.channel = channel
-        self.api_key = decrypt_secret(channel.api_key)
+        # Set when this channel serves a fallback model instead of the requested one.
+        self.model_override: str | None = None
+        self.keys = channel_keys(channel.api_key)
+        self.api_key = self.keys[0] if self.keys else ""
         self.client = _shared_http_client(channel)
         self.response_headers: dict[str, str] = {}
+
+    async def select_key(self, session_key: str | None = None) -> None:
+        from app.services.key_pool import pick_key
+
+        if len(self.keys) > 1:
+            self.api_key = await pick_key(self.channel.id, self.keys, session_key)
+
+    async def rotate_key(self, exc: Exception) -> bool:
+        """Cool the failing key. True when another key on this channel is ready."""
+        from app.services.key_pool import available_keys, cool_down, cooldown_for
+
+        if len(self.keys) <= 1:
+            return False
+        await cool_down(self.channel.id, self.api_key, cooldown_for(exc))
+        ready = [key for key in await available_keys(self.channel.id, self.keys) if key != self.api_key]
+        if not ready:
+            return False
+        self.api_key = ready[0]
+        return True
 
     @abstractmethod
     def transform_request(self, openai_request: dict, endpoint: str) -> tuple[str, dict, dict]:
@@ -91,6 +113,7 @@ class BaseProvider(ABC):
         """Yield OpenAI-format SSE lines from provider stream."""
 
     def apply_model_mapping(self, model: str) -> str:
+        model = self.model_override or model
         return self.channel.model_mapping.get(model, model)
 
     async def send_request(self, openai_request: dict, endpoint: str) -> dict:

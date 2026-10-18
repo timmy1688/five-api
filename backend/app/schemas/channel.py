@@ -67,6 +67,7 @@ class ChannelResponse(BaseModel):
     provider: str
     base_url: str
     api_key: str
+    key_count: int = 0
     models: list[str]
     model_mapping: dict[str, str]
     model_pricing: dict[str, dict[str, float]]

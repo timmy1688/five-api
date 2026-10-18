@@ -7,6 +7,7 @@ export interface GatewaySettings {
   sticky_session_enabled: boolean
   sticky_session_ttl: number
   routing_strategy: 'weighted' | 'least_busy' | 'latency'
+  model_fallbacks?: Record<string, string[]>
 }
 
 export const settingsApi = {

@@ -17,6 +17,7 @@ class GatewaySettingsBody(BaseModel):
     sticky_session_enabled: bool
     sticky_session_ttl: int = Field(ge=60, le=86400)
     routing_strategy: Literal["weighted", "least_busy", "latency"] = "weighted"
+    model_fallbacks: dict[str, list[str]] | None = None
 
 
 @router.get("")
@@ -29,4 +30,5 @@ async def update_settings(
     body: GatewaySettingsBody,
     _: User = require_permission("setting:write"),
 ):
-    return await set_gateway_config(body.model_dump())
+    current = await gateway_config()
+    return await set_gateway_config({**current, **body.model_dump(exclude_none=True)})

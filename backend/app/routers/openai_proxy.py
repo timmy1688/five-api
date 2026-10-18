@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response
 
 from app.models import APIKey, ModelPrice
-from app.providers.registry import list_available_models, resolve_candidates
+from app.providers.registry import list_available_models, resolve_with_fallbacks
 from app.schemas.openai import ChatCompletionRequest, CompletionRequest, EmbeddingRequest
 from app.services.audit import open_audit, security_exempt
 from app.services.content_filter import collect_request_hits, format_hits
@@ -135,9 +135,10 @@ async def _proxy(
         session_key = await make_session_key(api_key.id, request.headers, body_dict)
         sticky_channel_id = await get_sticky_channel(session_key)
 
-        candidates = await resolve_candidates(
+        candidates = await resolve_with_fallbacks(
             model, preferred_protocol="openai",
             sticky_channel_id=sticky_channel_id,
+            allowed_models=await get_effective_allowed_models(api_key),
         )
         if endpoint != "/v1/chat/completions":
             candidates = [

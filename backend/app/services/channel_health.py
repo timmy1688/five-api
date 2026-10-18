@@ -8,7 +8,7 @@ import httpx
 
 from app.config import settings
 from app.dependencies import get_redis
-from app.utils.secrets import decrypt_secret
+from app.utils.secrets import channel_keys
 from app.utils.upstream_url import upstream_url
 
 logger = logging.getLogger(__name__)
@@ -51,7 +51,7 @@ async def is_channel_healthy(channel_id: int) -> bool:
 
 
 async def record_rate_limit(channel_id: int, seconds: int = 30) -> None:
-    """上游 429 时短暂冷却，避免连续击穿同一渠道。"""
+    """Seconds usually come from the upstream Retry-After."""
     r = await get_redis()
     await r.set(f"{COOLDOWN_KEY_PREFIX}{channel_id}", "1", ex=max(1, seconds))
 
@@ -85,7 +85,7 @@ async def _probe_channel(channel) -> bool:
         async with httpx.AsyncClient(timeout=10.0) as client:
             if channel.provider == "anthropic":
                 url = upstream_url(channel.base_url, "/v1/messages")
-                api_key = decrypt_secret(channel.api_key)
+                api_key = (channel_keys(channel.api_key) or [""])[0]
                 headers = {
                     "anthropic-version": "2023-06-01",
                     "Content-Type": "application/json",
@@ -101,7 +101,7 @@ async def _probe_channel(channel) -> bool:
                 )
             else:
                 url = upstream_url(channel.base_url, "/v1/models")
-                api_key = decrypt_secret(channel.api_key)
+                api_key = (channel_keys(channel.api_key) or [""])[0]
                 headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
                 resp = await client.get(url, headers=headers)
             return resp.status_code < 400

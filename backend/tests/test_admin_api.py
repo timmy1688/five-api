@@ -605,6 +605,7 @@ async def test_gateway_settings_round_trip(client):
         "sticky_session_enabled": False,
         "sticky_session_ttl": 600,
         "routing_strategy": "least_busy",
+        "model_fallbacks": {},
     }
     saved = await client.put("/api/settings", json=body, headers=headers)
     assert saved.status_code == 200
