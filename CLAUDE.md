@@ -198,7 +198,7 @@ cd frontend && npm install && npx vite --port 5001
 
 同一会话的请求尽量固定到同一渠道，提升上游 prompt 缓存命中率、避免多轮对话跨渠道串味。
 
-- **会话标识**：优先取请求头 `X-Session-Id` / `session_id` / `X-Conversation-Id`；取不到则用请求体前缀（`system` + 首条 `user` 消息）算 SHA-256 指纹。该前缀在整段多轮对话中不变，因此无需客户端配合即可天然粘住。
+- **会话标识**：优先取请求头 `X-Session-Id` / `session_id` / `session-id`（Codex） / `X-Conversation-Id`；取不到则用请求体前缀（`system` + 首条 `user` 消息）算 SHA-256 指纹。该前缀在整段多轮对话中不变，因此无需客户端配合即可天然粘住。
 - **绑定存储**：Redis `five:sticky:{api_key_id}:{session_hash} → channel_id`，TTL = `STICKY_SESSION_TTL`（默认 900s），每次成功后刷新。
 - **路由注入**：路由查出 `sticky_channel_id` 传给 `resolve_candidates()`，`_promote_sticky()` 把它提到候选列表最前——**仅当该渠道仍是健康候选时**；否则保持正常排序，绑定自然回退。
 - **回写时机**：`proxy.py` 的 `execute_with_failover` / `stream_with_failover` 在 `record_success()` 后调用 `bind_sticky_channel()`，故障转移到新渠道时会重新绑定。

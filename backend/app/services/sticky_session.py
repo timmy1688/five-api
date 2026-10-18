@@ -12,8 +12,10 @@ from app.dependencies import get_redis
 
 KEY_PREFIX = "five:sticky:"
 
-# 兼容常见客户端与 sub2api 的会话头（Starlette Headers 取值大小写不敏感）
-SESSION_HEADERS = ("x-session-id", "session_id", "x-conversation-id", "x-claude-code-session-id")
+# 兼容常见客户端与 sub2api 的会话头，session-id 来自 Codex（Starlette Headers 取值大小写不敏感）
+SESSION_HEADERS = (
+    "x-session-id", "session_id", "session-id", "x-conversation-id", "x-claude-code-session-id",
+)
 
 
 def _fingerprint_from_body(body: dict[str, Any]) -> str | None:

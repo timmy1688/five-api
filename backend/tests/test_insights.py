@@ -26,6 +26,7 @@ def _http(payload):
 
 def test_session_identity_sources():
     assert session_identity({"x-session-id": " abc "}, {}) == "abc"
+    assert session_identity({"session-id": "codex-thread"}, {"input": []}) == "codex-thread"
     body = {"metadata": {"user_id": "user_x_account_y_session_1234-uuid"}}
     assert session_identity({}, body) == "1234-uuid"
     convo = {"messages": [{"role": "user", "content": "first"}]}
