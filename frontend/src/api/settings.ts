@@ -33,3 +33,31 @@ export const settingsApi = {
     return data
   },
 }
+
+export type WebhookType = 'feishu' | 'dingtalk' | 'wecom' | 'generic'
+
+export interface AlertWebhook {
+  id?: string
+  name: string
+  type: WebhookType
+  url: string
+  secret?: string
+  has_secret?: boolean
+  clear_secret?: boolean
+}
+
+export interface AlertSettings {
+  enabled: boolean
+  webhooks: AlertWebhook[]
+  events: Record<'budget' | 'channel' | 'errors', boolean>
+  budget_threshold: number
+  error_threshold: number
+  error_min_requests: number
+}
+
+export const alertsApi = {
+  get: async (): Promise<AlertSettings> => (await client.get('/settings/alerts')).data,
+  save: async (body: AlertSettings): Promise<AlertSettings> => (await client.put('/settings/alerts', body)).data,
+  test: async (id = ''): Promise<{ items: { name: string; ok: boolean; error: string }[] }> =>
+    (await client.post('/settings/alerts/test', { id })).data,
+}

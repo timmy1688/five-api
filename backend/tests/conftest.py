@@ -97,8 +97,11 @@ class FakeRedis:
     async def get(self, key):
         return self.data.get(key)
 
-    async def set(self, key, value, ex=None):
+    async def set(self, key, value, ex=None, nx=False):
+        if nx and key in self.data:
+            return None
         self.data[key] = str(value)
+        return True
 
     async def delete(self, *keys):
         return sum(self.data.pop(key, None) is not None for key in keys)
@@ -130,11 +133,13 @@ class FakeRedis:
 
 @pytest.fixture(autouse=True)
 async def setup_db():
+    from app.services.alerts import clear_alert_cache
     from app.services.content_filter import clear_filter_cache
     from app.services.settings_service import clear_settings_cache
 
     clear_settings_cache()
     clear_filter_cache()
+    clear_alert_cache()
     await Tortoise.init(config=TEST_TORTOISE_ORM)
     await Tortoise.generate_schemas()
     yield

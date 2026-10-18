@@ -8,6 +8,7 @@ import httpx
 
 from app.config import settings
 from app.dependencies import get_redis
+from app.services import alerts
 from app.utils.secrets import channel_keys
 from app.utils.upstream_url import upstream_url
 
@@ -23,8 +24,10 @@ async def record_success(channel_id: int) -> None:
     """请求成功时重置失败计数并清除熔断标记。"""
     r = await get_redis()
     await r.delete(f"{FAIL_KEY_PREFIX}{channel_id}")
-    await r.delete(f"{DISABLED_KEY_PREFIX}{channel_id}")
+    was_open = await r.delete(f"{DISABLED_KEY_PREFIX}{channel_id}")
     await r.delete(f"{COOLDOWN_KEY_PREFIX}{channel_id}")
+    if was_open:
+        await _alert(alerts.channel_recovered(channel_id))
 
 
 async def record_failure(channel_id: int) -> None:
@@ -40,6 +43,15 @@ async def record_failure(channel_id: int) -> None:
     if count >= threshold:
         await r.set(f"{DISABLED_KEY_PREFIX}{channel_id}", str(int(time.time())))
         logger.warning("Channel %d disabled after %d consecutive failures", channel_id, count)
+        if count == threshold:
+            await _alert(alerts.channel_opened(channel_id, count))
+
+
+async def _alert(call) -> None:
+    try:
+        await call
+    except Exception:
+        logger.exception("channel alert failed")
 
 
 async def is_channel_healthy(channel_id: int) -> bool:

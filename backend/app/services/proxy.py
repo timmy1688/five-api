@@ -35,6 +35,7 @@ from app.services.error_detail import (
 )
 from app.services.key_pool import KEY_STATUSES, retry_after_seconds
 from app.services.logging_service import save_request_log
+from app.services import alerts
 from app.services.pricing import cost_breakdown, count_text_tokens
 from app.services.quota import RequestLease, deduct_quota
 from app.services.sticky_session import bind_sticky_channel
@@ -264,6 +265,12 @@ async def _bill_and_log(
             await deduct_quota(api_key.id, cost)
     except Exception:
         logger.exception("budget settle failed for request %s", request_id)
+    try:
+        await alerts.record_outcome(status_code)
+        if cost > 0:
+            await alerts.check_budget(api_key.id)
+    except Exception:
+        logger.exception("alert check failed for request %s", request_id)
 
     try:
         await save_request_log(
