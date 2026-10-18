@@ -7,7 +7,6 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from app.config import settings
 from app.models import APIKey, Channel
 from app.services.auth import hash_api_key
 from tests.conftest import auth_header
@@ -113,12 +112,22 @@ async def test_metrics_is_local_only_without_a_token(app, client):
         assert (await remote.get("/metrics")).status_code == 403
 
 
-async def test_metrics_token_is_required_when_set(client):
-    with patch.object(settings, "METRICS_TOKEN", "scrape-secret"):
-        assert (await client.get("/metrics")).status_code == 401
-        ok = await client.get("/metrics", headers={"Authorization": "Bearer scrape-secret"})
-    assert ok.status_code == 200
-    assert "five_requests_total" in ok.text
+async def test_metrics_accepts_the_stored_token_remotely(app, client, admin_token):
+    admin = {"Authorization": f"Bearer {admin_token}"}
+    token = (await client.get("/api/settings/metrics-token", headers=admin)).json()["token"]
+    remote = AsyncClient(
+        transport=ASGITransport(app=app, client=("203.0.113.9", 1234)),
+        base_url="http://test",
+    )
+    async with remote:
+        assert (await remote.get("/metrics", headers={"Authorization": "Bearer wrong"})).status_code == 401
+        ok = await remote.get("/metrics", headers={"Authorization": f"Bearer {token}"})
+        assert ok.status_code == 200
+        assert "five_requests_total" in ok.text
+
+        reset = await client.post("/api/settings/metrics-token/reset", headers=admin)
+        assert reset.json()["token"] != token
+        assert (await remote.get("/metrics", headers={"Authorization": f"Bearer {token}"})).status_code == 401
 
 
 async def test_healthz_reports_mysql_and_redis(client, mock_redis):

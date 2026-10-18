@@ -109,7 +109,7 @@ docker compose up -d
 
 MySQL 和 Redis 的端口只绑在 `127.0.0.1`，其他机器连不上，网关走容器内网。网关只信任本机发来的 `X-Forwarded-For`。
 
-网关等 MySQL 和 Redis 就绪后才执行迁移。`/healthz` 返回两者的状态，Docker 健康检查用的就是它。`/metrics` 默认只允许容器内访问；Prometheus 要从外面抓，在 `docker-compose.yml` 填 `METRICS_TOKEN`，抓取时带 `Authorization: Bearer <令牌>`。
+网关等 MySQL 和 Redis 就绪后才执行迁移。`/healthz` 返回两者的状态，Docker 健康检查用的就是它。`/metrics` 默认只允许容器内访问；Prometheus 要从外面抓，到「系统设置」复制自动生成的令牌，抓取时带 `Authorization: Bearer <令牌>`。
 
 要改对外端口或密码，直接改 `docker-compose.yml` 里的对应值，然后重新执行 `docker compose up -d`。管理员账号已经创建之后，再改 `INIT_ADMIN_PASSWORD` 不会更新已有密码。改密码后旧的登录凭证立即失效。同一 IP 或同一用户名 15 分钟内登录失败 10 次，暂停登录 15 分钟。
 

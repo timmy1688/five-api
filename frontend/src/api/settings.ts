@@ -34,6 +34,11 @@ export const settingsApi = {
   },
 }
 
+export const metricsTokenApi = {
+  get: async (): Promise<string> => (await client.get('/settings/metrics-token')).data.token,
+  reset: async (): Promise<string> => (await client.post('/settings/metrics-token/reset')).data.token,
+}
+
 export type WebhookType = 'feishu' | 'dingtalk' | 'wecom' | 'generic'
 
 export interface AlertWebhook {

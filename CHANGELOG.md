@@ -7,6 +7,7 @@
 ### 变更
 
 - 网关容器改为无状态，不再挂载 `./data`。加密渠道 Key 和签发登录凭证的密钥首次启动时生成并存进数据库，不用任何配置，可以多副本运行。升级时先执行 `docker compose run --rm -e SECRET_KEY="$(cat data/.secret_key)" gateway python -m app.import_secret` 导入旧密钥；没导入时网关拒绝启动，不会弄坏已保存的渠道 Key。
+- `/metrics` 的远程抓取令牌改为自动生成，在「系统设置」查看、复制和重新生成，不再读 `METRICS_TOKEN` 环境变量。原来设了 `METRICS_TOKEN` 的，升级后把 Prometheus 改成新令牌。
 
 ## [0.3.0] - 2026-10-18
 

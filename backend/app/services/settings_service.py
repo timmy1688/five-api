@@ -3,7 +3,10 @@
 网关运行参数存在 system_settings。没有记录时用环境变量里的默认值。
 """
 
+import secrets
 import time
+
+from tortoise.exceptions import IntegrityError
 
 from app.config import settings
 from app.models import SystemSetting
@@ -14,6 +17,7 @@ KEYWORD_FILTER_KEY = "keyword_filter_enabled"
 SECRET_SCAN_KEY = "secret_scan_enabled"
 AI_AUDIT_KEY = "ai_audit"
 GATEWAY_KEY = "gateway"
+METRICS_TOKEN_KEY = "metrics_token"
 _CACHE_TTL = 2.0
 _cache: tuple[float, bool] | None = None
 _secret_cache: tuple[float, bool] | None = None
@@ -21,6 +25,25 @@ _ai_cache: tuple[float, dict] | None = None
 _gateway_cache: tuple[float, dict] | None = None
 
 _AI_DEFAULT = {"enabled": False, "model": "", "fail_closed": False}
+
+
+async def metrics_token() -> str:
+    """Bearer token for scraping /metrics remotely, created on first use."""
+    row = await SystemSetting.get_or_none(key=METRICS_TOKEN_KEY)
+    if row is not None:
+        return row.value["token"]
+    token = secrets.token_urlsafe(32)
+    try:
+        await SystemSetting.create(key=METRICS_TOKEN_KEY, value={"token": token})
+    except IntegrityError:
+        return (await SystemSetting.get(key=METRICS_TOKEN_KEY)).value["token"]
+    return token
+
+
+async def reset_metrics_token() -> str:
+    token = secrets.token_urlsafe(32)
+    await SystemSetting.update_or_create(key=METRICS_TOKEN_KEY, defaults={"value": {"token": token}})
+    return token
 
 
 async def inference_audit_enabled() -> bool:

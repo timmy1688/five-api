@@ -28,8 +28,6 @@ class Settings(BaseSettings):
     STICKY_SESSION_ENABLED: bool = True
     STICKY_SESSION_TTL: int = 900
 
-    METRICS_TOKEN: str = ""
-
     @field_validator("SECRET_KEY")
     @classmethod
     def _long_secret(cls, value: str) -> str:

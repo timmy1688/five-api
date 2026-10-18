@@ -6,7 +6,12 @@ from pydantic import BaseModel, Field
 from app.models import User
 from app.services import alerts
 from app.services.auth import require_permission
-from app.services.settings_service import gateway_config, set_gateway_config
+from app.services.settings_service import (
+    gateway_config,
+    metrics_token,
+    reset_metrics_token,
+    set_gateway_config,
+)
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
@@ -36,6 +41,16 @@ async def update_settings(
 ):
     current = await gateway_config()
     return await set_gateway_config({**current, **body.model_dump(exclude_none=True)})
+
+
+@router.get("/metrics-token")
+async def get_metrics_token(_: User = require_permission("setting:read")):
+    return {"token": await metrics_token()}
+
+
+@router.post("/metrics-token/reset")
+async def regenerate_metrics_token(_: User = require_permission("setting:write")):
+    return {"token": await reset_metrics_token()}
 
 
 class AlertWebhookBody(BaseModel):

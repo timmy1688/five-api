@@ -6,8 +6,8 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
 from tortoise import connections
 
-from app.config import settings
 from app import dependencies
+from app.services.settings_service import metrics_token
 from app.utils.ip_check import get_client_ip
 
 router = APIRouter(tags=["metrics"])
@@ -43,16 +43,18 @@ async def healthz():
 
 @router.get("/metrics", response_class=PlainTextResponse)
 async def metrics(request: Request):
-    """Prometheus 指标。设置 METRICS_TOKEN 后凭 Bearer 访问，否则只允许本机。
+    """Prometheus 指标。本机直接访问，远程凭「系统设置」里的令牌以 Bearer 访问。
 
     渠道名和费用不能公开。反向代理和 Docker 端口转发会让外部请求看起来来自
     私网地址，所以不按私网放行。
     """
-    token = settings.METRICS_TOKEN
-    if token:
-        supplied = request.headers.get("authorization", "")
-        if not secrets.compare_digest(supplied.encode(), f"Bearer {token}".encode()):
+    supplied = request.headers.get("authorization", "")
+    if supplied:
+        expected = f"Bearer {await metrics_token()}"
+        if not secrets.compare_digest(supplied.encode(), expected.encode()):
             raise HTTPException(status_code=401, detail="Invalid metrics token")
     elif not _is_loopback(get_client_ip(request)):
-        raise HTTPException(status_code=403, detail="Set METRICS_TOKEN to scrape metrics remotely")
+        raise HTTPException(
+            status_code=403, detail="Use the metrics token from System Settings to scrape remotely"
+        )
     return PlainTextResponse(generate_latest(), media_type=CONTENT_TYPE_LATEST)

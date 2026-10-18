@@ -119,6 +119,7 @@
       </el-form>
     </el-card>
     <AlertSettings />
+    <MetricsToken />
   </div>
 </template>
 
@@ -128,6 +129,7 @@ import { ElMessage } from 'element-plus'
 import { settingsApi, type GatewaySettings, type TimePriceRule } from '@/api/settings'
 import { channelsApi } from '@/api/channels'
 import AlertSettings from '@/components/AlertSettings.vue'
+import MetricsToken from '@/components/MetricsToken.vue'
 import { modelsApi } from '@/api/models'
 import { useAuthStore } from '@/stores/auth'
 import { useI18n } from '@/i18n'

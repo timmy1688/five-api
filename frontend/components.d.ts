@@ -59,6 +59,7 @@ declare module 'vue' {
     ElTooltip: typeof import('element-plus/es')['ElTooltip']
     ElUpload: typeof import('element-plus/es')['ElUpload']
     LangSwitch: typeof import('./src/components/LangSwitch.vue')['default']
+    MetricsToken: typeof import('./src/components/MetricsToken.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
     WindowLimitsInput: typeof import('./src/components/WindowLimitsInput.vue')['default']
