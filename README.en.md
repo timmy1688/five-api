@@ -4,45 +4,73 @@
 
 [![CI](https://github.com/timmy1688/five-api/actions/workflows/ci.yml/badge.svg)](https://github.com/timmy1688/five-api/actions/workflows/ci.yml)
 
-A self-hosted AI gateway for a team. Upstream keys stay in the gateway. Each person gets a key with its own USD quota, model list, and rate limit. Claude Code and the OpenAI SDK only change the base URL.
+A self-hosted AI gateway for teams. Claude Code, Codex, Cursor, and the SDKs all point at one address. Upstream keys stay in the gateway, every person is billed in USD, failing channels are swapped out automatically, and spend reconciles with the vendor bill line by line.
 
-## Why this one
+Deploy with one `docker compose up -d`. The admin UI and the API run in the same process.
 
-**Claude Code works, with tools and thinking intact.** `/v1/messages` is forwarded as-is to an Anthropic channel. `tool_use`, `thinking`, streaming, and vendor beta fields stay. OpenAI requests are forwarded as-is to an OpenAI-compatible channel. The same model can have one channel for each client.
+## Why Five API
+
+### Native protocols. Clients only change the base URL
+
+- Claude Code and the Anthropic SDK use `/v1/messages`, forwarded as-is to an Anthropic channel. `tool_use`, `thinking`, streaming, and vendor beta fields arrive intact.
+- The OpenAI SDK, Codex, and Cursor use `/v1/*`: chat, responses, embeddings, images, audio, and rerank are all passed through.
+- Upstream rate-limit headers come back unchanged, so SDK backoff keeps working. One model can have a channel for each protocol.
+- Claude Code and the Codex CLI have both run multi-turn tool-calling tasks through the gateway in testing.
 
 ```bash
 export ANTHROPIC_BASE_URL=http://your-server
 export ANTHROPIC_API_KEY=sk-your-gateway-key
 ```
 
-**You can match what each person spent to the vendor bill.** Quota is USD on the key. One request has four prices: input, cache read, cache write, and output. Claude cache writes are 1.25× input. Other models bill writes at the input price. The gateway reserves an estimate when the request starts and settles the real usage when it finishes. If a stream is cut off or the upstream reports no usage, the gateway estimates it from what it forwarded. A key can join a team. The team has its own USD budget, and every key in it spends from that budget. A key can limit requests per minute and tokens per minute.
+### High availability. Upstream failures are routed around
 
-**Several keys per channel, several fallbacks per model.** Put one upstream key per line. A key that gets a 429 cools down for the upstream `retry-after`. A 401 or 403 cools it down for 10 minutes. The other keys keep serving, and one session stays on one key so its cache keeps hitting. When every channel for a model fails, the fallback chain in Settings moves to the next model, for example `claude-opus-4-7 → claude-sonnet-4-6`.
+- Same-protocol channels are tiered by priority and picked by weight, fewest in-flight requests, or lowest latency.
+- A channel can hold a pool of upstream keys. A 429 cools a key down for `retry-after`, a 401 or 403 for 10 minutes, and the next key takes over.
+- 5xx, timeouts, and network errors fail over to the next channel, and streams fail over before the first byte. Repeated failures open a circuit breaker, and a background probe closes it.
+- When every channel for a model fails, a fallback chain moves to the next model, for example `claude-opus-4-7 → claude-sonnet-4-6`.
+- Sticky sessions keep a conversation on one channel and one key, so the upstream cache keeps hitting.
+- When a client disconnects or an upstream stream breaks, the request is still billed, logged, and its concurrency slot released.
 
-**Limits per 5 hours, per day, per week.** Besides the total quota, keys and teams can cap USD spend over the last 5 hours, 24 hours, and 7 days. Going over returns `window_limit` or `team_window_limit`. Near the cap, rules can swap an expensive model for a cheaper one, and the `x-five-downgraded-to` header names the model used. A spent budget still rejects.
+### Exact billing. Every cent is accounted for
 
-**See what the cache saves.** Cost insights charts the daily cache hit rate and the money saved, split by model, key, and channel, and lists the most expensive sessions. A session comes from a request header, the Claude Code session id, or a fingerprint of the conversation start. With auto cache on, Anthropic requests without `cache_control` get cache marks on tools, the system prompt, and the last message.
+- Quota is USD on the key. One request has four prices: input, cache read, cache write, and output. Images, audio, and rerank add a per-request price.
+- OpenAI and Anthropic usage are normalized to one scheme, with Anthropic cache tokens added back before billing.
+- An estimate is reserved when the request starts and settled from real usage when it ends. Parallel calls hold their share, so a quota is exceeded by one request at most.
+- Teams share one budget. Keys and teams can cap USD spend over the last 5 hours, 24 hours, and 7 days.
+- Time-of-day pricing multiplies cost inside chosen hours, matching off-peak discounts or peak surcharges.
+- Every log row carries a cost breakdown: usage per bucket, unit price, price source, and cache savings.
 
-**Reconcile with the vendor bill line by line.** Upload the vendor's CSV export on the Reconciliation page. Date, cost, and model columns are detected, and each day and model is compared with gateway billing, with rows over or under flagged. The log detail lists every price bucket with usage, unit price, price source, and cache savings. Time-of-day pricing multiplies the cost inside chosen hours, matching off-peak discounts or peak surcharges.
+### Cost control. Spend less and see where it goes
 
-**Alerts reach your team chat.** Budget thresholds, channel circuit open and recovery, and a high per-minute share of 5xx go to Feishu, DingTalk, WeCom, or any JSON webhook. Feishu and DingTalk signing is supported, and URLs and secrets are stored encrypted. The Get started page has configs for Claude Code, Codex, Cursor, and the SDKs, ready to copy once you paste a key.
+- Cost insights charts the daily cache hit rate and money saved, split by model, key, and channel, and lists the most expensive sessions.
+- Auto cache marks tools, the system prompt, and the last message on Anthropic requests that carry no `cache_control`.
+- Budget downgrade swaps an expensive model for a cheaper one near the cap, and the `x-five-downgraded-to` header names it.
+- Reconciliation takes the vendor's CSV export, detects the date, cost, and model columns, compares each day and model with gateway billing, and flags rows over or under.
 
-**Security checks do not stop the call. Review one person when you need to.** Keywords look only at the outgoing request. Secret patterns check the request and the reply for private keys, AWS access keys, GitHub tokens, and Slack tokens. The log stores the pattern name, not the secret. After a hit, the request and the reply both continue. Quota, model permission, and rate limits are what reject a call.
+### Security and compliance without getting in the way
 
-Inference audit stores the request only for keys that have audit on. Replies are not saved. AI review does not run after every request. Open the Audit page and it reviews that key’s saved requests one by one. Each review sends the first 400 characters of the system prompt and the last 1,200 characters of the latest user message. Earlier turns, images, and replies stay out, so more requests do not make a single review longer. The same excerpt is not sent again for 10 minutes. When the review finishes, you can generate and download a report. A script key can turn audit off: no marks, no review, and no stored request. On the Security page, turn secret patterns on, keep keywords to internal names, and point AI audit at a cheap OpenAI-compatible model.
+- Upstream keys are stored encrypted, and members only hold gateway keys. Each key can limit models, IPs, requests per minute, tokens per minute, concurrency, and expiry.
+- Keyword and secret scanning (private keys, AWS access keys, GitHub tokens, Slack tokens) only marks the log, and the call goes on. The log stores the pattern name, never the secret.
+- Inference audit is per key and stores requests only. AI review runs on demand from the Audit page, one request at a time, sending the first 400 characters of the system prompt and the last 1,200 characters of the latest user message, and ends with a report.
+- 21 fine-grained permissions with custom roles. Failed logins are rate limited, and a password change signs out every earlier session.
+
+### Easy to operate
+
+- No `.env` file, migrations run on start, and all data lives in `./data`.
+- `/healthz` reports MySQL and Redis, and `/metrics` serves Prometheus.
+- Budget thresholds, circuit open and recovery, and a high 5xx share go to Feishu, DingTalk, WeCom, or any JSON webhook.
+- The Get started page turns a key into ready-to-copy configs for Claude Code, Codex, Cursor, and the SDKs.
+- Smoke, regression, and load test suites cover passthrough, failover, billing, and rate limits.
 
 | | Five API | A typical gateway |
 |---|---|---|
-| Claude Code | The request arrives unchanged, with tools and thinking | Converted into another format, then forwarded |
-| Billing | Per person. Cache writes follow the vendor price, and quota is reserved before the call | Totals only, so parallel calls can overspend |
-| Security | A hit is only logged. Each saved request is reviewed alone, as a short excerpt | A hit stops the request |
-| Failure | Same-protocol failover, key rotation with cooldowns inside a channel, a circuit breaker, then a model fallback chain | Often tries a channel that speaks another protocol |
-| Cost | Cache hit rate and savings per session, CSV bill reconciliation, downgrade near the budget | Totals only |
-| Code | About 15,000 lines, Python and Vue 3, 21 permissions | Often tens of thousands of lines |
+| Protocol | Passed through as-is, Claude Code tools and thinking reach the upstream intact | Converted into another format, then forwarded |
+| Billing | Per person in USD, four price buckets, reserved before the call | Totals only |
+| Availability | Key pool cooldowns, failover, circuit breaker, model fallback, sticky sessions | One failing channel fails the request |
+| Cost | Cache insights, auto cache, budget downgrade, bill reconciliation | Totals only |
+| Security | A hit is only marked, and requests are reviewed per key as excerpts | A hit stops the request |
 
 ## Screenshots
-
-The admin UI and the API are the same process.
 
 ![Dashboard](docs/images/dashboard.png)
 
