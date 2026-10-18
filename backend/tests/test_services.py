@@ -16,7 +16,7 @@ from app.routers.anthropic_proxy import (
 )
 from app.services.channel_health import is_channel_healthy, record_failure
 from app.services.logging_service import cleanup_old_logs
-from app.services.pricing import calculate_cost, catalog_prices
+from app.services.pricing import BLOB_TOKENS, calculate_cost, catalog_prices, estimate_request_tokens
 from app.services.settings_service import set_gateway_config
 from app.services.sticky_session import make_session_key
 from app.services.proxy import extract_openai_usage
@@ -563,3 +563,17 @@ async def test_reset_day_31_uses_last_day_of_short_month():
         assert await reset_expired_quotas() == 1
     await k.refresh_from_db()
     assert k.quota_used == Decimal("0")
+
+
+def test_inline_base64_counts_as_one_image():
+    payload = "QUJD" * 300_000
+    openai_body = {"messages": [{"role": "user", "content": [
+        {"type": "text", "text": "describe"},
+        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{payload}"}},
+    ]}]}
+    anthropic_body = {"messages": [{"role": "user", "content": [
+        {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": payload}},
+    ]}]}
+    assert estimate_request_tokens(openai_body)[0] < BLOB_TOKENS + 50
+    assert estimate_request_tokens(anthropic_body)[0] < BLOB_TOKENS + 50
+    assert estimate_request_tokens({"messages": [{"role": "user", "content": "word " * 2000}]})[0] > 2000

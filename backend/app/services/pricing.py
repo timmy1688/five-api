@@ -1,3 +1,4 @@
+import re
 from datetime import datetime, timezone
 from decimal import Decimal
 
@@ -7,6 +8,11 @@ from app.services.settings_service import gateway_config
 
 MILLION = Decimal("1000000")
 USD_STEP = Decimal("0.000001")
+# Upstreams bill an inline image, audio clip or file per item, so a base64
+# payload counts as one large image instead of one token per four characters.
+BLOB_TOKENS = 1600
+_BLOB_MIN_CHARS = 1024
+_BASE64 = re.compile(r"[A-Za-z0-9+/=_-]+")
 
 
 def find_channel_pricing(
@@ -192,10 +198,14 @@ def count_text_tokens(value) -> int:
     """
     cjk = 0
     other = 0
+    blobs = 0
 
     def walk(item) -> None:
-        nonlocal cjk, other
+        nonlocal cjk, other, blobs
         if isinstance(item, str):
+            if _is_blob(item):
+                blobs += 1
+                return
             for char in item:
                 if "\u4e00" <= char <= "\u9fff":
                     cjk += 1
@@ -211,7 +221,14 @@ def count_text_tokens(value) -> int:
                 walk(child)
 
     walk(value)
-    return cjk + (other + 3) // 4
+    return cjk + (other + 3) // 4 + blobs * BLOB_TOKENS
+
+
+def _is_blob(text: str) -> bool:
+    if len(text) < _BLOB_MIN_CHARS:
+        return False
+    head = text[:_BLOB_MIN_CHARS]
+    return head.startswith("data:") or _BASE64.fullmatch(head) is not None
 
 
 async def estimate_upper_cost(
