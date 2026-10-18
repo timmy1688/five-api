@@ -81,11 +81,23 @@ class OpenAIProvider(BaseProvider):
         self.response_headers = forwardable_headers(resp)
         return resp
 
-    def transform_response(self, provider_response: dict, endpoint: str) -> dict:
-        return provider_response
+    async def send_request(self, body: dict, endpoint: str) -> dict:
+        url_path, headers, payload = self.transform_request(body, endpoint)
+        resp = await self.client.post(url_path, json=payload, headers=headers)
+        resp.raise_for_status()
+        self.response_headers = forwardable_headers(resp)
+        return resp.json()
 
-    async def stream_transform(self, response: httpx.Response, endpoint: str) -> AsyncIterator[str]:
-        async for line in response.aiter_lines():
-            line = line.strip()
-            if line:
-                yield f"{line}\n\n"
+    async def send_stream(self, body: dict, endpoint: str) -> AsyncIterator[str]:
+        url_path, headers, payload = self.transform_request(body, endpoint)
+        req = self.client.build_request("POST", url_path, json=payload, headers=headers)
+        resp = await self.client.send(req, stream=True)
+        await read_error_body(resp)
+        self.response_headers = forwardable_headers(resp)
+        try:
+            async for line in resp.aiter_lines():
+                line = line.strip()
+                if line:
+                    yield f"{line}\n\n"
+        finally:
+            await resp.aclose()

@@ -1,5 +1,3 @@
-from abc import ABC, abstractmethod
-from collections.abc import AsyncIterator
 
 import httpx
 
@@ -71,7 +69,7 @@ async def close_http_clients() -> None:
         await client.aclose()
 
 
-class BaseProvider(ABC):
+class BaseProvider:
     def __init__(self, channel: Channel):
         self.channel = channel
         # Set when this channel serves a fallback model instead of the requested one.
@@ -100,40 +98,9 @@ class BaseProvider(ABC):
         self.api_key = ready[0]
         return True
 
-    @abstractmethod
-    def transform_request(self, openai_request: dict, endpoint: str) -> tuple[str, dict, dict]:
-        """Convert OpenAI-format request to provider format. Returns (url_path, headers, body)."""
-
-    @abstractmethod
-    def transform_response(self, provider_response: dict, endpoint: str) -> dict:
-        """Convert provider response to OpenAI format."""
-
-    @abstractmethod
-    async def stream_transform(self, response: httpx.Response, endpoint: str) -> AsyncIterator[str]:
-        """Yield OpenAI-format SSE lines from provider stream."""
-
     def apply_model_mapping(self, model: str) -> str:
         model = self.model_override or model
         return self.channel.model_mapping.get(model, model)
-
-    async def send_request(self, openai_request: dict, endpoint: str) -> dict:
-        url_path, headers, body = self.transform_request(openai_request, endpoint)
-        resp = await self.client.post(url_path, json=body, headers=headers)
-        resp.raise_for_status()
-        self.response_headers = forwardable_headers(resp)
-        return self.transform_response(resp.json(), endpoint)
-
-    async def send_stream(self, openai_request: dict, endpoint: str) -> AsyncIterator[str]:
-        url_path, headers, body = self.transform_request(openai_request, endpoint)
-        req = self.client.build_request("POST", url_path, json=body, headers=headers)
-        resp = await self.client.send(req, stream=True)
-        await read_error_body(resp)
-        self.response_headers = forwardable_headers(resp)
-        try:
-            async for line in self.stream_transform(resp, endpoint):
-                yield line
-        finally:
-            await resp.aclose()
 
     async def close(self):
         # Clients are shared per upstream and closed during application shutdown.

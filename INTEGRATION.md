@@ -19,7 +19,7 @@
 ## 接入 Claude Code CLI
 
 > Claude Code CLI 使用 **Anthropic 原生协议**（`/v1/messages`），包括 `tool_use` 工具调用。
-> Five API 支持两种模式：当上游渠道 provider 为 `anthropic` 时使用 **pass-through 直通**（推荐，保留原生 Beta 特性）；当上游为 `openai` 时自动转换请求、响应、流式事件和工具调用。
+> Five API 把 `/v1/messages` 原样直通到 provider 为 `anthropic` 的渠道，保留 tool_use、thinking 和厂商 Beta 字段。
 
 ### 方式一：环境变量（临时）
 
@@ -102,8 +102,7 @@ Five API 支持将任何提供 Anthropic 兼容端点的模型接入 Claude Code
 ### 注意事项
 
 - Claude Code 会向 `/v1/messages` 发送 Anthropic 格式请求（含 `tool_use` 工具调用）
-- **推荐使用 `provider: "anthropic"` 的渠道**（pass-through 直通模式），完整支持 tool_use、thinking 等 Anthropic 原生特性
-- 使用 `provider: "openai"` 渠道时，网关会转换 `tool_use` / `tool_result` 与 OpenAI `tool_calls`，但供应商专属 Beta 字段只在 Anthropic 直通模式保留
+- 需要 `provider: "anthropic"` 的渠道（直通），`provider: "openai"` 的渠道不会被 `/v1/messages` 选中
 - `ANTHROPIC_AUTH_TOKEN`（Bearer token）优先级高于 `ANTHROPIC_API_KEY`（X-Api-Key header）
 - 确保渠道的 models 列表包含 Claude Code 使用的模型名
 
