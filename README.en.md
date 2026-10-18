@@ -17,6 +17,16 @@ export ANTHROPIC_API_KEY=sk-your-gateway-key
 
 **You can match what each person spent to the vendor bill.** Quota is USD on the key. One request has four prices: input, cache read, cache write, and output. Claude cache writes are 1.25× input. Other models bill writes at the input price. The gateway reserves an estimate when the request starts and settles the real usage when it finishes. If a stream is cut off or the upstream reports no usage, the gateway estimates it from what it forwarded. A key can join a team. The team has its own USD budget, and every key in it spends from that budget. A key can limit requests per minute and tokens per minute.
 
+**Several keys per channel, several fallbacks per model.** Put one upstream key per line. A key that gets a 429 cools down for the upstream `retry-after`. A 401 or 403 cools it down for 10 minutes. The other keys keep serving, and one session stays on one key so its cache keeps hitting. When every channel for a model fails, the fallback chain in Settings moves to the next model, for example `claude-opus-4-7 → claude-sonnet-4-6`.
+
+**Limits per 5 hours, per day, per week.** Besides the total quota, keys and teams can cap USD spend over the last 5 hours, 24 hours, and 7 days. Going over returns `window_limit` or `team_window_limit`. Near the cap, rules can swap an expensive model for a cheaper one, and the `x-five-downgraded-to` header names the model used. A spent budget still rejects.
+
+**See what the cache saves.** Cost insights charts the daily cache hit rate and the money saved, split by model, key, and channel, and lists the most expensive sessions. A session comes from a request header, the Claude Code session id, or a fingerprint of the conversation start. With auto cache on, Anthropic requests without `cache_control` get cache marks on tools, the system prompt, and the last message.
+
+**Reconcile with the vendor bill line by line.** Upload the vendor's CSV export on the Reconciliation page. Date, cost, and model columns are detected, and each day and model is compared with gateway billing, with rows over or under flagged. The log detail lists every price bucket with usage, unit price, price source, and cache savings. Time-of-day pricing multiplies the cost inside chosen hours, matching off-peak discounts or peak surcharges.
+
+**Alerts reach your team chat.** Budget thresholds, channel circuit open and recovery, and a high per-minute share of 5xx go to Feishu, DingTalk, WeCom, or any JSON webhook. Feishu and DingTalk signing is supported, and URLs and secrets are stored encrypted. The Get started page has configs for Claude Code, Codex, Cursor, and the SDKs, ready to copy once you paste a key.
+
 **Security checks do not stop the call. Review one person when you need to.** Keywords look only at the outgoing request. Secret patterns check the request and the reply for private keys, AWS access keys, GitHub tokens, and Slack tokens. The log stores the pattern name, not the secret. After a hit, the request and the reply both continue. Quota, model permission, and rate limits are what reject a call.
 
 Inference audit stores the request only for keys that have audit on. Replies are not saved. AI review does not run after every request. Open the Audit page and it reviews that key’s saved requests one by one. Each review sends the first 400 characters of the system prompt and the last 1,200 characters of the latest user message. Earlier turns, images, and replies stay out, so more requests do not make a single review longer. The same excerpt is not sent again for 10 minutes. When the review finishes, you can generate and download a report. A script key can turn audit off: no marks, no review, and no stored request. On the Security page, turn secret patterns on, keep keywords to internal names, and point AI audit at a cheap OpenAI-compatible model.
@@ -26,7 +36,8 @@ Inference audit stores the request only for keys that have audit on. Replies are
 | Claude Code | The request arrives unchanged, with tools and thinking | Converted into another format, then forwarded |
 | Billing | Per person. Cache writes follow the vendor price, and quota is reserved before the call | Totals only, so parallel calls can overspend |
 | Security | A hit is only logged. Each saved request is reviewed alone, as a short excerpt | A hit stops the request |
-| Failure | Same-protocol failover, then a circuit breaker. Within one priority, pick by weight, fewest in-flight requests, or lowest latency | Often tries a channel that speaks another protocol |
+| Failure | Same-protocol failover, key rotation with cooldowns inside a channel, a circuit breaker, then a model fallback chain | Often tries a channel that speaks another protocol |
+| Cost | Cache hit rate and savings per session, CSV bill reconciliation, downgrade near the budget | Totals only |
 | Code | About 15,000 lines, Python and Vue 3, 21 permissions | Often tens of thousands of lines |
 
 ## Screenshots

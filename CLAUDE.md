@@ -96,7 +96,13 @@ cd frontend && npm install && npx vite --port 5001
 │   │   │   ├── channel_health.py    #   渠道健康监测 & 自动熔断
 │   │   │   ├── logging_service.py   #   请求日志持久化 + 自动清理
 │   │   │   ├── metrics.py           #   Prometheus 指标
-│   │   │   └── anthropic_compat.py  #   Anthropic↔OpenAI 格式转换（含工具/tool_use，方向 A）
+│   │   │   ├── anthropic_compat.py  #   Anthropic↔OpenAI 格式转换（含工具/tool_use，方向 A）
+│   │   │   ├── key_pool.py          #   渠道多 Key 冷却与轮换
+│   │   │   ├── spend_windows.py     #   5h/1d/7d 滚动限额
+│   │   │   ├── downgrade.py         #   接近预算时改用便宜模型
+│   │   │   ├── auto_cache.py        #   自动加 Anthropic cache_control
+│   │   │   ├── time_pricing.py      #   分时定价倍率
+│   │   │   └── alerts.py            #   飞书/钉钉/企业微信/JSON 告警
 │   │   ├── middleware/
 │   │   │   └── request_id.py        #   注入 X-Request-ID
 │   │   ├── routers/                 # API 路由（前缀 /api/*）
@@ -112,6 +118,8 @@ cd frontend && npm install && npx vite --port 5001
 │   │   │   ├── model_prices.py      #   /api/model-prices CRUD + 同步内置价格
 │   │   │   ├── stats.py             #   /api/stats 统计聚合
 │   │   │   ├── users.py             #   /api/users 管理员 CRUD
+│   │   │   ├── insights.py          #   /api/stats/cache、/api/stats/sessions
+│   │   │   ├── reconcile.py         #   /api/reconcile 账单对账
 │   │   │   └── metrics.py           #   Prometheus /metrics 端点
 │   │   └── utils/
 │   │       ├── key_generator.py     #   sk-xxx 格式 Key 生成
@@ -325,6 +333,31 @@ async def create(body: ..., user: User = require_permission("channel:write")):
 
 4xx 错误不触发故障转移。流式请求只在尚未发送数据时才可切换。
 
+### 号池与模型回退
+
+- **号池**（`services/key_pool.py`）：渠道 `api_key` 存多把 Key，换行或逗号分隔。`BaseProvider.select_key()` 跳过冷却中的 Key，有会话时按会话哈希固定，否则 Redis 轮询 `five:keyrr:{channel_id}`。429 按 `retry-after(-ms)` 冷却（上限 3600 秒，缺省 30），401/403 冷却 600 秒，键为 `five:keycool:{channel_id}:{key 指纹}`。`rotate_key()` 换到下一把可用 Key 后在同一渠道重试，所有 Key 都冷却才算渠道失败。渠道测试和健康探测只用第一把。
+- **模型回退**：系统设置 `model_fallbacks` `{模型: [备选, ...]}`，每条最多 5 个。`resolve_with_fallbacks()` 先排主模型的候选，再依次接上备选模型的候选，`_serving()` 给 provider 设 `model_override`，日志的 `model_actual` 记真实模型。备选模型仍受 Key 的模型权限约束。
+
+### 成本控制
+
+- **滚动限额**（`services/spend_windows.py`）：Key 和团队的 `window_limits` `{"5h","1d","7d": USD}`。花费按小时桶 `five:spend:{key|team}:{id}:{hour}` 累加（TTL 8 天），`begin_request_budget` 检查，`settle` 记账，重置配额时清空。
+- **预算降级**（`services/downgrade.py`）：系统设置 `budget_downgrade` `{threshold, rules: {贵: 便宜}}`。压力取 Key 总额度、Key 窗口、团队总额度、团队窗口里占比最高的一个，达到阈值且目标模型被允许时改写模型，响应头 `x-five-downgraded-to`。
+- **自动缓存**（`services/auto_cache.py`）：系统设置 `auto_cache_control` 打开后，`/v1/messages` 请求里没有任何 `cache_control` 时，在最后一个工具、系统提示、最后一条消息的最后一个非 thinking block 上加 `ephemeral` 标记。
+- **分时定价**（`services/time_pricing.py`）：系统设置 `time_pricing` 规则列表 `{name, models(通配), channel_ids, start, end, utc_offset, multiplier}`，按顺序第一条命中生效，结束不晚于开始时跨午夜。`cost_breakdown()` 把各档费用和缓存节省乘以倍率，`cost_detail.time_rule` 记规则名和倍率。预留按当前时段所有命中规则的最大倍率（至少 1）放大。
+- **会话**：`sticky_session.session_log_id()` 由请求头、Claude Code `metadata.user_id` 里的 `_session_<uuid>` 或对话指纹算出，写进 `request_logs.session_id`。`/api/stats/sessions` 按会话聚合。
+
+### 告警（`services/alerts.py`）
+
+配置存 `system_settings` 的 `alerts` 键：`enabled`、最多 10 个 webhook（`feishu` / `dingtalk` / `wecom` / `generic`，URL 和签名密钥加密，接口只返回脱敏 URL 和 `has_secret`）、`events.{budget,channel,errors}`、`budget_threshold`、`error_threshold`、`error_min_requests`。PUT 时 URL 原样回传脱敏值或留空、密钥留空都保留旧值。
+
+| 事件 | 触发点 | 去重 |
+|------|--------|------|
+| 预算 | `_bill_and_log` 结算后，Key/团队的总额度或任一滚动限额占比达到阈值 | 每个预算 12 小时 |
+| 渠道 | `record_failure` 计数正好等于熔断阈值；`record_success` 删掉熔断标记时 | 5 分钟 |
+| 错误 | 每分钟请求数 `five:alert:req:{minute}` 达到最少请求数，且 5xx 占比达到阈值 | 10 分钟 |
+
+去重用 `SET NX` `five:alert:{event}:{subject}`。发送在后台任务里，超时 5 秒。飞书、钉钉、企业微信返回 HTTP 200 加错误码时也算失败。告警关闭时请求路径只读一次进程缓存。
+
 ### 错误码速查
 
 | 状态码 | code | 原因 |
@@ -333,6 +366,7 @@ async def create(body: ..., user: User = require_permission("channel:write")):
 | 403 | `model_not_allowed` / `Permission denied` | Key 无权访问模型 / 管理员无权限 |
 | 404 | `model_not_found` | 无启用渠道支持该模型 |
 | 429 | `quota_exceeded` / `rpm_limit` / `tpm_limit` / `concurrent_limit` | 配额/每分钟请求/每分钟 token/并发超限 |
+| 429 | `window_limit` / `team_window_limit` / `team_quota_exceeded` | Key 或团队的 5h/1d/7d 滚动限额、团队总额度用完 |
 | 4xx | 上游 JSON | 上游 4xx 且正文是 JSON 时原样返回。配额、限流、没有渠道仍用网关自己的 `detail` |
 | 502 | `upstream_error` | 上游 5xx、超时，或 4xx 正文不是 JSON |
 
@@ -370,7 +404,7 @@ async def create(body: ..., user: User = require_permission("channel:write")):
 | name | varchar(128) | 显示名 |
 | provider | varchar(32) | 线协议：`openai`（含所有 OpenAI 兼容端点）/ `anthropic` |
 | base_url | varchar(512) | 上游 API 地址 |
-| api_key | varchar(512) | 使用首次启动自动生成的持久密钥加密存储，管理 API 仅返回脱敏值 |
+| api_key | text | 一把或多把上游 Key（换行分隔），整体加密存储，管理 API 返回第一把的脱敏值加 `(+N)`，列表带 `key_count` |
 | models | JSON | 支持的模型列表 |
 | model_mapping | JSON | 别名映射 `{"gpt-4": "gpt-4o"}` |
 | model_pricing | JSON | 渠道级定价覆盖（$/1M tokens） |
@@ -399,6 +433,7 @@ async def create(body: ..., user: User = require_permission("channel:write")):
 | is_enabled | bool | |
 | audit_policy | varchar(16) | `on` 跟随系统的关键词、密钥扫描、AI 审查和请求保存；`off` 全部跳过 |
 | quota_reset_day | smallint | 每月自动重置日（1~31） |
+| window_limits | JSON | 滚动限额 `{"5h": 5, "1d": 20, "7d": 80}`，USD，缺省不限 |
 | team_id | int NULL | 所属团队。请求同时预留并扣减团队预算 |
 | expires_at | datetime | null = 永不过期 |
 
@@ -412,12 +447,13 @@ async def create(body: ..., user: User = require_permission("channel:write")):
 | quota_total / quota_used | decimal(16,6) | USD，-1 = 不限。团队内所有 Key 共用 |
 | quota_reset_day / quota_last_reset_at | | 每月重置，和 Key 共用 `reset_expired_quotas` |
 | is_enabled | bool | 停用后团队内 Key 返回 403 `team_disabled` |
+| window_limits | JSON | 团队滚动限额，格式同 Key |
 
 预留键 `five:quota:team_hold:{team_id}`，和 Key 的预留一起建、一起释放。结算时 Key 和团队的 `quota_used` 都加实际费用。
 
 ### usage_daily（按天汇总）
 
-`(day, api_key_id, model, channel_id)` 唯一，每条日志写入后 upsert 累加请求数、错误数、token 和费用，`team_id` 取最新值。`/api/stats/*` 除延迟和实时吞吐外只读这张表。延迟取窗口内最近 2 万条日志；吞吐峰值来自 Redis 每分钟计数 `five:rpm_minute:*` / `five:peak_rpm:{day}`。迁移 14 用 `request_logs` 回填历史。
+`(day, api_key_id, model, channel_id)` 唯一，每条日志写入后 upsert 累加请求数、错误数、token 和费用，`team_id` 取最新值。`/api/stats/*` 除延迟和实时吞吐外只读这张表。延迟取窗口内最近 2 万条日志；吞吐峰值来自 Redis 每分钟计数 `five:rpm_minute:*` / `five:peak_rpm:{day}`。迁移 14 用 `request_logs` 回填历史。另累加 `cached_tokens`、`cache_write_tokens`、`cache_savings`，供成本洞察使用，迁移 17 回填前两项。
 
 ### model_groups（模型分组）
 
@@ -458,6 +494,9 @@ async def create(body: ..., user: User = require_permission("channel:write")):
 | ai_review | varchar(32) | 事后 AI 审查结论。空表示未审查，`clear` 通过，`flagged:类别` 存疑，`unavailable` 审查失败，`skipped` 队列满了跳过 |
 | security_hit | varchar(128) | 关键词名或密钥模式名，逗号分隔。命中只做标记，不改变状态码，也不写入密钥原文 |
 | audit_request | text | 在 `request_log_audits`，按日志 id 一对一。只存请求，不存回复。日志详情不返回这段，`GET /api/logs/{request_id}/audit` 单独读取 |
+| session_id | varchar(32) 索引 | 会话 ID，见「成本控制」 |
+| cache_savings | decimal(16,6) | 相比全部按输入价计费省下的钱，扣掉缓存写入的溢价，可能为负 |
+| cost_detail | JSON | `cost_breakdown()` 的明细：模型、价格来源 `channel/global/none`、各档单价、token、金额和 `time_rule`。只在日志详情返回 |
 | error_origin | varchar(16) | `gateway` 网关拒绝 / `official` 官网 / `reseller` 渠道商；成功为空 |
 | upstream_status_code | int | 上游 HTTP 状态，网关拒绝时为 0 |
 | upstream_error | text | 上游原始报错摘录 |
@@ -581,7 +620,9 @@ export ANTHROPIC_API_KEY=sk-your-five-api-key
 | POST | `/api/model-prices/sync-defaults` | model_price:write | 导入内置价格 |
 | GET | `/api/model-prices/unpriced` | model_price:read | 未定价模型 |
 | GET/PUT | `/api/security` | security:read / security:write | 关键词标记开关，读取时一并返回密钥扫描、推理审计和 AI 审计。关键词和密钥命中只写日志标记，不中断请求 |
-| GET/PUT | `/api/settings` | setting:read / setting:write | 日志保留天数、粘性会话、`routing_strategy` 和渠道熔断。未保存过时返回环境变量默认值 |
+| GET/PUT | `/api/settings` | setting:read / setting:write | 日志保留天数、粘性会话、`routing_strategy`、渠道熔断、`model_fallbacks`、`auto_cache_control`、`budget_downgrade`、`time_pricing`。未保存过时返回环境变量默认值 |
+| GET/PUT | `/api/settings/alerts` | setting:read / setting:write | 告警 webhook 和事件。URL 脱敏返回 |
+| POST | `/api/settings/alerts/test` | setting:write | 给已保存的 webhook 发测试消息，`{"id": ""}` 表示全部 |
 | PUT | `/api/security/inference-audit` | security:write | 推理审计总开关。只保存开启审计的 Key 的请求正文 |
 | PUT | `/api/security/secret-scan` | security:write | 固定密钥模式扫描 |
 | PUT | `/api/security/ai-audit` | security:write | 打开审计页使用的审查模型。不在每次请求后自动调用 |
@@ -601,6 +642,10 @@ export ANTHROPIC_API_KEY=sk-your-five-api-key
 | GET | `/api/stats/by-channel` | stat:read | 按渠道统计 |
 | GET | `/api/stats/error-rate` | stat:read | 错误率趋势 |
 | GET | `/api/stats/latency` | stat:read | 延迟 P50/P95/P99 |
+| GET | `/api/stats/cache` | stat:read | 缓存命中率、节省金额、趋势和按 model/key/channel 拆分 |
+| GET | `/api/stats/sessions` | stat:read | 会话列表，`sort` 取 `cost`、`recent` 或 `requests` |
+| GET | `/api/stats/sessions/{id}` | stat:read | 会话内的请求 |
+| POST | `/api/reconcile` | stat:read | multipart 上传厂商账单 CSV，字段 `file`、`date_column`、`cost_column`、`model_column`（`-` 表示只按天）、`channel_ids`、`utc_offset`。列名留空自动识别。按天和模型对比成功请求的费用，误差 $0.01 或 5% 内算一致 |
 | GET/POST | `/api/teams` | team:read / team:write | 团队列表/创建 |
 | GET | `/api/teams/all` | key:read | 全量团队（Key 表单下拉用） |
 | GET/PUT/DELETE | `/api/teams/{id}` | team:read / team:write | 团队详情/更新/删除（还有 Key 时 409） |
