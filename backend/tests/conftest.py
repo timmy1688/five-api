@@ -1,5 +1,8 @@
+import os
 from decimal import Decimal
 from unittest.mock import patch
+
+os.environ.setdefault("SECRET_KEY", "test-secret-key-for-pytest-only-0123456789")
 
 import pytest
 from httpx import ASGITransport, AsyncClient

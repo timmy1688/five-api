@@ -1,7 +1,6 @@
 """Secret encryption helpers.
 
-The database stores upstream credentials encrypted with the application's
-persistent secret. Existing plaintext channel keys are encrypted on startup.
+The database stores upstream credentials encrypted with SECRET_KEY. Existing plaintext channel keys are encrypted on startup.
 """
 
 import base64
@@ -33,7 +32,7 @@ def decrypt_secret(value: str) -> str:
         return _fernet().decrypt(value[len(PREFIX):].encode()).decode()
     except InvalidToken as exc:
         raise ValueError(
-            "Unable to decrypt an upstream API key; check data/.secret_key"
+            "Unable to decrypt an upstream API key; SECRET_KEY differs from the one that encrypted it"
         ) from exc
 
 

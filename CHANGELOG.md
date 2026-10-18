@@ -2,6 +2,12 @@
 
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。打 `v*` tag 后，GitHub Actions 会把对应段落发成 Release，并推送镜像到 `ghcr.io/timmy1688/five-api`。
 
+## [0.4.0] - 未发布
+
+### 变更
+
+- 网关容器改为无状态，不再挂载 `./data`，密钥从环境变量 `SECRET_KEY` 读取，没设置或不足 32 位时拒绝启动。升级时先执行 `echo "SECRET_KEY=$(cat data/.secret_key)" > .env`，否则已保存的渠道 Key 无法解密。
+
 ## [0.3.0] - 2026-10-18
 
 ### 新增

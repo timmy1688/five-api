@@ -1,3 +1,4 @@
+# 首次部署：echo "SECRET_KEY=$(openssl rand -hex 32)" > .env
 # 启动：docker compose up -d
 # 打开 http://localhost ，账号 admin / admin123，首次登录会要求改密码
 # 改端口或密码时，直接改下面的值。
@@ -10,9 +11,9 @@ services:
     restart: always
     ports:
       - "80:8000"
-    volumes:
-      - ./data:/data
     environment:
+      # 加密渠道 Key、签发登录凭证。部署后不能改，改了已存的渠道 Key 都解不开；.env 要和 ./data 一起备份
+      SECRET_KEY: ${SECRET_KEY:?先执行 echo "SECRET_KEY=$(openssl rand -hex 32)" > .env，旧版本升级用 data/.secret_key 的内容}
       MYSQL_HOST: mysql
       MYSQL_USER: five
       MYSQL_PASSWORD: five_password

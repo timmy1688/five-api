@@ -1,33 +1,13 @@
-import os
-import secrets
-from pathlib import Path
 from typing import ClassVar
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings
 
 
-_SECRET_FILE = Path(__file__).resolve().parents[2] / "data" / ".secret_key"
-
-
-def _persistent_secret(configured: str) -> str:
-    """Load one stable application secret, creating it on first startup."""
-    if _SECRET_FILE.is_file():
-        return _SECRET_FILE.read_text(encoding="utf-8").strip()
-
-    value = configured or secrets.token_urlsafe(48)
-    _SECRET_FILE.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        fd = os.open(_SECRET_FILE, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    except FileExistsError:
-        return _SECRET_FILE.read_text(encoding="utf-8").strip()
-    with os.fdopen(fd, "w", encoding="utf-8") as secret_file:
-        secret_file.write(value)
-    return value
-
-
 class Settings(BaseSettings):
-    # Kept only to migrate existing deployments; new installs need no setting.
-    SECRET_KEY: str = ""
+    # Encrypts channel keys and signs admin tokens. Changing it makes stored
+    # channel keys undecryptable, so every replica must share one value.
+    SECRET_KEY: str
     JWT_ALGORITHM: ClassVar[str] = "HS256"
     JWT_EXPIRE_MINUTES: ClassVar[int] = 1440
 
@@ -51,6 +31,17 @@ class Settings(BaseSettings):
 
     METRICS_TOKEN: str = ""
 
+    @field_validator("SECRET_KEY")
+    @classmethod
+    def _long_secret(cls, value: str) -> str:
+        value = value.strip()
+        if len(value) < 32:
+            raise ValueError(
+                "SECRET_KEY must be at least 32 characters; generate one with "
+                "`openssl rand -hex 32`. Upgrading? Use the contents of data/.secret_key."
+            )
+        return value
+
     @property
     def database_url(self) -> str:
         return (
@@ -66,7 +57,6 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
-settings.SECRET_KEY = _persistent_secret(settings.SECRET_KEY)
 
 TORTOISE_ORM = {
     "connections": {
