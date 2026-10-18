@@ -35,7 +35,7 @@ def find_channel_pricing(
 
 
 def catalog_prices(model: str) -> dict[str, float]:
-    """Input, output, cache-read, and cache-write prices per 1M tokens.
+    """Input, output, cache-read, and cache-write prices per 1M tokens, plus a per-request price.
 
     Anthropic bills a 5-minute cache write at 1.25 times the input price.
     Other vendors bill that write as ordinary input. An explicit catalog
@@ -54,6 +54,7 @@ def catalog_prices(model: str) -> dict[str, float]:
         "completion": float(raw["completion"]),
         "cached": float(raw.get("cached", 0)),
         "cache_write": write,
+        "request": float(raw.get("request", 0)),
     }
 
 
@@ -345,7 +346,7 @@ async def cost_breakdown(
     }
 
 
-MODEL_PRICE_CATALOG_VERSION = "2026-10-18"
+MODEL_PRICE_CATALOG_VERSION = "2026-10-18.2"
 
 # Standard USD prices per 1M tokens. For providers with regional or context-tiered
 # pricing, this catalog uses the standard short-context price; channel pricing can
@@ -356,6 +357,9 @@ DEFAULT_MODEL_PRICES: dict[str, dict[str, float]] = {
     "gpt-5.6-sol": {"prompt": 5.0, "completion": 30.0, "cached": 0.5},
     "gpt-5.6-terra": {"prompt": 2.5, "completion": 15.0, "cached": 0.25},
     "gpt-5.6-luna": {"prompt": 1.0, "completion": 6.0, "cached": 0.1},
+    # Video is billed per second of output; the request price is per second.
+    "sora-2": {"prompt": 0.0, "completion": 0.0, "request": 0.10},
+    "sora-2-pro": {"prompt": 0.0, "completion": 0.0, "request": 0.30},
     "gpt-5.5": {"prompt": 5.0, "completion": 30.0, "cached": 0.5},
     "gpt-5.5-2026-04-23": {"prompt": 5.0, "completion": 30.0, "cached": 0.5},
     "gpt-5.5-pro": {"prompt": 30.0, "completion": 180.0, "cached": 3.0},

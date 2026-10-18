@@ -104,7 +104,8 @@ cd frontend && npm install && npx vite --port 5001
 │   │   │   ├── auto_cache.py        #   自动加 Anthropic cache_control
 │   │   │   ├── time_pricing.py      #   分时定价倍率
 │   │   │   ├── reconcile.py         #   账单 CSV 解析与比对
-│   │   │   └── alerts.py            #   飞书/钉钉/企业微信/JSON 告警
+│   │   │   ├── alerts.py            #   飞书/钉钉/企业微信/JSON 告警
+│   │   │   └── video_jobs.py        #   视频任务 → 渠道、上游 Key 指纹、所属 Key
 │   │   ├── middleware/
 │   │   │   └── request_id.py        #   注入 X-Request-ID
 │   │   ├── routers/                 # API 路由（前缀 /api/*）
@@ -314,6 +315,8 @@ async def create(body: ..., user: User = require_permission("channel:write")):
 
 4xx 错误不触发故障转移。流式请求只在尚未发送数据时才可切换。
 
+上游 HTTP 200 但 JSON 正文只有 `error`（可带 `type`、`request_id`）时，`raise_for_error_body()` 按报错处理：`error.type` 是 `invalid_request_error` / `authentication_error` / `permission_error` / `not_found_error` / `rate_limit_error` 时映射为 400/401/403/404/429，其余记 502 并可切换。正文原样返回客户端，日志 `upstream_status_code` 记 200。流式请求收到 JSON 而非事件流时同样处理。
+
 ### 号池与模型回退
 
 - **号池**（`services/key_pool.py`）：渠道 `api_key` 存多把 Key，换行或逗号分隔。`BaseProvider.select_key()` 跳过冷却中的 Key，有会话时按会话哈希固定，否则 Redis 轮询 `five:keyrr:{channel_id}`。429 按 `retry-after(-ms)` 冷却（上限 3600 秒，缺省 30），401/403 冷却 600 秒，键为 `five:keycool:{channel_id}:{key 指纹}`。`rotate_key()` 换到下一把可用 Key 后在同一渠道重试，所有 Key 都冷却才算渠道失败。渠道测试和健康探测只用第一把。
@@ -346,6 +349,8 @@ async def create(body: ..., user: User = require_permission("channel:write")):
 | 401 | `invalid_api_key` / `key_disabled` / `key_expired` | Key 认证失败 |
 | 403 | `model_not_allowed` / `Permission denied` | Key 无权访问模型 / 管理员无权限 |
 | 404 | `model_not_found` | 无启用渠道支持该模型 |
+| 404 | `video_not_found` | 视频 ID 不存在、已过期（7 天）或属于其他 Key |
+| 503 | `channel_unavailable` | 创建该视频的渠道已删除、停用或熔断 |
 | 429 | `quota_exceeded` / `rpm_limit` / `tpm_limit` / `concurrent_limit` | 配额/每分钟请求/每分钟 token/并发超限 |
 | 429 | `window_limit` / `team_window_limit` / `team_quota_exceeded` | Key 或团队的 5h/1d/7d 滚动限额、团队总额度用完 |
 | 4xx | 上游 JSON | 上游 4xx 且正文是 JSON 时原样返回。配额、限流、没有渠道仍用网关自己的 `detail` |
@@ -535,6 +540,10 @@ cache_write_tokens = cache_creation_input_tokens
 | POST | `/v1/audio/speech` | Bearer | 返回二进制音频。输入字符数记为 prompt_tokens，另加 1 次按次价 |
 | POST | `/v1/audio/transcriptions`、`/v1/audio/translations` | Bearer | multipart 透传，1 次按次价，上游给 usage 时另计 token |
 | POST | `/v1/rerank` | Bearer | token 取 `usage.prompt_tokens/total_tokens`，按次数取 `meta.billed_units.search_units`，默认 1 |
+| POST | `/v1/videos` | Bearer | 视频创建，JSON 或 multipart（`input_reference`）。提交成功即按 `seconds`（默认 4）× 按次价计费。Redis `five:video:{id}` 记渠道、上游 Key 指纹和所属 Key，TTL 7 天 |
+| GET | `/v1/videos/{id}`、`/v1/videos/{id}/content` | Bearer | 查询状态、下载（透传 `variant` 等查询参数）。走创建时的渠道和上游 Key，不计费、不写日志 |
+| DELETE | `/v1/videos/{id}` | Bearer | 删除上游视频并清掉映射 |
+| POST | `/v1/videos/{id}/remix` | Bearer | 只在原渠道、原上游 Key 上执行，按原视频秒数计费 |
 | GET | `/v1/models` | Bearer | 当前 Key 可用模型 |
 | GET | `/v1/me` | Bearer | Key 配额/模型/定价信息 |
 | POST | `/v1/messages` | x-api-key 或 Bearer | Anthropic Messages（支持 stream） |

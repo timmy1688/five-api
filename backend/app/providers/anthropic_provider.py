@@ -1,6 +1,6 @@
 from collections.abc import AsyncIterator
 
-from app.providers.base import BaseProvider, forwardable_headers, read_error_body
+from app.providers.base import BaseProvider, forwardable_headers, raise_for_error_body, read_error_body
 
 
 class AnthropicProvider(BaseProvider):
@@ -38,7 +38,7 @@ class AnthropicProvider(BaseProvider):
         body.pop("stream", None)
         headers = self._anthropic_headers(extra_headers)
         resp = await self.client.post(self._path("messages"), json=body, headers=headers)
-        resp.raise_for_status()
+        raise_for_error_body(resp)
         self.response_headers = forwardable_headers(resp)
         return resp.json()
 
@@ -52,7 +52,7 @@ class AnthropicProvider(BaseProvider):
         resp = await self.client.post(
             self._path("messages/count_tokens"), json=body, headers=headers,
         )
-        resp.raise_for_status()
+        raise_for_error_body(resp)
         self.response_headers = forwardable_headers(resp)
         return resp.json()
 

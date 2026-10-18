@@ -2,7 +2,7 @@ from collections.abc import AsyncIterator
 
 import httpx
 
-from app.providers.base import BaseProvider, forwardable_headers, read_error_body
+from app.providers.base import BaseProvider, forwardable_headers, raise_for_error_body, read_error_body
 
 STREAM_USAGE_ENDPOINTS = {"/v1/chat/completions", "/v1/completions"}
 
@@ -57,30 +57,34 @@ class OpenAIProvider(BaseProvider):
         self,
         endpoint: str,
         *,
+        method: str = "POST",
         json_body: dict | None = None,
         form: dict[str, str] | None = None,
         files: list[tuple[str, tuple[str, bytes, str]]] | None = None,
+        params: dict[str, str] | None = None,
     ) -> httpx.Response:
-        """POST without JSON decoding: binary audio, multipart uploads."""
-        if json_body is not None:
-            json_body = {**json_body, "model": self.apply_model_mapping(json_body.get("model", ""))}
+        """Request without JSON decoding: binary audio and video, multipart uploads."""
+        if json_body is not None and "model" in json_body:
+            json_body = {**json_body, "model": self.apply_model_mapping(json_body["model"])}
         if form is not None and "model" in form:
             form = {**form, "model": self.apply_model_mapping(form["model"])}
-        resp = await self.client.post(
+        resp = await self.client.request(
+            method,
             self._path(endpoint),
             json=json_body,
             data=form,
             files=files,
+            params=params,
             headers=self._auth_headers(),
         )
-        resp.raise_for_status()
+        raise_for_error_body(resp)
         self.response_headers = forwardable_headers(resp)
         return resp
 
     async def send_request(self, body: dict, endpoint: str) -> dict:
         url_path, headers, payload = self.prepare_request(body, endpoint)
         resp = await self.client.post(url_path, json=payload, headers=headers)
-        resp.raise_for_status()
+        raise_for_error_body(resp)
         self.response_headers = forwardable_headers(resp)
         return resp.json()
 

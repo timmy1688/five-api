@@ -823,3 +823,68 @@ async def test_stream_cleanup_survives_client_disconnect(client):
     log = await RequestLog.get(request_id="req-disconnect")
     assert log.completion_tokens > 0
     assert log.cost > 0
+
+
+def _relay_http(response: httpx.Response) -> AsyncMock:
+    http = AsyncMock()
+    http.is_closed = False
+    http.post = AsyncMock(return_value=response)
+    return http
+
+
+async def test_error_body_in_200_keeps_client_error_status(client):
+    await _setup_proxy_env()
+    error = {"error": {"message": "Invalid value: 'image_url'", "type": "invalid_request_error"}}
+    http = _relay_http(_http_response(200, error))
+    with patch("app.providers.base._shared_http_client", return_value=http):
+        resp = await client.post(
+            "/v1/chat/completions",
+            json={"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}]},
+            headers=auth_header("sk-proxytest123456"),
+        )
+    assert resp.status_code == 400
+    assert resp.json() == error
+    log = await RequestLog.get(request_id=resp.headers["x-request-id"])
+    assert log.status_code == 400
+    assert log.upstream_status_code == 200
+
+
+async def test_error_body_in_200_fails_over(client):
+    ch, _, _ = await _setup_proxy_env()
+    ch.priority = 10
+    await ch.save()
+    backup = await Channel.create(
+        name="backup", provider="openai", base_url="https://backup.test",
+        api_key="sk-b", models=["gpt-4o"], is_enabled=True, timeout=60,
+    )
+    relay = _relay_http(_http_response(200, {"error": {"message": "No available channel", "type": "new_api_error"}}))
+    good = _relay_http(_http_response(200, MOCK_COMPLETION_RESPONSE))
+    with patch("app.providers.base._shared_http_client", side_effect=lambda c: good if c.id == backup.id else relay):
+        resp = await client.post(
+            "/v1/chat/completions",
+            json={"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}]},
+            headers=auth_header("sk-proxytest123456"),
+        )
+    assert resp.status_code == 200
+    log = await RequestLog.get(request_id=resp.headers["x-request-id"])
+    assert log.failed_over is True
+    assert log.channel_id == backup.id
+
+
+async def test_stream_answered_with_json_error_is_an_error(client):
+    await _setup_proxy_env()
+    error = {"error": {"message": "bad key", "type": "authentication_error"}}
+    stream = _http_response(200, error)
+    http = AsyncMock()
+    http.is_closed = False
+    http.build_request = lambda *args, **kwargs: None
+    http.send = AsyncMock(return_value=stream)
+    with patch("app.providers.base._shared_http_client", return_value=http):
+        resp = await client.post(
+            "/v1/chat/completions",
+            json={"model": "gpt-4o", "stream": True, "messages": [{"role": "user", "content": "hi"}]},
+            headers=auth_header("sk-proxytest123456"),
+        )
+    assert "bad key" in resp.text
+    log = await RequestLog.get(request_id=resp.headers["x-request-id"])
+    assert log.status_code == 401

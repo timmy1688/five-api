@@ -5,6 +5,8 @@ from urllib.parse import urlparse
 
 import httpx
 
+from app.providers.base import ERROR_IN_OK
+
 # 这些主机是厂商自己的 API。其余地址按渠道商中转处理。
 OFFICIAL_HOSTS = {
     "api.openai.com",
@@ -65,7 +67,7 @@ def describe_upstream_failure(exc: Exception, base_url: str) -> dict:
     upstream_error = ""
     summary = str(exc)
     if isinstance(exc, httpx.HTTPStatusError):
-        upstream_status = exc.response.status_code
+        upstream_status = 200 if exc.response.extensions.get(ERROR_IN_OK) else exc.response.status_code
         upstream_error = _response_text(exc.response)
         summary = _message_from_body(upstream_error, summary)
     elif isinstance(exc, httpx.TimeoutException):
@@ -87,14 +89,15 @@ def describe_upstream_failure(exc: Exception, base_url: str) -> dict:
 def upstream_json_error(exc: Exception) -> tuple[int, dict] | None:
     """4xx JSON from the upstream, returned to the client without rewriting.
 
-    5xx and non-JSON bodies stay on the gateway's own error shape. A body
+    An error body sent with HTTP 200 is returned too, whatever status it maps
+    to. Other 5xx and non-JSON bodies stay on the gateway's own error shape. A body
     larger than the log clip is not forwarded, so a huge page cannot become
     the client response.
     """
     if not isinstance(exc, httpx.HTTPStatusError):
         return None
     status = exc.response.status_code
-    if status < 400 or status >= 500:
+    if status < 400 or (status >= 500 and not exc.response.extensions.get(ERROR_IN_OK)):
         return None
     text = _response_text(exc.response)
     if not text or len(text) > MAX_ERROR_CHARS:

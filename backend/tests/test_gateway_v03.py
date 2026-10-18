@@ -31,6 +31,7 @@ def _http(response: httpx.Response | None = None, stream: httpx.Response | None 
     http.build_request = lambda *args, **kwargs: None
     if response is not None:
         http.post = AsyncMock(return_value=response)
+        http.request = http.post
     if stream is not None:
         http.send = AsyncMock(return_value=stream)
     return http

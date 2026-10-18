@@ -48,18 +48,55 @@ def forwardable_headers(resp: httpx.Response) -> dict[str, str]:
     return out
 
 
+# Relays such as New API answer some failures with HTTP 200 and an error body.
+# Client mistakes keep a 4xx so they neither fail over nor trip the breaker.
+_ERROR_TYPE_STATUS = {
+    "invalid_request_error": 400,
+    "authentication_error": 401,
+    "permission_error": 403,
+    "not_found_error": 404,
+    "rate_limit_error": 429,
+}
+_ERROR_ONLY_KEYS = {"error", "type", "request_id"}
+ERROR_IN_OK = "five_error_in_ok"
+
+
+def raise_for_error_body(resp: httpx.Response) -> None:
+    """raise_for_status, plus a 2xx whose JSON body is only an error object."""
+    resp.raise_for_status()
+    headers = getattr(resp, "headers", None)
+    if not isinstance(headers, (httpx.Headers, dict)) or "json" not in headers.get("content-type", ""):
+        return
+    try:
+        data = resp.json()
+    except ValueError:
+        return
+    if not isinstance(data, dict) or not isinstance(data.get("error"), dict) or set(data) - _ERROR_ONLY_KEYS:
+        return
+    status = _ERROR_TYPE_STATUS.get(str(data["error"].get("type") or ""), 502)
+    failed = httpx.Response(
+        status, content=resp.content, headers=resp.headers, request=resp.request,
+        extensions={ERROR_IN_OK: True},
+    )
+    raise httpx.HTTPStatusError(f"Upstream error in HTTP {resp.status_code} body", request=resp.request, response=failed)
+
+
 async def read_error_body(resp: httpx.Response) -> None:
-    """Load an error body before raising, so the client can receive the upstream JSON."""
-    if resp.status_code < 400:
+    """Load an error body before raising, so the client can receive the upstream JSON.
+
+    A stream answered with JSON instead of events is read the same way.
+    """
+    if resp.status_code < 400 and "json" not in resp.headers.get("content-type", ""):
         return
     try:
         await resp.aread()
     except Exception:
         pass
     try:
-        resp.raise_for_status()
-    finally:
+        raise_for_error_body(resp)
+    except Exception:
         await resp.aclose()
+        raise
 
 
 async def close_http_clients() -> None:

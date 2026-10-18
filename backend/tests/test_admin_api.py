@@ -412,7 +412,7 @@ async def test_model_price_sync_updates_only_builtin_prices(client):
     )
     data = resp.json()
     assert resp.status_code == 200
-    assert data["catalog_version"] == "2026-10-18"
+    assert data["catalog_version"] == "2026-10-18.2"
     assert data["updated"] == 1
     assert data["total"] >= 70
 

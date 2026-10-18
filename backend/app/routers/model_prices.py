@@ -83,6 +83,7 @@ async def sync_defaults(
                 completion_price=prices["completion"],
                 cached_price=prices["cached"],
                 cache_write_price=prices["cache_write"],
+                request_price=prices["request"],
             )
             created += 1
             continue
@@ -92,12 +93,14 @@ async def sync_defaults(
             Decimal(str(prices["completion"])),
             Decimal(str(prices["cached"])),
             Decimal(str(prices["cache_write"])),
+            Decimal(str(prices["request"])),
         )
         current = (
             existing.prompt_price,
             existing.completion_price,
             existing.cached_price,
             existing.cache_write_price,
+            existing.request_price,
         )
         if overwrite and current != values:
             await ModelPrice.filter(id=existing.id).update(
@@ -105,6 +108,7 @@ async def sync_defaults(
                 completion_price=values[1],
                 cached_price=values[2],
                 cache_write_price=values[3],
+                request_price=values[4],
             )
             updated += 1
         else:

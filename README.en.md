@@ -145,6 +145,7 @@ Fields the client left out stay out, so the upstream applies its own defaults. U
 | `/v1/audio/speech` | openai | input characters at the input price (enter the per-million-character price), plus the per-request price |
 | `/v1/audio/transcriptions` `/v1/audio/translations` | openai | per-request price, plus tokens when the upstream reports them |
 | `/v1/rerank` | openai | tokens the upstream reports, plus the per-request price |
+| `/v1/videos` with `/{id}`, `/{id}/content`, `/{id}/remix` | openai | seconds × per-request price (enter the per-second price) on submit; polling and download are free |
 
 Enter per-request prices on Model Pricing, or in column Q of a channel's pricing.
 

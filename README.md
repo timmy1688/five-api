@@ -145,6 +145,7 @@ docker compose down
 | `/v1/audio/speech` | openai | 输入字符数按输入价计（填每百万字符价），另加按次价 |
 | `/v1/audio/transcriptions` `/v1/audio/translations` | openai | 按次价，上游返回 token 时另计 token |
 | `/v1/rerank` | openai | 上游返回的 token，另加按次价 |
+| `/v1/videos` 及 `/{id}`、`/{id}/content`、`/{id}/remix` | openai | 提交时按秒数 × 按次价（填每秒价），查询和下载不计费 |
 
 按次价在「模型定价」或渠道定价的 Q 列填写。
 
