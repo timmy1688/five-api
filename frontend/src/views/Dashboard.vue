@@ -232,7 +232,7 @@ const channelChartOption = computed(() => {
     series: [{
       type: 'pie', radius: ['40%', '70%'],
       label: { fontSize: 12 },
-      data: channels.value.map((c: any, i: number) => ({
+      data: channels.value.filter((c: any) => c.cost > 0).map((c: any, i: number) => ({
         name: c.channel_name, value: c.cost,
         itemStyle: { color: palette[i % palette.length] },
       })),

@@ -72,19 +72,21 @@ export ANTHROPIC_API_KEY=sk-your-gateway-key
 
 ## 界面
 
-![概览](docs/images/zh/dashboard.png)
+![概览](docs/images/dashboard.png)
 
-![渠道](docs/images/zh/channels.png)
+![成本洞察](docs/images/insights.png)
 
-![API Key](docs/images/zh/api-keys.png)
+![渠道](docs/images/channels.png)
 
-![请求日志](docs/images/zh/logs.png)
+![API Key](docs/images/api-keys.png)
 
-![审计](docs/images/zh/audit.png)
+![请求日志](docs/images/logs.png)
 
-![安全](docs/images/zh/security.png)
+![审计](docs/images/audit.png)
 
-![模型定价](docs/images/zh/model-prices.png)
+![安全](docs/images/security.png)
+
+![模型定价](docs/images/model-prices.png)
 
 ## 生产部署
 
