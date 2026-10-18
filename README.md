@@ -63,6 +63,8 @@ docker compose up -d
 
 ```bash
 docker compose up -d --build   # 改了源码后重新构建
+# 国内服务器用镜像源构建，pip 和 npm 都走国内
+PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/ NPM_REGISTRY=https://registry.npmmirror.com docker compose up -d --build
 docker compose logs -f gateway
 docker compose down
 ```

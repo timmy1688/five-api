@@ -26,6 +26,7 @@
 - Anthropic 渠道的 Base URL 可以以 `/v1` 结尾。
 - DeepSeek 内置价格更新为官方高峰价，新增 `deepseek-flash`。
 - 容器启动时先等 MySQL 和 Redis 就绪再执行迁移，不再依赖自动重启。
+- 构建参数 `PIP_INDEX_URL`、`NPM_REGISTRY` 可以换成国内镜像源，默认仍是官方源。
 
 ### 升级
 

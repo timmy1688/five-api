@@ -63,6 +63,8 @@ To change the published port or a password, edit the values in `docker-compose.y
 
 ```bash
 docker compose up -d --build   # rebuild after changing the source
+# Build from package mirrors, for example inside mainland China
+PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/ NPM_REGISTRY=https://registry.npmmirror.com docker compose up -d --build
 docker compose logs -f gateway
 docker compose down
 ```

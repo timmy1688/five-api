@@ -6,7 +6,12 @@ services:
   gateway:
     # 有发布镜像时直接拉取；拉不到就用本地源码构建
     image: ghcr.io/timmy1688/five-api:latest
-    build: .
+    build:
+      context: .
+      # 国内构建：PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/ NPM_REGISTRY=https://registry.npmmirror.com docker compose up -d --build
+      args:
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
+        NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmjs.org}
     restart: always
     ports:
       - "80:8000"
