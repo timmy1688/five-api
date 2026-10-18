@@ -5,9 +5,8 @@ from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
-    # Encrypts channel keys and signs admin tokens. Changing it makes stored
-    # channel keys undecryptable, so every replica must share one value.
-    SECRET_KEY: str
+    # Only seeds the secret stored in the database (load_secret_key); normally unset.
+    SECRET_KEY: str = ""
     JWT_ALGORITHM: ClassVar[str] = "HS256"
     JWT_EXPIRE_MINUTES: ClassVar[int] = 1440
 
@@ -35,11 +34,8 @@ class Settings(BaseSettings):
     @classmethod
     def _long_secret(cls, value: str) -> str:
         value = value.strip()
-        if len(value) < 32:
-            raise ValueError(
-                "SECRET_KEY must be at least 32 characters; generate one with "
-                "`openssl rand -hex 32`. Upgrading? Use the contents of data/.secret_key."
-            )
+        if value and len(value) < 32:
+            raise ValueError("SECRET_KEY must be at least 32 characters")
         return value
 
     @property

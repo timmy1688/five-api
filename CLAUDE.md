@@ -17,7 +17,7 @@ docker compose build gateway && docker compose up -d --no-build   # 重建生产
 
 - 本机设了 `http_proxy` 时，访问本地服务要带 `--noproxy '*'` 或设 `NO_PROXY`。
 - 默认管理员 `admin` / `admin123`，首次登录必须改密码；用默认密码拿到的 token 访问受权限保护的接口一律 403 `Password change required`。
-- `SECRET_KEY`（至少 32 位）必填，加密渠道 Key 并签发 JWT，没设置拒绝启动。网关容器无挂载；Compose 从根目录 `.env` 取，`service.sh start` 缺失时自动生成。测试在 `conftest.py` 里设了固定值。
+- 渠道 Key 加密和 JWT 签名的密钥存在 `system_settings` 的 `app_secret`，首次启动由 `load_secret_key()` 生成，网关容器无挂载。环境变量 `SECRET_KEY` 只用来导入旧的 `data/.secret_key`（`python -m app.import_secret`），Compose 不传；与库里不同、或库里有密文却没有密钥时拒绝启动。测试在 `conftest.py` 里设了固定值。
 
 ## 目录与分层
 

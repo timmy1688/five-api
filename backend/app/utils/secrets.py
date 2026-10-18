@@ -5,12 +5,50 @@ The database stores upstream credentials encrypted with SECRET_KEY. Existing pla
 
 import base64
 import hashlib
+import secrets
 
 from cryptography.fernet import Fernet, InvalidToken
+from tortoise.exceptions import IntegrityError
 
 from app.config import settings
 
 PREFIX = "fernet:"
+SECRET_SETTING_KEY = "app_secret"
+
+
+async def load_secret_key() -> None:
+    """Use the secret stored in the database, creating it on first startup.
+
+    A SECRET_KEY setting is imported once, so upgrades from data/.secret_key
+    keep their encrypted channel keys. Must run before anything encrypts,
+    decrypts or signs.
+    """
+    from app.models import Channel, SystemSetting
+
+    row = await SystemSetting.get_or_none(key=SECRET_SETTING_KEY)
+    if row is not None:
+        stored = row.value["secret"]
+        if settings.SECRET_KEY and settings.SECRET_KEY != stored:
+            raise RuntimeError(
+                "SECRET_KEY differs from the secret stored in the database; remove the setting"
+            )
+        settings.SECRET_KEY = stored
+        return
+
+    value = settings.SECRET_KEY
+    if not value:
+        if await Channel.filter(api_key__startswith=PREFIX).exists():
+            raise RuntimeError(
+                "Channel keys are encrypted but no secret is stored; import data/.secret_key with "
+                '`docker compose run --rm -e SECRET_KEY="$(cat data/.secret_key)" gateway python -m app.import_secret`'
+            )
+        value = secrets.token_urlsafe(48)
+    try:
+        await SystemSetting.create(key=SECRET_SETTING_KEY, value={"secret": value})
+    except IntegrityError:
+        row = await SystemSetting.get(key=SECRET_SETTING_KEY)
+        value = row.value["secret"]
+    settings.SECRET_KEY = value
 
 
 def _fernet() -> Fernet:
@@ -32,7 +70,7 @@ def decrypt_secret(value: str) -> str:
         return _fernet().decrypt(value[len(PREFIX):].encode()).decode()
     except InvalidToken as exc:
         raise ValueError(
-            "Unable to decrypt an upstream API key; SECRET_KEY differs from the one that encrypted it"
+            "Unable to decrypt an upstream API key; the stored secret differs from the one that encrypted it"
         ) from exc
 
 

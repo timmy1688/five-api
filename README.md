@@ -56,7 +56,7 @@ export ANTHROPIC_API_KEY=sk-your-gateway-key
 
 ### 运维省心
 
-- 网关无状态，只需一个 `SECRET_KEY`；迁移自动执行，数据库和 Redis 数据在 `./data`。
+- 不需要 `.env`，网关无状态，迁移自动执行，数据都在 `./data`。
 - `/healthz` 报告 MySQL 和 Redis 状态，`/metrics` 提供 Prometheus 指标。
 - 预算到阈值、渠道熔断和恢复、5xx 占比过高，推送到飞书、钉钉、企业微信或任意 JSON Webhook。
 - 「接入指南」页填入 Key，直接复制 Claude Code、Codex、Cursor 和 SDK 的配置。
@@ -93,15 +93,19 @@ export ANTHROPIC_API_KEY=sk-your-gateway-key
 安装 Docker 后，在项目目录执行：
 
 ```bash
-echo "SECRET_KEY=$(openssl rand -hex 32)" > .env
 docker compose up -d
 ```
 
-`SECRET_KEY` 加密渠道 Key、签发登录凭证，部署后不能再改，改了已保存的渠道 Key 都解不开。备份时 `.env` 和 `./data` 一起备份；网关多副本或上 K8s 时，所有副本用同一个值。网关本身不挂载任何目录。
+不需要复制 `.env`。有发布镜像时直接拉取 `ghcr.io/timmy1688/five-api`，拉不到就用本地源码构建。管理后台和 API 在同一个端口，默认是宿主机的 80，浏览器打开 `http://服务器地址`。首次登录 `admin` / `admin123`，系统会先要求改密码，改完才能进后台。数据库和 Redis 数据在 `./data`，`docker compose down` 不会删掉这个目录。
 
-有发布镜像时直接拉取 `ghcr.io/timmy1688/five-api`，拉不到就用本地源码构建。管理后台和 API 在同一个端口，默认是宿主机的 80，浏览器打开 `http://服务器地址`。首次登录 `admin` / `admin123`，系统会先要求改密码，改完才能进后台。数据库和 Redis 数据在 `./data`，`docker compose down` 不会删掉这个目录。
+加密渠道 Key 和签发登录凭证用的密钥首次启动时自动生成，存在数据库里，网关不挂载任何目录，可以多副本运行。数据库备份要妥善保管，拿到它就能解出渠道 Key。
 
-从 0.3.0 及更早版本升级：执行 `echo "SECRET_KEY=$(cat data/.secret_key)" > .env`，再 `docker compose up -d`。
+从 0.3.0 及更早版本升级，先把旧密钥导入数据库，再正常启动：
+
+```bash
+docker compose run --rm -e SECRET_KEY="$(cat data/.secret_key)" gateway python -m app.import_secret
+docker compose up -d
+```
 
 MySQL 和 Redis 的端口只绑在 `127.0.0.1`，其他机器连不上，网关走容器内网。网关只信任本机发来的 `X-Forwarded-For`。
 
@@ -119,7 +123,7 @@ docker compose down
 
 ## 开发
 
-本机需要 Python 3.11+、Node.js 20+ 和 Docker。数据库仍由 Compose 启动，账号用上面的默认值。`./service.sh start` 发现根目录 `.env` 没有 `SECRET_KEY` 时会自动生成。
+本机需要 Python 3.11+、Node.js 20+ 和 Docker。数据库仍由 Compose 启动，账号用上面的默认值，也不需要 `.env`。
 
 ```bash
 ./service.sh install
@@ -133,7 +137,7 @@ docker compose down
 ./service.sh logs
 ```
 
-数据库账号和 `docker-compose.yml` 里写的是同一套。要改密码，两边写成一样：Compose 改那个文件，本机后端写进根目录 `.env`。
+数据库账号和 `docker-compose.yml` 里写的是同一套。要改密码，两边写成一样：Compose 改那个文件，本机后端再放一份 `.env`。
 
 ## 接入
 

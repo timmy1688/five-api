@@ -55,7 +55,8 @@ async def lifespan(app: FastAPI):
         generate_schemas=False,
         add_exception_handlers=True,
     ):
-        from app.utils.secrets import encrypt_plaintext_channel_keys
+        from app.utils.secrets import encrypt_plaintext_channel_keys, load_secret_key
+        await load_secret_key()
         await encrypt_plaintext_channel_keys()
         await init_roles()
         await init_admin()

@@ -6,7 +6,7 @@
 
 ### 变更
 
-- 网关容器改为无状态，不再挂载 `./data`，密钥从环境变量 `SECRET_KEY` 读取，没设置或不足 32 位时拒绝启动。升级时先执行 `echo "SECRET_KEY=$(cat data/.secret_key)" > .env`，否则已保存的渠道 Key 无法解密。
+- 网关容器改为无状态，不再挂载 `./data`。加密渠道 Key 和签发登录凭证的密钥首次启动时生成并存进数据库，不用任何配置，可以多副本运行。升级时先执行 `docker compose run --rm -e SECRET_KEY="$(cat data/.secret_key)" gateway python -m app.import_secret` 导入旧密钥；没导入时网关拒绝启动，不会弄坏已保存的渠道 Key。
 
 ## [0.3.0] - 2026-10-18
 

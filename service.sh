@@ -35,22 +35,6 @@ install_deps() {
     echo "==> Dependencies installed."
 }
 
-ensure_secret_key() {
-    if [ -f .env ] && grep -q '^SECRET_KEY=.\+' .env; then
-        return
-    fi
-    local key
-    if [ -s data/.secret_key ]; then
-        key="$(cat data/.secret_key)"
-    else
-        key="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
-    fi
-    [ -f .env ] && sed -i '/^SECRET_KEY=\s*$/d' .env
-    echo "SECRET_KEY=${key}" >> .env
-    chmod 600 .env
-    echo "==> SECRET_KEY written to .env"
-}
-
 check_deps() {
     if [ ! -x .venv/bin/uvicorn ] || [ ! -x frontend/node_modules/.bin/vite ]; then
         echo "ERROR: 项目依赖尚未安装，请先运行：./service.sh install" >&2
@@ -60,7 +44,6 @@ check_deps() {
 
 start() {
     check_deps
-    ensure_secret_key
     mkdir -p data/mysql data/redis "$PID_DIR" "$LOG_DIR"
 
     # 1. MySQL + Redis
