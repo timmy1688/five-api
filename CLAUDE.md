@@ -787,7 +787,7 @@ resp = client.chat.completions.create(model="gpt-4o", messages=[{"role": "user",
 管理后台和 `/v1` 由同一个 Uvicorn 进程提供，不再单独跑 Nginx。SSE 不经过应用内缓冲。
 IP 白名单读取 `request.client`；部署反向代理时只能通过 Uvicorn
 `--forwarded-allow-ips` 信任明确的代理网段，不能在应用层直接相信任意
-`X-Forwarded-For`。Docker 镜像只信任 `127.0.0.1`。
+`X-Forwarded-For`。镜像沿用 Uvicorn 默认：只信任 `127.0.0.1`，需要时设环境变量 `FORWARDED_ALLOW_IPS`。
 
 ---
 
