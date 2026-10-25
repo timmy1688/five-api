@@ -6,7 +6,9 @@ class User(Model):
     id = fields.IntField(pk=True)
     username = fields.CharField(max_length=64, unique=True)
     hashed_password = fields.CharField(max_length=255)
-    role = fields.ForeignKeyField("models.Role", related_name="users")
+    role = fields.CharField(max_length=24, default="tenant", source_field="role_code")
+    tenant = fields.OneToOneField("models.Tenant", related_name="account", null=True)
+    must_change_password = fields.BooleanField(default=False)
     is_active = fields.BooleanField(default=True)
     # Bumped on password change; tokens carrying an older value are rejected.
     token_version = fields.IntField(default=0)

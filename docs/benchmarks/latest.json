@@ -1,0 +1,28 @@
+{
+  "date_utc": "2026-10-25T16:26:50Z",
+  "version": "0.4.0",
+  "python": "3.12.8",
+  "platform": "Linux-5.4.0-216-generic-x86_64-with-glibc2.31",
+  "cpu_count": 8,
+  "concurrency": 10,
+  "upstream_delay_ms": 5,
+  "conditions": "Single local dev worker with MySQL/Redis; synthetic JSON; zero pricing; sequential runs after warmup; not production capacity",
+  "direct": {
+    "requests": 200,
+    "errors": 0,
+    "elapsed_seconds": 0.461,
+    "requests_per_second": 434.11,
+    "p50_ms": 8.798,
+    "p95_ms": 52.145
+  },
+  "gateway": {
+    "requests": 200,
+    "errors": 0,
+    "elapsed_seconds": 2.287,
+    "requests_per_second": 87.43,
+    "p50_ms": 87.874,
+    "p95_ms": 262.777
+  },
+  "added_p50_ms": 79.076,
+  "added_p95_ms": 210.632
+}

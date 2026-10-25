@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
+from app.utils.upstream_security import validate_upstream_base_url
 
 
 def _validate_model_pricing(value):
@@ -22,6 +23,7 @@ def _validate_model_pricing(value):
 
 
 class ChannelCreate(BaseModel):
+    _base_url = field_validator("base_url")(validate_upstream_base_url)
     name: str = Field(min_length=1, max_length=128)
     provider: Literal["openai", "anthropic"]
     base_url: str = Field(min_length=1, max_length=512)
@@ -29,6 +31,7 @@ class ChannelCreate(BaseModel):
     models: list[str] = Field(default_factory=list)
     model_mapping: dict[str, str] = Field(default_factory=dict)
     model_pricing: dict[str, dict[str, float]] = Field(default_factory=dict)
+    cost_multiplier: float = Field(1, ge=0, le=100, allow_inf_nan=False)
     priority: int = Field(0, ge=0)
     weight: int = Field(1, ge=0)
     is_enabled: bool = True
@@ -42,6 +45,11 @@ class ChannelCreate(BaseModel):
 
 
 class ChannelUpdate(BaseModel):
+    @field_validator("base_url")
+    @classmethod
+    def validate_url(cls, value):
+        return validate_upstream_base_url(value) if value is not None else value
+
     name: str | None = None
     provider: Literal["openai", "anthropic"] | None = None
     base_url: str | None = None
@@ -49,6 +57,7 @@ class ChannelUpdate(BaseModel):
     models: list[str] | None = None
     model_mapping: dict[str, str] | None = None
     model_pricing: dict[str, dict[str, float]] | None = None
+    cost_multiplier: float | None = Field(None, ge=0, le=100, allow_inf_nan=False)
     priority: int | None = Field(None, ge=0)
     weight: int | None = Field(None, ge=0)
     is_enabled: bool | None = None
@@ -71,6 +80,7 @@ class ChannelResponse(BaseModel):
     models: list[str]
     model_mapping: dict[str, str]
     model_pricing: dict[str, dict[str, float]]
+    cost_multiplier: float = 1
     priority: int
     weight: int
     is_enabled: bool

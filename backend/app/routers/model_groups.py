@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.models import APIKey, User, ModelGroup
 from app.schemas.model_group import ModelGroupCreate, ModelGroupResponse, ModelGroupUpdate
-from app.services.auth import require_permission
+from app.services.auth import require_platform_admin
 
 router = APIRouter(prefix="/api/model-groups", tags=["model-groups"])
 
@@ -21,7 +21,7 @@ def _to_response(g: ModelGroup) -> ModelGroupResponse:
 async def list_model_groups(
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=100),
-    _: User = require_permission("model_group:read"),
+    _: User = Depends(require_platform_admin),
 ):
     total = await ModelGroup.all().count()
     items = await ModelGroup.all().order_by("-id").offset((page - 1) * size).limit(size)
@@ -29,13 +29,13 @@ async def list_model_groups(
 
 
 @router.get("/all")
-async def list_all_model_groups(_: User = require_permission("model_group:read")):
+async def list_all_model_groups(_: User = Depends(require_platform_admin)):
     groups = await ModelGroup.all().order_by("name")
     return [{"id": g.id, "name": g.name, "models": g.models or []} for g in groups]
 
 
 @router.post("", response_model=ModelGroupResponse, status_code=status.HTTP_201_CREATED)
-async def create_model_group(body: ModelGroupCreate, _: User = require_permission("model_group:write")):
+async def create_model_group(body: ModelGroupCreate, _: User = Depends(require_platform_admin)):
     existing = await ModelGroup.get_or_none(name=body.name)
     if existing:
         raise HTTPException(status_code=409, detail=f"Model group '{body.name}' already exists")
@@ -44,7 +44,7 @@ async def create_model_group(body: ModelGroupCreate, _: User = require_permissio
 
 
 @router.get("/{group_id}", response_model=ModelGroupResponse)
-async def get_model_group(group_id: int, _: User = require_permission("model_group:read")):
+async def get_model_group(group_id: int, _: User = Depends(require_platform_admin)):
     g = await ModelGroup.get_or_none(id=group_id)
     if g is None:
         raise HTTPException(status_code=404, detail="Model group not found")
@@ -52,7 +52,7 @@ async def get_model_group(group_id: int, _: User = require_permission("model_gro
 
 
 @router.put("/{group_id}", response_model=ModelGroupResponse)
-async def update_model_group(group_id: int, body: ModelGroupUpdate, _: User = require_permission("model_group:write")):
+async def update_model_group(group_id: int, body: ModelGroupUpdate, _: User = Depends(require_platform_admin)):
     g = await ModelGroup.get_or_none(id=group_id)
     if g is None:
         raise HTTPException(status_code=404, detail="Model group not found")
@@ -68,7 +68,7 @@ async def update_model_group(group_id: int, body: ModelGroupUpdate, _: User = re
 
 
 @router.delete("/{group_id}")
-async def delete_model_group(group_id: int, _: User = require_permission("model_group:write")):
+async def delete_model_group(group_id: int, _: User = Depends(require_platform_admin)):
     key_count = await APIKey.filter(model_group_id=group_id).count()
     if key_count:
         raise HTTPException(

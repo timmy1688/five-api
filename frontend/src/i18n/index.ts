@@ -17,19 +17,11 @@ export function useI18n() {
   }
 
   function roleLabel(name: string) {
-    if (name === 'Super Admin') return t('role.superAdmin')
-    if (name === 'Viewer') return t('role.viewer')
+    if (name === 'platform_admin') return t('role.superAdmin')
+    if (name === 'tenant') return t('role.viewer')
     return name
   }
 
-  function permissionLabel(permission: string) {
-    const [resource, action] = permission.split(':')
-    const resourceKey = `perm.${resource}` as MessageKey
-    const actionKey = `perm.${action}` as MessageKey
-    const resourceText = resourceKey in en ? t(resourceKey) : resource
-    const actionText = actionKey in en ? t(actionKey) : action
-    return action ? `${resourceText} · ${actionText}` : resourceText
-  }
 
-  return { t, roleLabel, permissionLabel, locale }
+  return { t, roleLabel, locale }
 }

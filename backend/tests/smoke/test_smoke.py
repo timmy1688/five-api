@@ -1,3 +1,4 @@
+from tests.conftest import create_test_tenant
 """发布前冒烟：登录、两条透传管道、鉴权失败和配额拒绝。"""
 
 from decimal import Decimal
@@ -31,7 +32,7 @@ def _http(payload: dict) -> AsyncMock:
 
 
 async def _key(raw: str) -> str:
-    await APIKey.create(
+    await APIKey.create(tenant_id=(await create_test_tenant()).id,
         name=raw,
         key_hash=hash_api_key(raw),
         key_prefix=raw[:8],
@@ -146,7 +147,7 @@ async def test_quota_exceeded_does_not_call_upstream(client):
         models=["gpt-4o"],
     )
     raw = "sk-smoke-quota"
-    await APIKey.create(
+    await APIKey.create(tenant_id=(await create_test_tenant()).id,
         name="smoke-quota",
         key_hash=hash_api_key(raw),
         key_prefix=raw[:8],

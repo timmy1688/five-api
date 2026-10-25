@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from app.models import User, RequestLog, RequestLogAudit
-from app.services.auth import require_permission
+from app.services.auth import require_platform_admin
 from app.services.content_filter import keyword_was_hit
 from app.services.logging_service import cleanup_old_logs
 
@@ -14,6 +14,7 @@ router = APIRouter(prefix="/api/logs", tags=["logs"])
 class LogResponse(BaseModel):
     id: int
     request_id: str
+    client_request_id: str = ""
     api_key_id: int
     api_key_name: str
     channel_id: int | None
@@ -28,6 +29,8 @@ class LogResponse(BaseModel):
     cached_tokens: int
     cache_write_tokens: int
     cost: float
+    upstream_cost: float = 0
+    usage_source: str = "legacy"
     is_stream: bool
     status_code: int
     latency_ms: int
@@ -60,6 +63,7 @@ def _to_log(r: RequestLog) -> LogResponse:
     return LogResponse(
         id=r.id,
         request_id=r.request_id,
+        client_request_id=r.client_request_id,
         api_key_id=r.api_key_id,
         api_key_name=r.api_key_name,
         channel_id=r.channel_id,
@@ -74,6 +78,7 @@ def _to_log(r: RequestLog) -> LogResponse:
         cached_tokens=r.cached_tokens,
         cache_write_tokens=r.cache_write_tokens,
         cost=float(r.cost),
+        upstream_cost=float(r.upstream_cost), usage_source=r.usage_source,
         is_stream=r.is_stream,
         status_code=r.status_code,
         latency_ms=r.latency_ms,
@@ -97,15 +102,18 @@ async def list_logs(
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=100),
     api_key_id: int | None = None,
+    client_request_id: str | None = Query(None, max_length=128),
     api_key_name: str | None = Query(None, max_length=100),
     model: str | None = None,
     status_code: int | None = None,
     error_origin: str | None = None,
     start_date: datetime | None = None,
     end_date: datetime | None = None,
-    _: User = require_permission("log:read"),
+    _: User = Depends(require_platform_admin),
 ):
     qs = RequestLog.all()
+    if client_request_id:
+        qs = qs.filter(client_request_id=client_request_id)
     if api_key_id is not None:
         qs = qs.filter(api_key_id=api_key_id)
     if api_key_name and (key_name := api_key_name.strip()):
@@ -130,7 +138,7 @@ async def list_logs(
             "id", "request_id", "api_key_id", "api_key_name", "channel_id", "channel_name",
             "model_requested", "model_actual", "provider", "endpoint",
             "prompt_tokens", "completion_tokens", "total_tokens", "cached_tokens",
-            "cache_write_tokens", "cost",
+            "cache_write_tokens", "cost", "upstream_cost", "usage_source", "client_request_id",
             "is_stream", "status_code", "latency_ms", "error_message", "error_origin",
             "upstream_status_code", "upstream_error", "ip_address", "failed_over",
             "has_audit", "ai_review", "security_hit", "session_id", "cache_savings", "created_at",
@@ -140,7 +148,7 @@ async def list_logs(
 
 
 @router.get("/{request_id}", response_model=LogResponse)
-async def get_log(request_id: str, _: User = require_permission("log:read")):
+async def get_log(request_id: str, _: User = Depends(require_platform_admin)):
     r = await RequestLog.get_or_none(request_id=request_id)
     if r is None:
         raise HTTPException(status_code=404, detail="Log not found")
@@ -148,7 +156,7 @@ async def get_log(request_id: str, _: User = require_permission("log:read")):
 
 
 @router.get("/{request_id}/audit", response_model=LogAuditResponse)
-async def get_log_audit(request_id: str, _: User = require_permission("log:read")):
+async def get_log_audit(request_id: str, _: User = Depends(require_platform_admin)):
     """请求正文单独取。打开日志详情不读这段，避免每次点开都拉一大片内容。"""
     r = await RequestLog.get_or_none(request_id=request_id)
     if r is None or not r.has_audit:
@@ -162,7 +170,7 @@ async def get_log_audit(request_id: str, _: User = require_permission("log:read"
 @router.post("/cleanup")
 async def cleanup_logs(
     days: int = Query(None, ge=1),
-    _: User = require_permission("log:write"),
+    _: User = Depends(require_platform_admin),
 ):
     deleted = await cleanup_old_logs(days)
     return {"deleted": deleted}

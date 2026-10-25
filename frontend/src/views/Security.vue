@@ -15,7 +15,7 @@
         </div>
         <el-switch
           v-model="enabled"
-          :disabled="!auth.hasPermission('security:write') || saving"
+          :disabled="!auth.isPlatformAdmin || saving"
           @change="saveEnabled"
         />
       </div>
@@ -29,7 +29,7 @@
         </div>
         <el-switch
           v-model="secretScan"
-          :disabled="!auth.hasPermission('security:write') || savingSecrets"
+          :disabled="!auth.isPlatformAdmin || savingSecrets"
           @change="saveSecretScan"
         />
       </div>
@@ -43,7 +43,7 @@
         </div>
         <el-switch
           v-model="inferenceAudit"
-          :disabled="!auth.hasPermission('security:write') || savingAudit"
+          :disabled="!auth.isPlatformAdmin || savingAudit"
           @change="saveInferenceAudit"
         />
       </div>
@@ -64,7 +64,7 @@
         </div>
         <el-switch
           v-model="ai.enabled"
-          :disabled="!auth.hasPermission('security:write') || savingAi"
+          :disabled="!auth.isPlatformAdmin || savingAi"
           @change="saveAi"
         />
       </div>
@@ -74,10 +74,10 @@
           :placeholder="t('security.aiModel')"
           maxlength="64"
           style="max-width: 420px"
-          :disabled="!auth.hasPermission('security:write')"
+          :disabled="!auth.isPlatformAdmin"
         />
         <el-button
-          v-if="auth.hasPermission('security:write')"
+          v-if="auth.isPlatformAdmin"
           :loading="savingAi"
           @click="saveAi"
         >
@@ -87,7 +87,7 @@
     </el-card>
 
     <el-card shadow="never" style="margin-top: 12px">
-      <div v-if="auth.hasPermission('security:write')" class="add-row">
+      <div v-if="auth.isPlatformAdmin" class="add-row">
         <el-input v-model="draft" :placeholder="t('security.keywordPlaceholder')" maxlength="64" style="max-width: 360px" />
         <el-button type="primary" :disabled="draft.trim().length < 2" @click="addKeyword">{{ t('common.add') }}</el-button>
       </div>
@@ -98,12 +98,12 @@
           <template #default="{ row }">
             <el-switch
               :model-value="row.is_enabled"
-              :disabled="!auth.hasPermission('security:write')"
+              :disabled="!auth.isPlatformAdmin"
               @change="(value: boolean) => toggleKeyword(row, value)"
             />
           </template>
         </el-table-column>
-        <el-table-column v-if="auth.hasPermission('security:write')" label="" width="100" align="right">
+        <el-table-column v-if="auth.isPlatformAdmin" label="" width="100" align="right">
           <template #default="{ row }">
             <el-button link type="danger" @click="removeKeyword(row)">{{ t('common.delete') }}</el-button>
           </template>

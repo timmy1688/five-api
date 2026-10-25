@@ -1,3 +1,4 @@
+from tests.conftest import create_test_tenant
 """基础网关行为：过期 Key、IP 白名单、RPM。"""
 
 from datetime import datetime, timedelta, timezone
@@ -27,7 +28,7 @@ async def _channel() -> Channel:
 async def test_expired_key_is_rejected(client):
     await _channel()
     raw = "sk-expired-basic"
-    await APIKey.create(
+    await APIKey.create(tenant_id=(await create_test_tenant()).id,
         name="expired",
         key_hash=hash_api_key(raw),
         key_prefix=raw[:8],
@@ -40,13 +41,13 @@ async def test_expired_key_is_rejected(client):
         headers=auth_header(raw),
     )
     assert resp.status_code == 401
-    assert resp.json()["detail"]["error"]["code"] == "key_expired"
+    assert resp.json()["error"]["code"] == "key_expired"
 
 
 async def test_ip_whitelist_rejects_other_clients(client):
     await _channel()
     raw = "sk-ip-basic"
-    await APIKey.create(
+    await APIKey.create(tenant_id=(await create_test_tenant()).id,
         name="ip-locked",
         key_hash=hash_api_key(raw),
         key_prefix=raw[:8],
@@ -59,13 +60,13 @@ async def test_ip_whitelist_rejects_other_clients(client):
         headers=auth_header(raw),
     )
     assert resp.status_code == 403
-    assert resp.json()["detail"]["error"]["code"] == "ip_not_allowed"
+    assert resp.json()["error"]["code"] == "ip_not_allowed"
 
 
 async def test_rpm_limit_rejects_the_extra_request(client, mock_redis):
     await _channel()
     raw = "sk-rpm-basic"
-    await APIKey.create(
+    await APIKey.create(tenant_id=(await create_test_tenant()).id,
         name="rpm",
         key_hash=hash_api_key(raw),
         key_prefix=raw[:8],
@@ -75,6 +76,8 @@ async def test_rpm_limit_rejects_the_extra_request(client, mock_redis):
     counts: dict[str, int] = {}
 
     async def eval_script(script, _numkeys, key, limit, *_rest):
+        if "settlement_spend_v1" in script:
+            return 1
         if "INCR" not in script:
             return 1
         counts[key] = counts.get(key, 0) + 1
@@ -99,7 +102,7 @@ async def test_rpm_limit_rejects_the_extra_request(client, mock_redis):
         second = await client.post("/v1/chat/completions", json=body, headers=auth_header(raw))
     assert first.status_code == 429 or second.status_code == 429
     blocked = second if second.status_code == 429 else first
-    assert blocked.json()["detail"]["error"]["code"] == "rpm_limit"
+    assert blocked.json()["error"]["code"] == "rpm_limit"
 
 
 async def test_metrics_is_local_only_without_a_token(app, client):

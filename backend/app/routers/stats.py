@@ -1,15 +1,15 @@
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Query
+from fastapi import Depends, APIRouter, Query
 from tortoise import connections
 from tortoise.functions import Sum
 
-from app.models import User, APIKey, Channel, Team, UsageDaily
+from app.models import User, APIKey, Channel, Tenant, UsageDaily
 from app.schemas.stats import (
     ChannelUsage, ErrorRatePoint, KeyUsage, LatencyStats, LatencyTrendPoint,
-    ModelUsage, StatsOverview, TeamUsage, ThroughputStats, UsagePoint,
+    ModelUsage, StatsOverview, TenantUsage, ThroughputStats, UsagePoint,
 )
-from app.services.auth import require_permission
+from app.services.auth import require_platform_admin
 from app.services.usage_stats import peak_rpm, start_day
 
 router = APIRouter(prefix="/api/stats", tags=["stats"])
@@ -38,7 +38,7 @@ def _totals():
 
 
 @router.get("/overview", response_model=StatsOverview)
-async def overview(_: User = require_permission("stat:read")):
+async def overview(_: User = Depends(require_platform_admin)):
     today = datetime.now(timezone.utc).date()
     fields = {**_totals()}
     all_time = await UsageDaily.all().annotate(**fields).values("total_tokens", "request_count", "cost")
@@ -62,7 +62,7 @@ async def overview(_: User = require_permission("stat:read")):
 @router.get("/usage", response_model=list[UsagePoint])
 async def usage(
     days: int = Query(7, ge=1, le=90),
-    _: User = require_permission("stat:read"),
+    _: User = Depends(require_platform_admin),
 ):
     rows = (
         await UsageDaily.filter(day__gte=start_day(days))
@@ -91,7 +91,7 @@ async def usage(
 @router.get("/by-model", response_model=list[ModelUsage])
 async def by_model(
     days: int = Query(7, ge=1, le=90),
-    _: User = require_permission("stat:read"),
+    _: User = Depends(require_platform_admin),
 ):
     rows = (
         await UsageDaily.filter(day__gte=start_day(days))
@@ -115,7 +115,7 @@ async def by_model(
 @router.get("/by-key", response_model=list[KeyUsage])
 async def by_key(
     days: int = Query(7, ge=1, le=90),
-    _: User = require_permission("stat:read"),
+    _: User = Depends(require_platform_admin),
 ):
     rows = (
         await UsageDaily.filter(day__gte=start_day(days))
@@ -138,24 +138,24 @@ async def by_key(
     ]
 
 
-@router.get("/by-team", response_model=list[TeamUsage])
+@router.get("/by-tenant", response_model=list[TenantUsage])
 async def by_team(
     days: int = Query(7, ge=1, le=90),
-    _: User = require_permission("stat:read"),
+    _: User = Depends(require_platform_admin),
 ):
     rows = (
-        await UsageDaily.filter(day__gte=start_day(days), team_id__gt=0)
-        .group_by("team_id")
+        await UsageDaily.filter(day__gte=start_day(days), tenant_id__gt=0)
+        .group_by("tenant_id")
         .annotate(**_totals())
         .order_by("-cost")
         .limit(20)
-        .values("team_id", "total_tokens", "request_count", "cost")
+        .values("tenant_id", "total_tokens", "request_count", "cost")
     )
-    names = dict(await Team.filter(id__in=[r["team_id"] for r in rows]).values_list("id", "name"))
+    names = dict(await Tenant.filter(id__in=[r["tenant_id"] for r in rows]).values_list("id", "name"))
     return [
-        TeamUsage(
-            team_id=r["team_id"],
-            team_name=names.get(r["team_id"], f"#{r['team_id']}"),
+        TenantUsage(
+            tenant_id=r["tenant_id"],
+            tenant_name=names.get(r["tenant_id"], f"#{r['tenant_id']}"),
             total_tokens=int(r["total_tokens"] or 0),
             request_count=int(r["request_count"] or 0),
             cost=float(r["cost"] or 0),
@@ -167,7 +167,7 @@ async def by_team(
 @router.get("/by-channel", response_model=list[ChannelUsage])
 async def by_channel(
     days: int = Query(7, ge=1, le=90),
-    _: User = require_permission("stat:read"),
+    _: User = Depends(require_platform_admin),
 ):
     """按渠道统计请求量、Token 和费用。"""
     rows = (
@@ -194,7 +194,7 @@ async def by_channel(
 @router.get("/error-rate", response_model=list[ErrorRatePoint])
 async def error_rate(
     days: int = Query(7, ge=1, le=90),
-    _: User = require_permission("stat:read"),
+    _: User = Depends(require_platform_admin),
 ):
     """每日错误率趋势。"""
     rows = (
@@ -228,7 +228,7 @@ def _percentiles(values: list[int]) -> tuple[int, int, int]:
 @router.get("/latency", response_model=LatencyStats)
 async def latency(
     days: int = Query(7, ge=1, le=90),
-    _: User = require_permission("stat:read"),
+    _: User = Depends(require_platform_admin),
 ):
     """请求延迟 P50/P95/P99 + 按天趋势，取窗口内最近的请求作样本。"""
     start = datetime.now(timezone.utc) - timedelta(days=days)
@@ -257,7 +257,7 @@ async def latency(
 @router.get("/throughput", response_model=ThroughputStats)
 async def throughput(
     days: int = Query(7, ge=1, le=90),
-    _: User = require_permission("stat:read"),
+    _: User = Depends(require_platform_admin),
 ):
     """实时吞吐量：当前 QPS/RPM/TPM + 历史峰值。"""
     conn = connections.get("default")

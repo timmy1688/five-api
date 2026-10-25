@@ -5,7 +5,9 @@ from tortoise.models import Model
 class RequestLog(Model):
     id = fields.BigIntField(pk=True)
     request_id = fields.CharField(max_length=36, index=True)
+    client_request_id = fields.CharField(max_length=128, default="", index=True)
     api_key_id = fields.IntField(index=True)
+    tenant_id = fields.IntField(default=0, index=True)
     api_key_name = fields.CharField(max_length=128, default="")
     channel_id = fields.IntField(null=True)
     channel_name = fields.CharField(max_length=128, default="")
@@ -19,6 +21,8 @@ class RequestLog(Model):
     cached_tokens = fields.IntField(default=0)
     cache_write_tokens = fields.IntField(default=0)
     cost = fields.DecimalField(max_digits=16, decimal_places=6, default=0)
+    upstream_cost = fields.DecimalField(max_digits=16, decimal_places=6, default=0)
+    usage_source = fields.CharField(max_length=16, default="upstream")
     is_stream = fields.BooleanField(default=False)
     status_code = fields.IntField(default=0)
     latency_ms = fields.IntField(default=0)

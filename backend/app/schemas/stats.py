@@ -38,9 +38,9 @@ class KeyUsage(BaseModel):
     cost: float
 
 
-class TeamUsage(BaseModel):
-    team_id: int
-    team_name: str
+class TenantUsage(BaseModel):
+    tenant_id: int
+    tenant_name: str
     total_tokens: int
     request_count: int
     cost: float

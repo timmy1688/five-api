@@ -1,10 +1,11 @@
+from app.services.management_events import audit_mutation
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.models import User, Channel, ModelPrice
 from app.schemas.model_price import ModelPriceCreate, ModelPriceResponse, ModelPriceUpdate
-from app.services.auth import require_permission
+from app.services.auth import require_platform_admin
 from app.services.pricing import DEFAULT_MODEL_PRICES, MODEL_PRICE_CATALOG_VERSION, catalog_prices
 
 router = APIRouter(prefix="/api/model-prices", tags=["model-prices"])
@@ -19,6 +20,7 @@ def _to_response(mp: ModelPrice) -> ModelPriceResponse:
         cached_price=float(mp.cached_price),
         cache_write_price=float(mp.cache_write_price),
         request_price=float(mp.request_price),
+        multiplier=float(mp.multiplier),
         currency=mp.currency,
         is_active=mp.is_active,
         created_at=mp.created_at,
@@ -30,7 +32,7 @@ def _to_response(mp: ModelPrice) -> ModelPriceResponse:
 async def list_model_prices(
     page: int = Query(1, ge=1),
     size: int = Query(50, ge=1, le=200),
-    _: User = require_permission("model_price:read"),
+    _: User = Depends(require_platform_admin),
 ):
     total = await ModelPrice.all().count()
     items = await ModelPrice.all().order_by("model").offset((page - 1) * size).limit(size)
@@ -38,7 +40,7 @@ async def list_model_prices(
 
 
 @router.get("/defaults")
-async def get_defaults(_: User = require_permission("model_price:read")):
+async def get_defaults(_: User = Depends(require_platform_admin)):
     return [
         {"model": model, **catalog_prices(model)}
         for model in sorted(DEFAULT_MODEL_PRICES)
@@ -46,11 +48,13 @@ async def get_defaults(_: User = require_permission("model_price:read")):
 
 
 @router.get("/unpriced")
-async def get_unpriced_models(_: User = require_permission("model_price:read")):
+async def get_unpriced_models(_: User = Depends(require_platform_admin)):
     channels = await Channel.all().values("id", "name", "models", "model_mapping", "model_pricing")
     priced_models = set()
     for mp in await ModelPrice.filter(is_active=True).values_list("model", flat=True):
         priced_models.add(mp)
+    inactive = set(await ModelPrice.filter(is_active=False).values_list("model", flat=True))
+    priced_models |= set(DEFAULT_MODEL_PRICES) - inactive
 
     unpriced: dict[str, list[str]] = {}
     for ch in channels:
@@ -58,7 +62,7 @@ async def get_unpriced_models(_: User = require_permission("model_price:read")):
         ch_pricing = ch["model_pricing"] or {}
         for model in (ch["models"] or []):
             actual = mapping.get(model, model)
-            if actual not in priced_models and model not in priced_models and model not in ch_pricing and actual not in ch_pricing:
+            if actual not in priced_models and model not in priced_models:
                 unpriced.setdefault(model, []).append(ch["name"])
 
     return [
@@ -68,64 +72,30 @@ async def get_unpriced_models(_: User = require_permission("model_price:read")):
 
 
 @router.post("/sync-defaults")
+@audit_mutation("price.sync")
 async def sync_defaults(
-    overwrite: bool = Query(False),
-    _: User = require_permission("model_price:write"),
+    _: User = Depends(require_platform_admin),
 ):
-    created = updated = unchanged = 0
+    created = unchanged = 0
     for model in DEFAULT_MODEL_PRICES:
         prices = catalog_prices(model)
-        existing = await ModelPrice.get_or_none(model=model)
-        if not existing:
-            await ModelPrice.create(
-                model=model,
-                prompt_price=prices["prompt"],
-                completion_price=prices["completion"],
-                cached_price=prices["cached"],
-                cache_write_price=prices["cache_write"],
-                request_price=prices["request"],
-            )
-            created += 1
-            continue
-
-        values = (
-            Decimal(str(prices["prompt"])),
-            Decimal(str(prices["completion"])),
-            Decimal(str(prices["cached"])),
-            Decimal(str(prices["cache_write"])),
-            Decimal(str(prices["request"])),
-        )
-        current = (
-            existing.prompt_price,
-            existing.completion_price,
-            existing.cached_price,
-            existing.cache_write_price,
-            existing.request_price,
-        )
-        if overwrite and current != values:
-            await ModelPrice.filter(id=existing.id).update(
-                prompt_price=values[0],
-                completion_price=values[1],
-                cached_price=values[2],
-                cache_write_price=values[3],
-                request_price=values[4],
-            )
-            updated += 1
-        else:
-            unchanged += 1
-
+        _, inserted = await ModelPrice.get_or_create(model=model, defaults={
+            "prompt_price": prices["prompt"], "completion_price": prices["completion"],
+            "cached_price": prices["cached"], "cache_write_price": prices["cache_write"],
+            "request_price": prices["request"],
+        })
+        created += int(inserted)
+        unchanged += int(not inserted)
     return {
-        "message": "Default model prices synced",
-        "created": created,
-        "updated": updated,
-        "unchanged": unchanged,
-        "total": len(DEFAULT_MODEL_PRICES),
-        "catalog_version": MODEL_PRICE_CATALOG_VERSION,
+        "message": "Missing reference prices added; existing prices preserved",
+        "created": created, "updated": 0, "unchanged": unchanged,
+        "total": len(DEFAULT_MODEL_PRICES), "catalog_version": MODEL_PRICE_CATALOG_VERSION,
     }
 
 
 @router.post("", response_model=ModelPriceResponse, status_code=status.HTTP_201_CREATED)
-async def create_model_price(body: ModelPriceCreate, _: User = require_permission("model_price:write")):
+@audit_mutation("price.create")
+async def create_model_price(body: ModelPriceCreate, _: User = Depends(require_platform_admin)):
     existing = await ModelPrice.get_or_none(model=body.model)
     if existing:
         raise HTTPException(status_code=409, detail=f"Price for model '{body.model}' already exists")
@@ -137,7 +107,7 @@ async def create_model_price(body: ModelPriceCreate, _: User = require_permissio
 
 
 @router.get("/{price_id}", response_model=ModelPriceResponse)
-async def get_model_price(price_id: int, _: User = require_permission("model_price:read")):
+async def get_model_price(price_id: int, _: User = Depends(require_platform_admin)):
     mp = await ModelPrice.get_or_none(id=price_id)
     if mp is None:
         raise HTTPException(status_code=404, detail="Model price not found")
@@ -145,11 +115,12 @@ async def get_model_price(price_id: int, _: User = require_permission("model_pri
 
 
 @router.put("/{price_id}", response_model=ModelPriceResponse)
-async def update_model_price(price_id: int, body: ModelPriceUpdate, _: User = require_permission("model_price:write")):
+@audit_mutation("price.update")
+async def update_model_price(price_id: int, body: ModelPriceUpdate, _: User = Depends(require_platform_admin)):
     mp = await ModelPrice.get_or_none(id=price_id)
     if mp is None:
         raise HTTPException(status_code=404, detail="Model price not found")
-    update_data = body.model_dump(exclude_unset=True)
+    update_data = body.model_dump(exclude_unset=True, exclude_none=True)
     if update_data:
         await ModelPrice.filter(id=price_id).update(**update_data)
         mp = await ModelPrice.get(id=price_id)
@@ -157,7 +128,8 @@ async def update_model_price(price_id: int, body: ModelPriceUpdate, _: User = re
 
 
 @router.delete("/{price_id}")
-async def delete_model_price(price_id: int, _: User = require_permission("model_price:write")):
+@audit_mutation("price.delete")
+async def delete_model_price(price_id: int, _: User = Depends(require_platform_admin)):
     deleted = await ModelPrice.filter(id=price_id).delete()
     if not deleted:
         raise HTTPException(status_code=404, detail="Model price not found")

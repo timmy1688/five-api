@@ -1,10 +1,11 @@
+from tests.conftest import create_test_tenant
 from decimal import Decimal
 from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
 
-from app.models import APIKey, Channel, ModelPrice, RequestLog, Team, UsageDaily
+from app.models import APIKey, Channel, ModelPrice, RequestLog, Tenant, UsageDaily
 from app.services.auth import create_access_token, hash_api_key
 from tests.conftest import auth_header, create_admin
 
@@ -13,14 +14,14 @@ pytestmark = pytest.mark.asyncio
 RAW_KEY = "sk-v03-feature-key"
 
 
-async def _env(models=("gpt-4o",), team: Team | None = None, quota="100"):
+async def _env(models=("gpt-4o",), team: Tenant | None = None, quota="100"):
     ch = await Channel.create(
         name="v03-ch", provider="openai", base_url="https://api.openai.test",
         api_key="sk-up", models=list(models), timeout=60,
     )
     key = await APIKey.create(
         name="v03-key", key_hash=hash_api_key(RAW_KEY), key_prefix=RAW_KEY[:8],
-        quota_total=Decimal(quota), team_id=team.id if team else None,
+        quota_total=Decimal(quota), tenant_id=team.id if team else (await create_test_tenant()).id,
     )
     return ch, key
 
@@ -170,6 +171,7 @@ async def test_audio_speech_returns_binary(client):
 
 
 async def test_transcription_forwards_multipart(client):
+    await ModelPrice.create(model="whisper-1")
     ch, _ = await _env(models=("whisper-1",))
     ch.model_mapping = {"whisper-1": "whisper-large"}
     await ch.save()
@@ -189,6 +191,7 @@ async def test_transcription_forwards_multipart(client):
 
 
 async def test_rerank_uses_reported_usage(client):
+    await ModelPrice.create(model="rerank-v3")
     await _env(models=("rerank-v3",))
     payload = {"results": [{"index": 0, "relevance_score": 0.9}], "usage": {"total_tokens": 42}}
     with patch("app.providers.base._shared_http_client", return_value=_http(response=_json(payload))):
@@ -203,7 +206,7 @@ async def test_rerank_uses_reported_usage(client):
 
 
 async def test_team_budget_blocks_and_accumulates(client):
-    team = await Team.create(name="research", quota_total=Decimal("1"))
+    team = await Tenant.create(name="research", quota_total=Decimal("1"))
     await _env(team=team)
     await ModelPrice.create(model="gpt-4o", prompt_price=Decimal("1000"), completion_price=Decimal("1000"))
     payload = {"choices": [], "usage": {"prompt_tokens": 100, "completion_tokens": 100}}
@@ -217,14 +220,14 @@ async def test_team_budget_blocks_and_accumulates(client):
         await team.refresh_from_db()
         assert team.quota_used == Decimal("0.2")
 
-        await Team.filter(id=team.id).update(quota_used=Decimal("1"))
+        await Tenant.filter(id=team.id).update(quota_used=Decimal("1"))
         blocked = await client.post(
             "/v1/chat/completions",
             json={"model": "gpt-4o", "max_tokens": 1, "messages": [{"role": "user", "content": "hi"}]},
             headers=auth_header(RAW_KEY),
         )
     assert blocked.status_code == 429
-    assert blocked.json()["detail"]["error"]["code"] == "team_quota_exceeded"
+    assert blocked.json()["error"]["code"] == "tenant_quota_exceeded"
 
     team.is_enabled = False
     await team.save()
@@ -234,30 +237,33 @@ async def test_team_budget_blocks_and_accumulates(client):
         headers=auth_header(RAW_KEY),
     )
     assert disabled.status_code == 403
-    assert disabled.json()["detail"]["error"]["code"] == "team_disabled"
+    assert disabled.json()["error"]["code"] == "tenant_disabled"
 
 
 async def test_team_crud_and_stats(client):
     admin = await create_admin("teamadmin", "pw")
     headers = auth_header(create_access_token({"sub": str(admin.id)}))
-    created = await client.post("/api/teams", json={"name": "ops", "quota_total": 50}, headers=headers)
+    created = await client.post("/api/tenants", json={"name": "ops", "username": "ops", "password": "temporary-pass", "quota_total": 50}, headers=headers)
     assert created.status_code == 201
-    team_id = created.json()["id"]
+    tenant_id = created.json()["id"]
 
-    key = await client.post("/api/keys", json={"name": "ops-key", "team_id": team_id}, headers=headers)
+    login = await client.post("/api/login", json={"username": "ops", "password": "temporary-pass"})
+    changed = await client.put("/api/password", json={"old_password": "temporary-pass", "new_password": "permanent-pass"},
+                               headers=auth_header(login.json()["access_token"]))
+    key = await client.post("/api/keys", json={"name": "ops-key"}, headers=auth_header(changed.json()["access_token"]))
     assert key.status_code == 201
-    assert key.json()["team_name"] == "ops"
-    assert (await client.delete(f"/api/teams/{team_id}", headers=headers)).status_code == 409
+    assert key.json()["tenant_name"] == "ops"
+    assert (await client.delete(f"/api/tenants/{tenant_id}", headers=headers)).status_code == 405
 
     await UsageDaily.create(
-        day="2099-01-01", api_key_id=key.json()["id"], team_id=team_id, model="gpt-4o",
+        day="2099-01-01", api_key_id=key.json()["id"], tenant_id=tenant_id, model="gpt-4o",
         request_count=3, total_tokens=30, cost=Decimal("1.5"),
     )
     with patch("app.routers.stats.start_day", return_value="2000-01-01"):
-        stats = await client.get("/api/stats/by-team", headers=headers)
+        stats = await client.get("/api/stats/by-tenant", headers=headers)
         overview = await client.get("/api/stats/overview", headers=headers)
     assert stats.json() == [{
-        "team_id": team_id, "team_name": "ops", "total_tokens": 30, "request_count": 3, "cost": 1.5,
+        "tenant_id": tenant_id, "tenant_name": "ops", "total_tokens": 30, "request_count": 3, "cost": 1.5,
     }]
     assert overview.json()["total_requests"] == 3
 

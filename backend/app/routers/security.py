@@ -1,8 +1,8 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import Depends, APIRouter, HTTPException
 from pydantic import BaseModel, Field, field_validator
 
 from app.models import SecurityKeyword, User
-from app.services.auth import require_permission
+from app.services.auth import require_platform_admin
 from app.services.ai_audit import (
     CACHE_TTL,
     MAX_OUTPUT_TOKENS,
@@ -129,7 +129,7 @@ def _item(row: SecurityKeyword) -> KeywordItem:
 
 
 @router.get("", response_model=SecurityView)
-async def get_security(_: User = require_permission("security:read")):
+async def get_security(_: User = Depends(require_platform_admin)):
     rows = await SecurityKeyword.all().order_by("id")
     return SecurityView(
         enabled=await keyword_filter_enabled(),
@@ -141,7 +141,7 @@ async def get_security(_: User = require_permission("security:read")):
 
 
 @router.put("/secret-scan", response_model=SecretScanSettings)
-async def update_secret_scan(body: SecretScanSettings, _: User = require_permission("security:write")):
+async def update_secret_scan(body: SecretScanSettings, _: User = Depends(require_platform_admin)):
     enabled = await set_secret_scan_enabled(body.enabled)
     return SecretScanSettings(enabled=enabled)
 
@@ -149,14 +149,14 @@ async def update_secret_scan(body: SecretScanSettings, _: User = require_permiss
 @router.put("/inference-audit", response_model=InferenceAuditSettings)
 async def update_inference_audit(
     body: InferenceAuditSettings,
-    _: User = require_permission("security:write"),
+    _: User = Depends(require_platform_admin),
 ):
     enabled = await set_inference_audit_enabled(body.enabled)
     return InferenceAuditSettings(enabled=enabled)
 
 
 @router.put("/ai-audit", response_model=AiAuditView)
-async def update_ai_audit(body: AiAuditSettings, _: User = require_permission("security:write")):
+async def update_ai_audit(body: AiAuditSettings, _: User = Depends(require_platform_admin)):
     config = await set_ai_audit_config(
         enabled=body.enabled,
         model=body.model,
@@ -166,14 +166,14 @@ async def update_ai_audit(body: AiAuditSettings, _: User = require_permission("s
 
 
 @router.put("", response_model=SecuritySettings)
-async def update_security(body: SecuritySettings, _: User = require_permission("security:write")):
+async def update_security(body: SecuritySettings, _: User = Depends(require_platform_admin)):
     enabled = await set_keyword_filter_enabled(body.enabled)
     clear_filter_cache()
     return SecuritySettings(enabled=enabled)
 
 
 @router.post("/keywords", response_model=KeywordItem, status_code=201)
-async def create_keyword(body: KeywordBody, _: User = require_permission("security:write")):
+async def create_keyword(body: KeywordBody, _: User = Depends(require_platform_admin)):
     if await SecurityKeyword.all().count() >= MAX_KEYWORDS:
         raise HTTPException(status_code=400, detail=f"At most {MAX_KEYWORDS} keywords")
     keyword_key = body.keyword.casefold()
@@ -192,7 +192,7 @@ async def create_keyword(body: KeywordBody, _: User = require_permission("securi
 async def update_keyword(
     keyword_id: int,
     body: KeywordUpdate,
-    _: User = require_permission("security:write"),
+    _: User = Depends(require_platform_admin),
 ):
     row = await SecurityKeyword.get_or_none(id=keyword_id)
     if row is None:
@@ -207,7 +207,7 @@ async def update_keyword(
 
 
 @router.delete("/keywords/{keyword_id}")
-async def delete_keyword(keyword_id: int, _: User = require_permission("security:write")):
+async def delete_keyword(keyword_id: int, _: User = Depends(require_platform_admin)):
     deleted = await SecurityKeyword.filter(id=keyword_id).delete()
     if not deleted:
         raise HTTPException(status_code=404, detail="Keyword not found")

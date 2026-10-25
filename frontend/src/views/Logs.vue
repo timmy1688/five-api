@@ -5,7 +5,7 @@
         <h3>{{ t('nav.logs') }}</h3>
         <p>{{ t('logs.subtitle') }}</p>
       </div>
-      <el-popconfirm v-if="auth.hasPermission('log:write')" :title="cleanupTitle" @confirm="cleanupLogs">
+      <el-popconfirm v-if="auth.isPlatformAdmin" :title="cleanupTitle" @confirm="cleanupLogs">
         <template #reference>
           <el-button type="warning" plain>{{ t('logs.cleanup') }}</el-button>
         </template>
@@ -139,6 +139,9 @@
               <el-button v-if="detail.has_audit" link type="primary" @click="openAudit">{{ t('logs.viewRequest') }}</el-button>
               <span v-else class="muted">{{ t('logs.auditEmpty') }}</span>
             </el-descriptions-item>
+            <el-descriptions-item v-if="detail.client_request_id" :label="t('logs.clientRequestId')">{{ detail.client_request_id }}</el-descriptions-item>
+            <el-descriptions-item :label="t('logs.usageSource')">{{ detail.usage_source }}</el-descriptions-item>
+            <el-descriptions-item v-if="auth.isPlatformAdmin" :label="t('logs.upstreamCost')">\${{ Number(detail.upstream_cost || 0).toFixed(6) }}</el-descriptions-item>
             <el-descriptions-item :label="t('logs.key')">{{ detail.api_key_name }} (#{{ detail.api_key_id }})</el-descriptions-item>
             <el-descriptions-item :label="t('logs.channel')">{{ detail.channel_name }}</el-descriptions-item>
             <el-descriptions-item :label="t('common.model')">{{ detail.model_requested }} &rarr; {{ detail.model_actual }}</el-descriptions-item>
@@ -295,7 +298,7 @@ const costLines = computed(() => {
       key,
       units: units[key].toLocaleString(),
       price: (key === 'request' ? `$${cd.prices.request}` : `$${cd.prices[key]}/1M`) + (cd.time_rule ? ` ×${cd.time_rule.multiplier}` : ''),
-      amount: cd.lines[key] as number,
+      amount: Number(cd.lines[key]),
     }))
 })
 const auditVisible = ref(false)
@@ -396,7 +399,7 @@ async function cleanupLogs() {
 }
 
 onMounted(async () => {
-  if (auth.hasPermission('setting:read')) {
+  if (auth.isPlatformAdmin) {
     try {
       retentionDays.value = (await settingsApi.get()).log_retention_days
     } catch {

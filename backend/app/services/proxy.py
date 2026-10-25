@@ -4,6 +4,8 @@
 """
 
 import json
+import asyncio
+from datetime import datetime, timezone
 import logging
 import time
 from collections.abc import AsyncIterator, Callable
@@ -15,7 +17,7 @@ import httpx
 from fastapi import HTTPException
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
-from app.models import APIKey, Channel
+from app.models import APIKey, Channel, Settlement
 from app.providers.base import BaseProvider, forwardable_headers
 from app.services import alerts
 from app.services.channel_health import record_failure, record_rate_limit, record_success
@@ -36,11 +38,16 @@ from app.services.error_detail import (
     describe_upstream_failure,
     gateway_failure,
     upstream_json_error,
+    outcome_uncertain,
 )
 from app.services.key_pool import KEY_STATUSES, retry_after_seconds
 from app.services.logging_service import save_request_log
 from app.services.pricing import cost_breakdown, count_text_tokens
-from app.services.quota import RequestLease, deduct_quota
+from app.services.quota import RequestLease
+from app.services import settlements
+from app.services.billing_quotes import quote_cost, selling_quote
+from app.services.redaction import redact
+from app.services.request_context import client_request_id
 from app.services.sticky_session import bind_sticky_channel
 
 logger = logging.getLogger(__name__)
@@ -68,6 +75,8 @@ def extract_openai_usage(data: dict) -> dict:
     usage = data.get("usage") or {}
     prompt_details = usage.get("prompt_tokens_details") or {}
     return {
+        "reported_prompt": "prompt_tokens" in usage,
+        "reported_completion": "completion_tokens" in usage,
         "prompt_tokens": usage.get("prompt_tokens", 0),
         "completion_tokens": usage.get("completion_tokens", 0),
         # OpenAI-compatible providers expose cache usage under either the
@@ -257,76 +266,79 @@ async def _bill_and_log(
     budget: RequestLease | None = None,
     request_units: int = 0,
     session_id: str = "",
+    usage_source: str = "upstream",
+    uncertain: bool = False,
 ):
-    """计费 + 扣费 + 写日志。"""
     latency_ms = int((time.monotonic() - start_time) * 1000)
-    cost = Decimal(0)
-    cache_savings = Decimal(0)
-    cost_detail = None
-    try:
-        if (
-            prompt_tokens > 0 or completion_tokens > 0 or cached_tokens > 0
-            or cache_write_tokens > 0 or request_units > 0
-        ):
-            breakdown = await cost_breakdown(
-                model_actual, prompt_tokens, completion_tokens, channel,
-                cached_tokens=cached_tokens,
-                cache_write_tokens=cache_write_tokens,
-                request_units=request_units,
+    payload = dict(
+        request_id=request_id, client_request_id=client_request_id.get(),
+        api_key_id=api_key.id, api_key_name=api_key.name, tenant_id=api_key.tenant_id,
+        channel_id=channel.id if channel else None, channel_name=channel.name if channel else "",
+        model_requested=model_requested, model_actual=model_actual, provider=channel.provider if channel else "",
+        endpoint=endpoint, prompt_tokens=prompt_tokens, completion_tokens=completion_tokens,
+        cached_tokens=cached_tokens, cache_write_tokens=cache_write_tokens,
+        is_stream=is_stream, status_code=status_code, latency_ms=latency_ms,
+        error_message=error_message, error_origin=error_origin, upstream_status_code=upstream_status_code,
+        upstream_error=upstream_error, ip_address=ip, failed_over=failed_over,
+        audit_request=audit.request_text if audit else "", security_hit=security_hit,
+        session_id=session_id, usage_source=usage_source,
+        observed_at=datetime.now(timezone.utc).isoformat(), cost="0", upstream_cost="0", cache_savings="0",
+    )
+    payload = redact(payload)
+    if uncertain and budget is not None:
+        try:
+            await Settlement.filter(request_id=request_id, state="reserved").update(
+                state="uncertain", payload={**payload, "usage_source": "unknown"},
+                last_error="Upstream outcome unknown; manual reconciliation required",
             )
-            cost = breakdown["cost"]
-            cache_savings = breakdown["cache_savings"]
-            cost_detail = breakdown["detail"]
-    except Exception:
-        logger.exception("billing failed for request %s", request_id)
+        finally:
+            await budget.finish(budget.estimated_tokens)
+        return
+    has_usage = any((prompt_tokens, completion_tokens, cached_tokens, cache_write_tokens, request_units))
+    if budget is None and not has_usage:
+        await save_request_log(**payload)
+        return
+    cost = Decimal(0)
+    price_error = ""
     try:
+        snapshots = budget.quotes if budget is not None else {}
+        selected = snapshots.get(f"{channel.id}:{model_actual}") if channel else None
+        selected = selected or snapshots.get("default")
+        if selected is None:
+            if budget is not None:
+                raise ValueError("Missing immutable price snapshot")
+            selling = await selling_quote(model_actual, model_requested)
+            selected = {"selling": selling, "upstream": selling}
+        customer = quote_cost(selected["selling"], prompt_tokens, completion_tokens, cached_tokens,
+                              cache_write_tokens, request_units)
+        upstream = quote_cost(selected["upstream"] or selected["selling"], prompt_tokens, completion_tokens,
+                              cached_tokens, cache_write_tokens, request_units)
+        cost = customer["cost"]
+        payload.update(cost=str(cost), upstream_cost=str(upstream["cost"]),
+                       cache_savings=str(customer["cache_savings"]),
+                       cost_detail={**customer["detail"], "upstream": upstream["detail"], "usage_source": usage_source})
+    except Exception as exc:
+        cost = None
+        price_error = type(exc).__name__
+        logger.error("Billing requires review request_id=%s error=%s", request_id, price_error)
+    try:
+        if budget is None:
+            # Internal callers that already reached the upstream still get a durable accounting record.
+            await Settlement.get_or_create(request_id=request_id, defaults={
+                "tenant_id": api_key.tenant_id, "api_key_id": api_key.id,
+                "occupied": cost or Decimal(0), "owner_id": settlements.OWNER_ID,
+            })
+        await settlements.persist_usage(request_id, payload, cost, price_error)
+        try:
+            await settlements.apply(request_id)
+        except Exception as exc:
+            await settlements.note_failure(request_id, exc)
+        await _quiet(alerts.record_outcome(status_code), "outcome observation")
+        if cost and cost > 0:
+            await _quiet(alerts.check_budget(api_key.id), "budget alert")
+    finally:
         if budget is not None:
-            await budget.settle(cost, prompt_tokens + completion_tokens)
-        elif cost > 0:
-            await deduct_quota(api_key.id, cost)
-    except Exception:
-        logger.exception("budget settle failed for request %s", request_id)
-    try:
-        await alerts.record_outcome(status_code)
-        if cost > 0:
-            await alerts.check_budget(api_key.id)
-    except Exception:
-        logger.exception("alert check failed for request %s", request_id)
-
-    try:
-        await save_request_log(
-            request_id=request_id,
-            api_key_id=api_key.id,
-            api_key_name=api_key.name,
-            channel_id=channel.id if channel else None,
-            channel_name=channel.name if channel else "",
-            model_requested=model_requested,
-            model_actual=model_actual,
-            provider=channel.provider if channel else "",
-            endpoint=endpoint,
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-            cached_tokens=cached_tokens,
-            cache_write_tokens=cache_write_tokens,
-            cost=cost,
-            is_stream=is_stream,
-            status_code=status_code,
-            latency_ms=latency_ms,
-            error_message=error_message,
-            error_origin=error_origin,
-            upstream_status_code=upstream_status_code,
-            upstream_error=upstream_error,
-            ip_address=ip,
-            failed_over=failed_over,
-            audit_request=audit.request_text if audit else "",
-            security_hit=security_hit,
-            team_id=budget.team_id if budget is not None else (api_key.team_id or 0),
-            session_id=session_id,
-            cache_savings=cache_savings,
-            cost_detail=cost_detail,
-        )
-    except Exception:
-        logger.exception("request logging failed for request %s", request_id)
+            await budget.finish(max(0, prompt_tokens + completion_tokens))
 
 
 async def log_rejected_request(
@@ -386,9 +398,13 @@ async def execute_with_failover(
                     attempt_start = time.monotonic()
                     await begin_attempt(channel.id)
                     try:
+                        if budget is not None:
+                            await budget.before_send()
                         response, usage = await send_fn(provider, channel)
                         await record_latency(channel.id, (time.monotonic() - attempt_start) * 1000)
                         break
+                    except HTTPException:
+                        raise
                     except Exception as exc:
                         if await _try_next_key(provider, exc, rotations):
                             rotations += 1
@@ -411,6 +427,29 @@ async def execute_with_failover(
                 cached_tokens = usage.get("cached_tokens", 0)
                 cache_write_tokens = usage.get("cache_write_tokens", 0)
                 request_units = usage.get("request_units", 0)
+                reported_prompt = usage.get("reported_prompt", "prompt_tokens" in usage)
+                reported_output = usage.get("reported_completion", "completion_tokens" in usage)
+                provenance = usage.get("usage_source", "upstream")
+                if budget is not None:
+                    if not reported_prompt:
+                        prompt_tokens = budget.estimated_input
+                    if not reported_output:
+                        generated = response
+                        if isinstance(response, Response):
+                            try:
+                                generated = json.loads(response.body)
+                            except (ValueError, AttributeError):
+                                generated = {}
+                        if isinstance(generated, dict):
+                            pieces = []
+                            for choice in generated.get("choices") or []:
+                                message = choice.get("message") or {}
+                                pieces.extend([message.get("content"), message.get("reasoning_content"),
+                                               message.get("tool_calls"), choice.get("text")])
+                            pieces.extend(generated.get("output") or [])
+                            completion_tokens = count_text_tokens(pieces)
+                    if not (reported_prompt and reported_output):
+                        provenance = "mixed" if reported_prompt or reported_output else "estimated"
 
                 hits = security_hits if security_hits is not None else []
                 for label in await collect_response_hits(response, exempt=security_exempt(api_key)):
@@ -425,7 +464,7 @@ async def execute_with_failover(
                     security_hit=format_hits(hits),
                     budget=budget,
                     session_id=session_id,
-                    request_units=request_units,
+                    request_units=request_units, usage_source=provenance,
                 )
                 await _quiet(record_success(channel.id), "health reset")
                 await _quiet(bind_sticky_channel(session_key, channel.id), "sticky binding")
@@ -448,6 +487,7 @@ async def execute_with_failover(
                     audit=audit,
                     security_hit=format_hits(security_hits),
                     budget=budget,
+                    uncertain=outcome_uncertain(e),
                     session_id=session_id,
                     **failure,
                 )
@@ -507,11 +547,14 @@ async def stream_with_failover(
     provider: BaseProvider | None = None
     model_actual = model_requested
     data_yielded = False
+    completed = False
+    reported_prompt = reported_output = False
     failed_over = False
     hits = security_hits if security_hits is not None else []
     scanner = await open_response_scanner(exempt=security_exempt(api_key))
     meter = _OutputMeter()
     active_channel_id: int | None = None
+    uncertain = False
 
     try:
         last_error: Exception | None = None
@@ -528,6 +571,8 @@ async def stream_with_failover(
                     await begin_attempt(ch.id)
                     active_channel_id = ch.id
                     try:
+                        if budget is not None:
+                            await budget.before_send()
                         async for line, usage in stream_fn(prov, ch):
                             if not data_yielded:
                                 channel = ch
@@ -538,15 +583,21 @@ async def stream_with_failover(
                                 if upstream_headers is not None:
                                     upstream_headers.update(_provider_headers(prov))
                             if usage:
-                                prompt_tokens = usage.get("prompt_tokens", prompt_tokens)
-                                completion_tokens = usage.get("completion_tokens", completion_tokens)
-                                cached_tokens = usage.get("cached_tokens", cached_tokens)
-                                cache_write_tokens = usage.get("cache_write_tokens", cache_write_tokens)
+                                reported_prompt = reported_prompt or usage.get("reported_prompt", "prompt_tokens" in usage)
+                                reported_output = reported_output or usage.get("reported_completion", "completion_tokens" in usage)
+                                if usage.get("reported_prompt", "prompt_tokens" in usage):
+                                    prompt_tokens = usage.get("prompt_tokens", prompt_tokens)
+                                    cached_tokens = usage.get("cached_tokens", cached_tokens)
+                                    cache_write_tokens = usage.get("cache_write_tokens", cache_write_tokens)
+                                if usage.get("reported_completion", "completion_tokens" in usage):
+                                    completion_tokens = usage.get("completion_tokens", completion_tokens)
                             meter.feed(sse_billable_text(line))
                             if scanner is not None:
                                 remember_hit(hits, scanner.feed(visible_sse_text(line)))
                             yield line
                         break
+                    except HTTPException:
+                        raise
                     except Exception as exc:
                         last_error = exc
                         if not data_yielded and await _try_next_key(prov, exc, rotations):
@@ -579,9 +630,15 @@ async def stream_with_failover(
 
         if last_error is not None:
             raise last_error
+        completed = True
 
     except Exception as e:
+        if isinstance(e, HTTPException):
+            status_code = e.status_code
+            error_msg, error_origin = "Accounting unavailable before upstream dispatch", "gateway"
+            raise
         status_code = client_status(e)
+        uncertain = not data_yielded and outcome_uncertain(e)
         if channel is not None:
             failure = describe_upstream_failure(e, channel.base_url)
         else:
@@ -592,6 +649,11 @@ async def stream_with_failover(
         upstream_error = failure["upstream_error"]
         if upstream_headers is not None and not data_yielded and isinstance(e, httpx.HTTPStatusError):
             upstream_headers.update(forwardable_headers(e.response))
+        if not data_yielded:
+            passed = upstream_json_error(e)
+            detail = passed[1] if passed else {"error": {"type": "api_error", "message": client_message(e), "code": "upstream_error"}}
+            raise HTTPException(status_code=status_code, detail=detail,
+                                headers=forwardable_headers(e.response) if isinstance(e, httpx.HTTPStatusError) else {})
         yield format_error_event(e)
     finally:
         # A client disconnect cancels this generator mid-await, and anyio then
@@ -605,9 +667,11 @@ async def stream_with_failover(
             )
             # A client disconnect or a missing usage event would bill nothing.
             # Fall back to what was actually forwarded.
-            if data_yielded and completion_tokens == 0:
+            if not completed and status_code == 200:
+                status_code, error_origin, error_msg = 499, "client", "Client disconnected"
+            if data_yielded and not reported_output:
                 completion_tokens = meter.tokens
-            if data_yielded and prompt_tokens == 0 and budget is not None:
+            if data_yielded and not reported_prompt and budget is not None:
                 prompt_tokens = budget.estimated_input
             await _bill_and_log(
                 model_actual, prompt_tokens, completion_tokens, cached_tokens, cache_write_tokens,
@@ -622,6 +686,8 @@ async def stream_with_failover(
                 security_hit=format_hits(hits),
                 budget=budget,
                 session_id=session_id,
+                usage_source="upstream" if reported_prompt and reported_output else "mixed" if reported_prompt or reported_output else "estimated",
+                uncertain=uncertain,
             )
             if budget is not None:
                 await _quiet(budget.release(), "budget release")

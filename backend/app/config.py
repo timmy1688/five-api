@@ -2,13 +2,16 @@ from typing import ClassVar
 
 from pydantic import field_validator
 from pydantic_settings import BaseSettings
+from urllib.parse import quote
 
 
 class Settings(BaseSettings):
-    # Only seeds the secret stored in the database (load_secret_key); normally unset.
+    # JWT signing and upstream encryption use separate external secrets.
     SECRET_KEY: str = ""
+    ENCRYPTION_KEY: str = ""
+    SECRETS_FILE: str = "../data/secrets.json"
     JWT_ALGORITHM: ClassVar[str] = "HS256"
-    JWT_EXPIRE_MINUTES: ClassVar[int] = 1440
+    JWT_EXPIRE_MINUTES: int = 60
 
     MYSQL_HOST: str = "127.0.0.1"
     MYSQL_PORT: int = 3306
@@ -24,11 +27,12 @@ class Settings(BaseSettings):
     CHANNEL_HEALTH_THRESHOLD: int = 3
     CHANNEL_HEALTH_CHECK_INTERVAL: int = 60
     LOG_RETENTION_DAYS: int = 90
+    ALLOW_INSECURE_UPSTREAMS: bool = False
 
     STICKY_SESSION_ENABLED: bool = True
     STICKY_SESSION_TTL: int = 900
 
-    @field_validator("SECRET_KEY")
+    @field_validator("SECRET_KEY", "ENCRYPTION_KEY")
     @classmethod
     def _long_secret(cls, value: str) -> str:
         value = value.strip()
@@ -39,8 +43,8 @@ class Settings(BaseSettings):
     @property
     def database_url(self) -> str:
         return (
-            f"mysql://{self.MYSQL_USER}:{self.MYSQL_PASSWORD}"
-            f"@{self.MYSQL_HOST}:{self.MYSQL_PORT}/{self.MYSQL_DATABASE}"
+            f"mysql://{quote(self.MYSQL_USER, safe='')}:{quote(self.MYSQL_PASSWORD, safe='')}"
+            f"@{self.MYSQL_HOST}:{self.MYSQL_PORT}/{quote(self.MYSQL_DATABASE, safe='')}"
         )
 
     model_config = {

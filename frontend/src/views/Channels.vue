@@ -5,7 +5,7 @@
         <h3>{{ t('nav.channels') }}</h3>
         <p>{{ t('channels.subtitle') }}</p>
       </div>
-      <el-button v-if="auth.hasPermission('channel:write')" type="primary" @click="openCreate">{{ t('channels.add') }}</el-button>
+      <el-button v-if="auth.isPlatformAdmin" type="primary" @click="openCreate">{{ t('channels.add') }}</el-button>
     </div>
 
     <div class="channel-summary">
@@ -55,10 +55,10 @@
         <el-table-column prop="weight" :label="t('channels.weight')" width="72" align="center" />
         <el-table-column :label="t('common.enabled')" width="76" align="center">
           <template #default="{ row }">
-            <el-switch v-model="row.is_enabled" :disabled="!auth.hasPermission('channel:write')" @change="toggleEnabled(row)" />
+            <el-switch v-model="row.is_enabled" :disabled="!auth.isPlatformAdmin" @change="toggleEnabled(row)" />
           </template>
         </el-table-column>
-        <el-table-column v-if="auth.hasPermission('channel:write')" :label="t('common.actions')" width="220" fixed="right">
+        <el-table-column v-if="auth.isPlatformAdmin" :label="t('common.actions')" width="220" fixed="right">
           <template #default="{ row }">
             <el-button text type="primary" size="small" @click="openEdit(row)">{{ t('common.edit') }}</el-button>
             <el-button text type="success" size="small" :loading="testingId === row.id" @click="testChannel(row)">{{ t('channels.test') }}</el-button>
@@ -179,6 +179,10 @@
         </el-form-item>
         </div>
 
+        <el-form-item :label="t('channels.costMultiplier')">
+          <el-input-number v-model="form.cost_multiplier" :min="0" :max="100" :precision="4" :step="0.1" />
+          <div class="form-hint">{{ t('channels.costMultiplierHint') }}</div>
+        </el-form-item>
         <el-form-item :label="t('channels.pricing')">
           <div class="form-hint" style="margin-bottom: 8px">
             {{ t('channels.pricingHint') }}
@@ -263,7 +267,7 @@ const emptyForm = () => ({
   name: '', provider: 'openai', base_url: '', api_key: '',
   models: [] as string[], model_mapping: {} as Record<string, string>,
   model_pricing: {} as Record<string, { prompt: number; completion: number; cached: number; cache_write?: number; request?: number }>,
-  priority: 0, weight: 1, timeout: 120, max_retries: 1,
+  priority: 0, weight: 1, timeout: 120, max_retries: 1, cost_multiplier: 1,
 })
 const form = ref(emptyForm())
 const enabledCount = computed(() => channels.value.filter(channel => channel.is_enabled).length)

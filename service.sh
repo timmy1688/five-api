@@ -10,7 +10,7 @@ SERVICES=(backend frontend)
 
 install_deps() {
     command -v python3 >/dev/null 2>&1 || {
-        echo "ERROR: 未找到 python3（需要 Python 3.11+）" >&2
+        echo "ERROR: 未找到 python3（需要 Python 3.12+）" >&2
         exit 1
     }
     command -v npm >/dev/null 2>&1 || {
@@ -26,11 +26,11 @@ install_deps() {
     echo "==> Installing backend dependencies..."
     (
         cd backend
-        ../.venv/bin/python -m pip install -r requirements.txt
+        ../.venv/bin/python -m pip install -i https://mirrors.aliyun.com/pypi/simple --require-hashes -r requirements-dev.lock
     )
 
     echo "==> Installing frontend dependencies..."
-    npm --prefix frontend install
+    npm --prefix frontend ci --registry=https://registry.npmmirror.com --no-audit
 
     echo "==> Dependencies installed."
 }
@@ -42,8 +42,33 @@ check_deps() {
     fi
 }
 
+stop_apps() {
+    # Stop backend & frontend
+    for svc in "${SERVICES[@]}"; do
+        pid_file="$PID_DIR/$svc.pid"
+        if [ -f "$pid_file" ]; then
+            pid=$(cat "$pid_file")
+            if kill -0 "$pid" 2>/dev/null; then
+                echo "==> Stopping $svc (pid $pid)..."
+                # Kill the entire process group so uvicorn worker children also die
+                pgid=$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d ' ')
+                if [ -n "$pgid" ] && [ "$pgid" != "0" ]; then
+                    kill -- "-$pgid" 2>/dev/null || kill "$pid" 2>/dev/null || true
+                else
+                    kill "$pid" 2>/dev/null || true
+                fi
+            fi
+            rm -f "$pid_file"
+        fi
+    done
+
+}
+
 start() {
     check_deps
+    stop_apps
+    export NO_PROXY="${NO_PROXY:-${no_proxy:-}},127.0.0.1,localhost,::1"
+    export no_proxy="$NO_PROXY"
     mkdir -p data/mysql data/redis "$PID_DIR" "$LOG_DIR"
 
     # 1. MySQL + Redis
@@ -65,7 +90,7 @@ start() {
     cd backend
     echo "==> Applying database migrations..."
     ../.venv/bin/aerich upgrade
-    nohup ../.venv/bin/uvicorn app.main:app --reload --host 0.0.0.0 --port "${BACKEND_PORT}" > "../${LOG_DIR}/backend.log" 2>&1 &
+    nohup setsid ../.venv/bin/uvicorn app.main:app --reload --host 0.0.0.0 --port "${BACKEND_PORT}" < /dev/null > "../${LOG_DIR}/backend.log" 2>&1 &
     echo $! > "../${PID_DIR}/backend.pid"
     cd ..
 
@@ -74,13 +99,13 @@ start() {
     fuser -k "${FRONTEND_PORT}/tcp" 2>/dev/null || true
     sleep 0.5
     cd frontend
-    nohup ./node_modules/.bin/vite --port "${FRONTEND_PORT}" --host 0.0.0.0 --strictPort > "../${LOG_DIR}/frontend.log" 2>&1 &
+    nohup setsid ./node_modules/.bin/vite --port "${FRONTEND_PORT}" --host 0.0.0.0 --strictPort < /dev/null > "../${LOG_DIR}/frontend.log" 2>&1 &
     echo $! > "../${PID_DIR}/frontend.pid"
     cd ..
 
     sleep 3
-    if ! curl -fsS --max-time 2 "http://127.0.0.1:${BACKEND_PORT}/docs" >/dev/null ||
-       ! curl -fsS --max-time 2 "http://127.0.0.1:${FRONTEND_PORT}" >/dev/null; then
+    if ! curl -fsS --noproxy '*' --max-time 2 "http://127.0.0.1:${BACKEND_PORT}/docs" >/dev/null ||
+       ! curl -fsS --noproxy '*' --max-time 2 "http://127.0.0.1:${FRONTEND_PORT}" >/dev/null; then
         echo "ERROR: 服务启动后未通过访问检查，请查看 ./service.sh logs" >&2
         exit 1
     fi
@@ -92,24 +117,7 @@ start() {
 }
 
 stop() {
-    # Stop backend & frontend
-    for svc in "${SERVICES[@]}"; do
-        pid_file="$PID_DIR/$svc.pid"
-        if [ -f "$pid_file" ]; then
-            pid=$(cat "$pid_file")
-            if kill -0 "$pid" 2>/dev/null; then
-                echo "==> Stopping $svc (pid $pid)..."
-                # Kill the entire process group so uvicorn worker children also die
-                pgid=$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d ' ')
-                if [ -n "$pgid" ] && [ "$pgid" != "0" ]; then
-                    kill -- "-$pgid" 2>/dev/null || kill "$pid" 2>/dev/null || true
-                else
-                    kill "$pid" 2>/dev/null || true
-                fi
-            fi
-            rm -f "$pid_file"
-        fi
-    done
+    stop_apps
 
     # Stop MySQL & Redis (use `stop` not `down`: older compose rejects service args to `down`)
     echo "==> Stopping MySQL & Redis..."
@@ -132,7 +140,7 @@ status() {
         pid_file="$PID_DIR/$svc.pid"
         if [ -f "$pid_file" ] &&
            kill -0 "$(cat "$pid_file")" 2>/dev/null &&
-           curl -fsS --max-time 2 "http://127.0.0.1:${ports[$index]}${paths[$index]}" >/dev/null; then
+           curl -fsS --noproxy '*' --max-time 2 "http://127.0.0.1:${ports[$index]}${paths[$index]}" >/dev/null; then
             echo "  $svc: running (pid $(cat "$pid_file"))"
         else
             echo "  $svc: stopped"

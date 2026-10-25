@@ -1,3 +1,4 @@
+from tests.conftest import create_test_tenant
 import asyncio
 from decimal import Decimal
 from datetime import datetime, timezone, timedelta
@@ -24,8 +25,6 @@ from app.services.quota import (
     QuotaExceeded,
     check_quota,
     deduct_quota,
-    release_quota,
-    reserve_quota,
     reset_expired_quotas,
 )
 from app.services.rate_limit import TPMExceeded, rate_limiter
@@ -173,6 +172,8 @@ async def test_extract_deepseek_cache_usage():
         }
     })
     assert usage == {
+        "reported_prompt": True,
+        "reported_completion": True,
         "prompt_tokens": 120,
         "completion_tokens": 10,
         "cached_tokens": 80,
@@ -330,6 +331,8 @@ async def test_anthropic_stream_usage_keeps_cache_read_and_write():
     async for _line, usage in _passthrough_stream_with_usage(_Stream(), {}, None):
         last = usage
     assert last == {
+        "reported_prompt": True,
+        "reported_completion": True,
         "prompt_tokens": 1000,
         "completion_tokens": 40,
         "cached_tokens": 200,
@@ -382,7 +385,7 @@ async def test_concurrency_uses_request_specific_leases():
 # ── quota ───────────────────────────────────────────────────
 
 async def test_check_quota_unlimited():
-    k = await APIKey.create(
+    k = await APIKey.create(tenant_id=(await create_test_tenant()).id,
         name="unlim", key_hash=hash_api_key("sk-unlim"), key_prefix="sk-unlim",
         quota_total=Decimal("-1"), quota_used=Decimal("999"),
     )
@@ -390,7 +393,7 @@ async def test_check_quota_unlimited():
 
 
 async def test_check_quota_within_limit():
-    k = await APIKey.create(
+    k = await APIKey.create(tenant_id=(await create_test_tenant()).id,
         name="within", key_hash=hash_api_key("sk-within"), key_prefix="sk-withi",
         quota_total=Decimal("10"), quota_used=Decimal("5"),
     )
@@ -398,7 +401,7 @@ async def test_check_quota_within_limit():
 
 
 async def test_check_quota_exceeded():
-    k = await APIKey.create(
+    k = await APIKey.create(tenant_id=(await create_test_tenant()).id,
         name="over", key_hash=hash_api_key("sk-over"), key_prefix="sk-over0",
         quota_total=Decimal("10"), quota_used=Decimal("10"),
     )
@@ -406,15 +409,16 @@ async def test_check_quota_exceeded():
 
 
 async def test_quota_hold_blocks_a_second_reservation():
-    k = await APIKey.create(
+    k = await APIKey.create(tenant_id=(await create_test_tenant()).id,
         name="hold", key_hash=hash_api_key("sk-hold"), key_prefix="sk-hold0",
         quota_total=Decimal("1"), quota_used=Decimal("0.40"),
     )
-    assert await reserve_quota(k, "req-a", Decimal("0.60")) is True
-    with pytest.raises(QuotaExceeded):
-        await reserve_quota(k, "req-b", Decimal("0.20"))
-    await release_quota(k.id, "req-a")
-    assert await reserve_quota(k, "req-b", Decimal("0.20")) is True
+    from app.services import settlements
+    await settlements.reserve("req-a", k, Decimal("0.60"), {})
+    with pytest.raises(settlements.BudgetDenied):
+        await settlements.reserve("req-b", k, Decimal("0.20"), {})
+    await settlements.release("req-a")
+    await settlements.reserve("req-b", k, Decimal("0.20"), {})
 
 
 async def test_tpm_reservation_rejects_and_refunds():
@@ -426,7 +430,7 @@ async def test_tpm_reservation_rejects_and_refunds():
 
 
 async def test_deduct_quota():
-    k = await APIKey.create(
+    k = await APIKey.create(tenant_id=(await create_test_tenant()).id,
         name="deduct", key_hash=hash_api_key("sk-deduct"), key_prefix="sk-deduc",
         quota_total=Decimal("10"), quota_used=Decimal("0"),
     )
@@ -436,7 +440,7 @@ async def test_deduct_quota():
 
 
 async def test_deduct_quota_zero_cost():
-    k = await APIKey.create(
+    k = await APIKey.create(tenant_id=(await create_test_tenant()).id,
         name="zero", key_hash=hash_api_key("sk-zero-d"), key_prefix="sk-zero-",
         quota_total=Decimal("10"), quota_used=Decimal("3"),
     )
@@ -446,7 +450,7 @@ async def test_deduct_quota_zero_cost():
 
 
 async def test_concurrent_quota_deductions_are_not_lost():
-    k = await APIKey.create(
+    k = await APIKey.create(tenant_id=(await create_test_tenant()).id,
         name="parallel-deduct",
         key_hash=hash_api_key("sk-parallel-deduct"),
         key_prefix="sk-paral",
@@ -465,7 +469,7 @@ async def test_concurrent_quota_deductions_are_not_lost():
 
 async def test_reset_expired_quotas_resets_on_day():
     now = datetime.now(timezone.utc)
-    k = await APIKey.create(
+    k = await APIKey.create(tenant_id=(await create_test_tenant()).id,
         name="reset-test", key_hash=hash_api_key("sk-reset1"), key_prefix="sk-reset",
         quota_total=Decimal("100"), quota_used=Decimal("50"),
         quota_reset_day=now.day,
@@ -482,7 +486,7 @@ async def test_reset_expired_quotas_skips_future_day():
     future_day = 28 if now.day < 28 else 1
     if future_day <= now.day:
         pytest.skip("Cannot create a future day in current month")
-    k = await APIKey.create(
+    k = await APIKey.create(tenant_id=(await create_test_tenant()).id,
         name="no-reset", key_hash=hash_api_key("sk-nores1"), key_prefix="sk-nores",
         quota_total=Decimal("100"), quota_used=Decimal("50"),
         quota_reset_day=future_day,
@@ -494,7 +498,7 @@ async def test_reset_expired_quotas_skips_future_day():
 
 async def test_reset_expired_quotas_skips_already_reset():
     now = datetime.now(timezone.utc)
-    k = await APIKey.create(
+    k = await APIKey.create(tenant_id=(await create_test_tenant()).id,
         name="already", key_hash=hash_api_key("sk-alrdy1"), key_prefix="sk-alrdy",
         quota_total=Decimal("100"), quota_used=Decimal("50"),
         quota_reset_day=now.day,
@@ -506,7 +510,7 @@ async def test_reset_expired_quotas_skips_already_reset():
 
 
 async def test_reset_expired_quotas_no_reset_day():
-    k = await APIKey.create(
+    k = await APIKey.create(tenant_id=(await create_test_tenant()).id,
         name="no-day", key_hash=hash_api_key("sk-noday1"), key_prefix="sk-noday",
         quota_total=Decimal("100"), quota_used=Decimal("50"),
     )
@@ -547,7 +551,7 @@ async def test_gateway_settings_change_sticky_sessions_and_health():
 
 
 async def test_reset_day_31_uses_last_day_of_short_month():
-    k = await APIKey.create(
+    k = await APIKey.create(tenant_id=(await create_test_tenant()).id,
         name="month-end",
         key_hash=hash_api_key("sk-month-end"),
         key_prefix="sk-month",

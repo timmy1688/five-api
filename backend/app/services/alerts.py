@@ -148,6 +148,8 @@ async def save_config(body: dict) -> dict:
 
 
 def build_request(hook: dict, event: str, title: str, text: str, data: dict) -> tuple[str, dict]:
+    from app.services.redaction import redact
+    title, text, data = redact(title), redact(text), redact(data)
     url = decrypt_secret(hook["url"])
     secret = decrypt_secret(hook["secret"]) if hook["secret"] else ""
     content = f"{title}\n{text}"

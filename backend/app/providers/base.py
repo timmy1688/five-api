@@ -8,7 +8,8 @@ _http_clients: dict[tuple[str, int], httpx.AsyncClient] = {}
 
 
 def _shared_http_client(channel: Channel) -> httpx.AsyncClient:
-    base_url = channel.base_url.rstrip("/")
+    from app.utils.upstream_security import validate_upstream_base_url
+    base_url = validate_upstream_base_url(channel.base_url)
     key = (base_url, channel.timeout)
     client = _http_clients.get(key)
     if client is None or client.is_closed:
@@ -112,6 +113,9 @@ class BaseProvider:
         # Set when this channel serves a fallback model instead of the requested one.
         self.model_override: str | None = None
         self.keys = channel_keys(channel.api_key)
+        from app.services.request_context import remember_credential
+        for key in self.keys:
+            remember_credential(key)
         self.api_key = self.keys[0] if self.keys else ""
         self.client = _shared_http_client(channel)
         self.response_headers: dict[str, str] = {}

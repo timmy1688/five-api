@@ -1,109 +1,77 @@
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query
+from tortoise.exceptions import IntegrityError
+from tortoise.expressions import F
+from tortoise.transactions import in_transaction
 
-from app.models import User, Role
+from app.models import User
 from app.schemas.user import UserCreate, UserInfo, UserUpdate
-from app.services.auth import hash_password, require_permission
+from app.services.auth import PLATFORM_ADMIN, hash_password, require_platform_admin
+from app.services.management_events import record_event
 
-router = APIRouter(prefix="/api/users", tags=["users"])
-
-
-async def _is_last_active_super_admin(admin: User) -> bool:
-    return (
-        admin.is_active
-        and admin.role
-        and admin.role.name == "Super Admin"
-        and await User.filter(role_id=admin.role_id, is_active=True).count() <= 1
-    )
+router = APIRouter(prefix="/api/users", tags=["platform accounts"])
 
 
-def _to_response(a: User) -> UserInfo:
-    return UserInfo(
-        id=a.id,
-        username=a.username,
-        role_id=a.role_id,
-        role_name=a.role.name if a.role else "",
-        permissions=a.role.permissions if a.role else [],
-        is_active=a.is_active,
-        created_at=a.created_at,
-    )
+def user_info(user: User) -> UserInfo:
+    return UserInfo.model_validate(user, from_attributes=True)
 
 
 @router.get("")
-async def list_admins(
-    page: int = Query(1, ge=1),
-    size: int = Query(20, ge=1, le=100),
-    _: User = require_permission("user:read"),
-):
-    total = await User.all().count()
-    admins = await User.all().select_related("role").order_by("-id").offset((page - 1) * size).limit(size)
-    return {"total": total, "items": [_to_response(a) for a in admins]}
+async def list_admins(page: int = Query(1, ge=1), size: int = Query(20, ge=1, le=100),
+                      _: User = Depends(require_platform_admin)):
+    query = User.filter(role=PLATFORM_ADMIN)
+    users = await query.order_by("-id").offset((page - 1) * size).limit(size)
+    return {"total": await query.count(), "items": [user_info(u) for u in users]}
 
 
-@router.post("", response_model=UserInfo, status_code=status.HTTP_201_CREATED)
-async def create_admin(body: UserCreate, _: User = require_permission("user:write")):
-    if not await Role.exists(id=body.role_id):
-        raise HTTPException(status_code=404, detail="Role not found")
-    existing = await User.get_or_none(username=body.username)
-    if existing:
-        raise HTTPException(status_code=400, detail="Username already exists")
-    a = await User.create(
-        username=body.username,
-        hashed_password=hash_password(body.password),
-        role_id=body.role_id,
-    )
-    await a.fetch_related("role")
-    return _to_response(a)
+@router.post("", response_model=UserInfo, status_code=201)
+async def create_admin(body: UserCreate, actor: User = Depends(require_platform_admin)):
+    try:
+        async with in_transaction():
+            user = await User.create(username=body.username, hashed_password=hash_password(body.password),
+                                     role=PLATFORM_ADMIN, must_change_password=True)
+            await record_event(actor, "admin.create", user.id)
+    except IntegrityError:
+        raise HTTPException(409, "Username already exists")
+    return user_info(user)
 
 
 @router.put("/{admin_id}", response_model=UserInfo)
-async def update_admin(admin_id: int, body: UserUpdate, current: User = require_permission("user:write")):
-    a = await User.get_or_none(id=admin_id).select_related("role")
-    if a is None:
-        raise HTTPException(status_code=404, detail="Admin not found")
-    update_data = body.model_dump(exclude_unset=True)
-    if admin_id == current.id:
-        if "role_id" in update_data and update_data["role_id"] != current.role_id:
-            raise HTTPException(status_code=400, detail="Cannot change your own role")
-        if update_data.get("is_active") is False:
-            raise HTTPException(status_code=400, detail="Cannot disable yourself")
-    if "role_id" in update_data:
-        if update_data["role_id"] is None:
-            raise HTTPException(status_code=400, detail="role_id cannot be null")
-        if not await Role.exists(id=update_data["role_id"]):
-            raise HTTPException(status_code=404, detail="Role not found")
-    removes_super_admin = (
-        ("role_id" in update_data and update_data["role_id"] != a.role_id)
-        or update_data.get("is_active") is False
-    )
-    if removes_super_admin and await _is_last_active_super_admin(a):
-        raise HTTPException(
-            status_code=409,
-            detail="At least one active Super Admin is required",
-        )
-    if "password" in update_data:
-        pw = update_data.pop("password")
-        if pw:
-            update_data["hashed_password"] = hash_password(pw)
-            update_data["token_version"] = a.token_version + 1
-    if update_data.get("is_active") is False:
-        update_data["token_version"] = a.token_version + 1
-    if update_data:
-        await User.filter(id=admin_id).update(**update_data)
-        a = await User.get(id=admin_id).select_related("role")
-    return _to_response(a)
+async def update_admin(admin_id: int, body: UserUpdate, actor: User = Depends(require_platform_admin)):
+    async with in_transaction():
+        admins = await User.filter(role=PLATFORM_ADMIN).order_by("id").select_for_update()
+        user = next((u for u in admins if u.id == admin_id), None)
+        if user is None:
+            raise HTTPException(404, "Platform account not found")
+        data = body.model_dump(exclude_unset=True, exclude_none=True)
+        if data.get("is_active") is False:
+            if user.id == actor.id:
+                raise HTTPException(400, "Cannot disable yourself")
+            if user.is_active and sum(u.is_active for u in admins) <= 1:
+                raise HTTPException(409, "At least one active platform administrator is required")
+        password = data.pop("password", None)
+        if password:
+            data.update(hashed_password=hash_password(password), must_change_password=True)
+        if password or data.get("is_active") is False:
+            data["token_version"] = F("token_version") + 1
+        if data:
+            await User.filter(id=user.id).update(**data)
+            await record_event(actor, "admin.update", user.id, detail={"password_reset": bool(password),
+                                "is_active": data.get("is_active", user.is_active)})
+        await user.refresh_from_db()
+    return user_info(user)
 
 
 @router.delete("/{admin_id}")
-async def delete_admin(admin_id: int, current: User = require_permission("user:write")):
-    if admin_id == current.id:
-        raise HTTPException(status_code=400, detail="Cannot delete yourself")
-    admin = await User.get_or_none(id=admin_id).select_related("role")
-    if admin is None:
-        raise HTTPException(status_code=404, detail="Admin not found")
-    if await _is_last_active_super_admin(admin):
-        raise HTTPException(
-            status_code=409,
-            detail="At least one active Super Admin is required",
-        )
-    await admin.delete()
+async def delete_admin(admin_id: int, actor: User = Depends(require_platform_admin)):
+    if admin_id == actor.id:
+        raise HTTPException(400, "Cannot delete yourself")
+    async with in_transaction():
+        admins = await User.filter(role=PLATFORM_ADMIN).order_by("id").select_for_update()
+        user = next((u for u in admins if u.id == admin_id), None)
+        if user is None:
+            raise HTTPException(404, "Platform account not found")
+        if user.is_active and sum(u.is_active for u in admins) <= 1:
+            raise HTTPException(409, "At least one active platform administrator is required")
+        await user.delete()
+        await record_event(actor, "admin.delete", admin_id)
     return {"message": "Deleted"}

@@ -26,6 +26,7 @@ from app.services.error_detail import client_message, upstream_json_error
 from app.services.routing import plan_route
 from app.services.video_jobs import find_video, forget_video, remember_video, upstream_key_for
 from app.utils.ip_check import get_client_ip
+from app.services.unbilled_limits import guard_unbilled
 
 router = APIRouter(tags=["openai-proxy"])
 
@@ -76,6 +77,8 @@ def extract_responses_usage(data: dict) -> dict:
         return {}
     details = usage.get("input_tokens_details") or {}
     return {
+        "reported_prompt": "input_tokens" in usage,
+        "reported_completion": "output_tokens" in usage,
         "prompt_tokens": int(usage.get("input_tokens") or 0),
         "completion_tokens": int(usage.get("output_tokens") or 0),
         "cached_tokens": int(details.get("cached_tokens") or 0),
@@ -122,6 +125,7 @@ async def _proxy(
     error_event=_openai_error_event,
     default_output: int | None = None,
     request_units: int = 0,
+    input_tokens_override: int | None = None,
     channel_id: int | None = None,
 ):
     """所有 OpenAI 兼容端点共享的编排入口。channel_id 把候选限定为一条渠道。"""
@@ -152,12 +156,13 @@ async def _proxy(
     try:
         budget = await begin_request_budget(
             api_key, request_id, body_dict,
-            default_output=default_output, request_units=request_units,
+            default_output=default_output, request_units=request_units, candidates=plan.candidates,
+            input_tokens_override=input_tokens_override,
         )
         concurrency_lease_id = await concurrency_limiter.acquire(
             api_key.id, api_key.concurrent_limit
         )
-    except ConcurrencyExceeded:
+    except ConcurrencyExceeded as exc:
         if budget is not None:
             await budget.release()
         await log_rejected_request(
@@ -165,12 +170,12 @@ async def _proxy(
             start_time, ip, "Too many concurrent requests", audit=audit,
             security_hit=format_hits(security_hits),
         )
-        openai_error(429, "rate_limit_error", "concurrent_limit", "Too many concurrent requests")
+        openai_error(429, "rate_limit_error", "tenant_concurrent_limit" if exc.scope == "tenant" else "concurrent_limit", "Too many concurrent requests")
     except (QuotaExceeded, TPMExceeded) as exc:
         if isinstance(exc, QuotaExceeded):
             status, code, message = exc.status, exc.code, exc.message
         else:
-            status, code, message = 429, "tpm_limit", "Tokens per minute limit exceeded"
+            status, code, message = 429, "tenant_tpm_limit" if exc.scope == "tenant" else "tpm_limit", "Tokens per minute limit exceeded"
         await log_rejected_request(
             api_key, request_id, endpoint, model, status,
             start_time, ip, message, audit=audit,
@@ -216,7 +221,10 @@ async def _proxy_endpoint(request: Request, body, endpoint: str, api_key: APIKey
 
     async def _send_fn(provider, channel):
         result = await provider.send_request(body_dict, endpoint)
-        return result, extract_openai_usage(result)
+        usage = extract_openai_usage(result)
+        if endpoint == "/v1/embeddings":
+            usage["reported_completion"] = True
+        return result, usage
 
     async def _stream_fn(provider, channel):
         async for line in provider.send_stream(body_dict, endpoint):
@@ -382,11 +390,12 @@ async def audio_speech(request: Request, api_key: APIKey = Depends(verify_api_ke
 
     async def _send_fn(provider, channel):
         resp = await provider.send_raw(endpoint, json_body=body)
-        return _raw_response(resp), {"prompt_tokens": characters, "request_units": 1}
+        return _raw_response(resp), {"prompt_tokens": characters, "completion_tokens": 0,
+                                      "request_units": 1, "usage_source": "estimated"}
 
     return await _proxy(
         request, api_key, endpoint, str(body.get("model") or ""), body,
-        send_fn=_send_fn, default_output=0, request_units=1,
+        send_fn=_send_fn, default_output=0, request_units=1, input_tokens_override=characters,
     )
 
 
@@ -437,7 +446,12 @@ async def _owned_video(video_id: str, api_key: APIKey) -> dict:
     return job
 
 
-async def _video_upstream(job: dict, method: str, endpoint: str, params: dict | None = None) -> Response:
+async def _video_upstream(job: dict, api_key: APIKey, method: str, endpoint: str, params: dict | None = None) -> Response:
+    async with guard_unbilled(api_key):
+        return await _unbilled_video_upstream(job, method, endpoint, params)
+
+
+async def _unbilled_video_upstream(job: dict, method: str, endpoint: str, params=None):
     """Unbilled call on the job's channel and key: status, download, delete."""
     channel = await Channel.get_or_none(id=job["channel_id"])
     provider_cls = PROVIDER_MAP.get(channel.provider) if channel is not None else None
@@ -482,21 +496,21 @@ async def remix_video(video_id: str, request: Request, api_key: APIKey = Depends
 @router.get("/v1/videos/{video_id}")
 async def retrieve_video(video_id: str, api_key: APIKey = Depends(verify_api_key)):
     job = await _owned_video(video_id, api_key)
-    return await _video_upstream(job, "GET", f"/v1/videos/{video_id}")
+    return await _video_upstream(job, api_key, "GET", f"/v1/videos/{video_id}")
 
 
 @router.get("/v1/videos/{video_id}/content")
 async def download_video(video_id: str, request: Request, api_key: APIKey = Depends(verify_api_key)):
     job = await _owned_video(video_id, api_key)
-    return await _video_upstream(job, "GET", f"/v1/videos/{video_id}/content", dict(request.query_params))
+    return await _video_upstream(job, api_key, "GET", f"/v1/videos/{video_id}/content", dict(request.query_params))
 
 
 @router.delete("/v1/videos/{video_id}")
 async def delete_video(video_id: str, api_key: APIKey = Depends(verify_api_key)):
     job = await _owned_video(video_id, api_key)
-    response = await _video_upstream(job, "DELETE", f"/v1/videos/{video_id}")
+    response = await _video_upstream(job, api_key, "DELETE", f"/v1/videos/{video_id}")
     if response.status_code < 400:
-        await forget_video(video_id)
+        await forget_video(video_id, api_key.id)
     return response
 
 

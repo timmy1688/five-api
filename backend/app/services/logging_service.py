@@ -1,13 +1,16 @@
 import asyncio
 import logging
-from datetime import datetime, timedelta
+import json
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 from tortoise.transactions import in_transaction
 
 from app.models import RequestLog, RequestLogAudit
 from app.services.metrics import record_request_metrics
-from app.services.usage_stats import record_daily_usage
+from app.services.usage_stats import record_daily_usage, _record_minute
+from app.services.redaction import redact
+from app.services.request_context import client_request_id as correlation_id
 
 logger = logging.getLogger(__name__)
 
@@ -38,16 +41,29 @@ async def save_request_log(
     failed_over: bool = False,
     audit_request: str = "",
     security_hit: str = "",
-    team_id: int = 0,
+    tenant_id: int = 0,
     session_id: str = "",
     cache_savings: Decimal = Decimal(0),
     cost_detail: dict | None = None,
-) -> None:
+    client_request_id: str = "",
+    upstream_cost: Decimal = Decimal(0),
+    usage_source: str = "upstream",
+    observed_at: str | None = None,
+    observe: bool = True,
+) -> RequestLog:
+    try:
+        audit_request = json.dumps(redact(json.loads(audit_request)), ensure_ascii=False) if audit_request else ""
+    except (ValueError, TypeError):
+        audit_request = redact(audit_request)
     has_audit = bool(audit_request)
     async with in_transaction():
         log = await RequestLog.create(
             request_id=request_id,
+            client_request_id=client_request_id or correlation_id.get(),
+            upstream_cost=upstream_cost, usage_source=usage_source,
+            created_at=datetime.fromisoformat(observed_at) if observed_at else datetime.now(timezone.utc),
             api_key_id=api_key_id,
+            tenant_id=tenant_id,
             api_key_name=api_key_name,
             channel_id=channel_id,
             channel_name=channel_name,
@@ -64,10 +80,10 @@ async def save_request_log(
             is_stream=is_stream,
             status_code=status_code,
             latency_ms=latency_ms,
-            error_message=error_message,
+            error_message=redact(error_message),
             error_origin=error_origin,
             upstream_status_code=upstream_status_code,
-            upstream_error=upstream_error,
+            upstream_error=redact(upstream_error),
             ip_address=ip_address,
             failed_over=failed_over,
             has_audit=has_audit,
@@ -82,11 +98,10 @@ async def save_request_log(
                 audit_request=audit_request,
             )
 
-    try:
         await record_daily_usage(
             api_key_id=api_key_id,
             api_key_name=api_key_name,
-            team_id=team_id,
+            tenant_id=tenant_id,
             model=model_requested,
             channel_id=channel_id,
             channel_name=channel_name,
@@ -97,23 +112,24 @@ async def save_request_log(
             cached_tokens=cached_tokens,
             cache_write_tokens=cache_write_tokens,
             cache_savings=cache_savings,
-            when=log.created_at,
+            when=log.created_at, upstream_cost=upstream_cost, realtime=False,
+        )
+    if observe:
+        await observe_request_log(log)
+    return log
+
+
+async def observe_request_log(log: RequestLog) -> None:
+    try:
+        await _record_minute(log.created_at)
+        record_request_metrics(
+            model=log.model_actual or log.model_requested, provider=log.provider,
+            channel_name=log.channel_name, status_code=log.status_code, endpoint=log.endpoint,
+            prompt_tokens=log.prompt_tokens, completion_tokens=log.completion_tokens,
+            cached_tokens=log.cached_tokens, cost=float(log.cost), latency_seconds=log.latency_ms / 1000.0,
         )
     except Exception:
-        logger.exception("daily usage update failed for request %s", request_id)
-
-    record_request_metrics(
-        model=model_actual or model_requested,
-        provider=provider,
-        channel_name=channel_name,
-        status_code=status_code,
-        endpoint=endpoint,
-        prompt_tokens=prompt_tokens,
-        completion_tokens=completion_tokens,
-        cached_tokens=cached_tokens,
-        cost=float(cost),
-        latency_seconds=latency_ms / 1000.0,
-    )
+        logger.exception("Post-commit observation failed for request %s", log.request_id)
 
 
 async def cleanup_old_logs(days: int | None = None) -> int:

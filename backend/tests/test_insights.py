@@ -1,3 +1,4 @@
+from tests.conftest import create_test_tenant
 from decimal import Decimal
 from unittest.mock import AsyncMock, patch
 
@@ -57,7 +58,7 @@ async def test_session_and_cache_stats(client, admin_token):
         model="claude-x", prompt_price=Decimal("3"), completion_price=Decimal("15"),
         cached_price=Decimal("0.3"), cache_write_price=Decimal("3.75"),
     )
-    await APIKey.create(
+    await APIKey.create(tenant_id=(await create_test_tenant()).id,
         name="cc", key_hash=hash_api_key(RAW_KEY), key_prefix=RAW_KEY[:8], quota_total=Decimal("-1"),
     )
     reply = {
@@ -117,13 +118,15 @@ def test_auto_cache_marks_tools_system_and_last_message():
 
 
 async def test_auto_cache_applies_when_enabled(client, admin_token):
+    from app.models import ModelPrice
+    await ModelPrice.create(model="claude-x")
     from app.services.settings_service import clear_settings_cache, set_gateway_config
 
     await Channel.create(
         name="a", provider="anthropic", base_url="https://api.anthropic.test",
         api_key="sk-up", models=["claude-x"], timeout=60,
     )
-    await APIKey.create(
+    await APIKey.create(tenant_id=(await create_test_tenant()).id,
         name="cc", key_hash=hash_api_key(RAW_KEY), key_prefix=RAW_KEY[:8], quota_total=Decimal("-1"),
     )
     await set_gateway_config({"auto_cache_control": True})

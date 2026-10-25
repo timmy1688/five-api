@@ -174,6 +174,8 @@ def default_gateway_config() -> dict:
         "auto_cache_control": False,
         "budget_downgrade": {"threshold": 0.8, "rules": {}},
         "time_pricing": [],
+        "model_checks": {"health_enabled": True, "health_interval_seconds": 900,
+                         "capability_enabled": True, "capability_interval_seconds": 86400},
     }
 
 
@@ -223,6 +225,7 @@ def _normalize_gateway(value) -> dict:
     defaults = default_gateway_config()
     raw = value if isinstance(value, dict) else {}
     enabled = raw.get("sticky_session_enabled", defaults["sticky_session_enabled"])
+    checks = raw.get("model_checks") if isinstance(raw.get("model_checks"), dict) else {}
     return {
         "log_retention_days": _clamp_int(raw.get("log_retention_days"), defaults["log_retention_days"], 0, 3650),
         "channel_health_threshold": _clamp_int(
@@ -242,6 +245,12 @@ def _normalize_gateway(value) -> dict:
         "auto_cache_control": bool(raw.get("auto_cache_control", defaults["auto_cache_control"])),
         "budget_downgrade": _normalize_downgrade(raw.get("budget_downgrade")),
         "time_pricing": normalize_rules(raw.get("time_pricing")),
+        "model_checks": {
+            "health_enabled": bool(checks.get("health_enabled", True)),
+            "health_interval_seconds": _clamp_int(checks.get("health_interval_seconds"), 900, 60, 86400),
+            "capability_enabled": bool(checks.get("capability_enabled", True)),
+            "capability_interval_seconds": _clamp_int(checks.get("capability_interval_seconds"), 86400, 3600, 604800),
+        },
     }
 
 
@@ -265,6 +274,19 @@ async def set_gateway_config(config: dict) -> dict:
     else:
         row.value = stored
         await row.save()
+    _gateway_cache = (time.monotonic(), stored)
+    return stored
+
+
+async def patch_gateway_config(delta: dict) -> dict:
+    from tortoise.transactions import in_transaction
+    global _gateway_cache
+    async with in_transaction():
+        await SystemSetting.get_or_create(key=GATEWAY_KEY, defaults={"value": default_gateway_config()})
+        row = await SystemSetting.filter(key=GATEWAY_KEY).select_for_update().get()
+        stored = _normalize_gateway({**_normalize_gateway(row.value), **delta})
+        row.value = stored
+        await row.save(update_fields=["value", "updated_at"])
     _gateway_cache = (time.monotonic(), stored)
     return stored
 

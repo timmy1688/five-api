@@ -1,13 +1,11 @@
 name: CI
-
 on:
   push:
     branches: [main, master]
   pull_request:
-
+  workflow_call:
 permissions:
   contents: read
-
 jobs:
   backend:
     runs-on: ubuntu-latest
@@ -20,10 +18,53 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-          cache-dependency-path: backend/requirements.txt
-      - run: pip install -r requirements.txt
-      - run: pytest -q
-
+          cache-dependency-path: backend/requirements-dev.lock
+      - run: pip install --require-hashes -r requirements-dev.lock
+      - run: pytest -q -m "not integration"
+      - run: pip-audit --disable-pip --no-deps -r requirements.lock --progress-spinner off
+      - run: python scripts/release_check.py
+  integration:
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: root_password
+          MYSQL_DATABASE: five_api_test_ci
+          MYSQL_USER: five
+          MYSQL_PASSWORD: five_password
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -proot_password"
+          --health-interval=5s --health-timeout=3s --health-retries=30
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=5s --health-timeout=3s --health-retries=20
+    env:
+      MYSQL_HOST: 127.0.0.1
+      MYSQL_USER: five
+      MYSQL_PASSWORD: five_password
+      FIVE_TEST_MYSQL_DB: five_api_test_ci
+      FIVE_TEST_REDIS_URL: redis://127.0.0.1:6379/15
+      FIVE_TEST_MYSQL_CONTAINER: ${{ job.services.mysql.id }}
+      NO_PROXY: 127.0.0.1,localhost,::1
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements-dev.lock
+      - run: pip install --require-hashes -r requirements-dev.lock
+      - run: pytest -q tests/integration
   frontend:
     runs-on: ubuntu-latest
     defaults:
@@ -33,15 +74,15 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "24"
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci
       - run: npm run build
-
-  docker:
+      - run: npm audit --omit=dev --audit-level=high --registry=https://registry.npmjs.org
+  image:
     runs-on: ubuntu-latest
-    needs: [backend, frontend]
+    needs: [backend, integration, frontend]
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
@@ -49,5 +90,11 @@ jobs:
         with:
           context: .
           push: false
+          load: true
+          tags: five-api:ci
           cache-from: type=gha
           cache-to: type=gha,mode=max
+      - name: Check image user and Compose
+        run: |
+          test "$(docker image inspect five-api:ci --format '{{.Config.User}}')" = "10001:10001"
+          docker compose config --quiet

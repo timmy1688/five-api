@@ -1,29 +1,43 @@
 <template>
-  <div>
-    <div class="page-header">
-      <div>
-        <h3>{{ t('nav.settings') }}</h3>
-        <p>{{ t('settings.subtitle') }}</p>
-      </div>
-      <el-button
-        v-if="canWrite"
-        type="primary"
-        :loading="saving"
-        @click="save"
-      >
-        {{ t('common.save') }}
-      </el-button>
-    </div>
-
-    <el-card v-loading="loading" shadow="never">
-      <el-form label-position="top" :disabled="!canWrite">
-        <h4>{{ t('settings.logs') }}</h4>
+  <div class="settings-page">
+    <div class="page-header"><div><h3>{{ t('nav.settings') }}</h3><p>{{ t('settings.subtitle') }}</p></div></div>
+    <el-alert v-if="loadError" :title="t('settings.loadFailed')" type="error" :closable="false" show-icon class="load-error">
+      <el-button text type="primary" @click="load">{{ t('settlements.refresh') }}</el-button>
+    </el-alert>
+    <SettlementNotice />
+    <el-tabs v-model="activeTab" class="settings-tabs">
+      <el-tab-pane :label="t('settings.tabGeneral')" name="general">
+        <el-card v-loading="loading" shadow="never">
+          <el-form v-if="loaded" label-position="top" :disabled="!canWrite">
+            <section class="settings-section">        <h4>{{ t('settings.logs') }}</h4>
         <el-form-item :label="t('settings.logRetention')">
           <el-input-number v-model="form.log_retention_days" :min="0" :max="3650" :step="1" />
           <p class="hint">{{ t('settings.logRetentionHint') }}</p>
         </el-form-item>
 
-        <h4>{{ t('settings.routing') }}</h4>
+</section>
+            <section class="settings-section">        <h4>{{ t('settings.health') }}</h4>
+        <el-form-item :label="t('settings.healthThreshold')">
+          <el-input-number v-model="form.channel_health_threshold" :min="1" :max="100" :step="1" />
+        </el-form-item>
+        <el-form-item :label="t('settings.healthInterval')">
+          <el-input-number v-model="form.channel_health_check_interval" :min="10" :max="86400" :step="10" />
+          <p class="hint">{{ t('settings.healthHint') }}</p>
+        </el-form-item>
+</section>
+            <section class="settings-section"><h4>{{ t('settings.cache') }}</h4>        <el-form-item :label="t('settings.autoCache')">
+          <el-switch v-model="form.auto_cache_control" />
+          <p class="hint">{{ t('settings.autoCacheHint') }}</p>
+        </el-form-item>
+</section>
+          </el-form>
+          <div class="settings-footer"><span :class="{ changed: dirty }">{{ t(dirty ? 'settings.unsaved' : 'settings.upToDate') }}</span><el-button type="primary" :loading="saving" :disabled="!loaded || !dirty" @click="save">{{ t(activeTab === 'general' ? 'settings.saveGeneral' : 'settings.saveRouting') }}</el-button></div>
+        </el-card>
+      </el-tab-pane>
+      <el-tab-pane :label="t('settings.tabRouting')" name="routing">
+        <el-card v-loading="loading" shadow="never">
+          <el-form v-if="loaded" label-position="top" :disabled="!canWrite">
+            <section class="settings-section">        <h4>{{ t('settings.routing') }}</h4>
         <el-form-item :label="t('settings.sticky')">
           <el-switch v-model="form.sticky_session_enabled" />
           <p class="hint">{{ t('settings.stickyHint') }}</p>
@@ -39,7 +53,10 @@
           </el-radio-group>
           <p class="hint">{{ t('settings.strategyHint') }}</p>
         </el-form-item>
-        <el-form-item :label="t('settings.fallbacks')">
+</section>
+            <div class="advanced-heading"><h4>{{ t('settings.advanced') }}</h4><p class="hint">{{ t('settings.advancedHint') }}</p></div>
+            <el-collapse class="advanced-rules">
+              <el-collapse-item :title="t('settings.fallbacks')" name="fallbacks">        <el-form-item :label="t('settings.fallbacks')">
           <div class="fallback-list">
             <div v-for="(rule, index) in fallbacks" :key="index" class="fallback-row">
               <el-select v-model="rule.source" filterable allow-create default-first-option :placeholder="t('settings.fallbackSource')" class="fallback-source">
@@ -56,12 +73,8 @@
           <p class="hint">{{ t('settings.fallbacksHint') }}</p>
         </el-form-item>
 
-        <h4>{{ t('settings.cost') }}</h4>
-        <el-form-item :label="t('settings.autoCache')">
-          <el-switch v-model="form.auto_cache_control" />
-          <p class="hint">{{ t('settings.autoCacheHint') }}</p>
-        </el-form-item>
-        <el-form-item :label="t('settings.downgrade')">
+</el-collapse-item>
+              <el-collapse-item :title="t('settings.downgrade')" name="downgrade">        <el-form-item :label="t('settings.downgrade')">
           <div class="fallback-list">
             <div class="fallback-row">
               <span class="threshold-label">{{ t('settings.downgradeThreshold') }}</span>
@@ -83,7 +96,8 @@
           <p class="hint">{{ t('settings.downgradeHint') }}</p>
         </el-form-item>
 
-        <el-form-item :label="t('settings.timePricing')">
+</el-collapse-item>
+              <el-collapse-item :title="t('settings.timePricing')" name="time">        <el-form-item :label="t('settings.timePricing')">
           <div class="fallback-list">
             <div v-for="(rule, index) in timeRules" :key="index" class="time-rule">
               <el-input v-model="rule.name" :placeholder="t('settings.timeName')" class="time-name" />
@@ -108,18 +122,15 @@
           <p class="hint">{{ t('settings.timePricingHint') }}</p>
         </el-form-item>
 
-        <h4>{{ t('settings.health') }}</h4>
-        <el-form-item :label="t('settings.healthThreshold')">
-          <el-input-number v-model="form.channel_health_threshold" :min="1" :max="100" :step="1" />
-        </el-form-item>
-        <el-form-item :label="t('settings.healthInterval')">
-          <el-input-number v-model="form.channel_health_check_interval" :min="10" :max="86400" :step="10" />
-          <p class="hint">{{ t('settings.healthHint') }}</p>
-        </el-form-item>
-      </el-form>
-    </el-card>
-    <AlertSettings />
-    <MetricsToken />
+</el-collapse-item>
+            </el-collapse>
+          </el-form>
+          <div class="settings-footer"><span :class="{ changed: dirty }">{{ t(dirty ? 'settings.unsaved' : 'settings.upToDate') }}</span><el-button type="primary" :loading="saving" :disabled="!loaded || !dirty" @click="save">{{ t(activeTab === 'general' ? 'settings.saveGeneral' : 'settings.saveRouting') }}</el-button></div>
+        </el-card>
+      </el-tab-pane>
+      <el-tab-pane :label="t('settings.tabAlerts')" name="alerts" lazy><AlertSettings /></el-tab-pane>
+      <el-tab-pane :label="t('settings.tabMetrics')" name="metrics" lazy><MetricsToken /></el-tab-pane>
+    </el-tabs>
   </div>
 </template>
 
@@ -130,15 +141,21 @@ import { settingsApi, type GatewaySettings, type TimePriceRule } from '@/api/set
 import { channelsApi } from '@/api/channels'
 import AlertSettings from '@/components/AlertSettings.vue'
 import MetricsToken from '@/components/MetricsToken.vue'
+import SettlementNotice from '@/components/SettlementNotice.vue'
 import { modelsApi } from '@/api/models'
 import { useAuthStore } from '@/stores/auth'
 import { useI18n } from '@/i18n'
 
 const { t } = useI18n()
 const auth = useAuthStore()
-const canWrite = computed(() => auth.hasPermission('setting:write'))
+const canWrite = computed(() => auth.isPlatformAdmin)
 const loading = ref(false)
 const saving = ref(false)
+const activeTab = ref('general')
+const loaded = ref(false), loadError = ref(false)
+const saved = reactive({ general: '', routing: '' })
+const dirty = computed(() => loaded.value && ['general', 'routing'].includes(activeTab.value) &&
+  JSON.stringify(payload(activeTab.value)) !== saved[activeTab.value as 'general' | 'routing'])
 const form = reactive<GatewaySettings>({
   log_retention_days: 90,
   channel_health_threshold: 3,
@@ -160,18 +177,33 @@ function addTimeRule() {
   timeRules.value.push({ name: '', models: [], channel_ids: [], start: '00:00', end: '08:00', utc_offset: 8, multiplier: 0.5 })
 }
 
-function apply(data: GatewaySettings) {
-  form.log_retention_days = data.log_retention_days
-  form.channel_health_threshold = data.channel_health_threshold
-  form.channel_health_check_interval = data.channel_health_check_interval
-  form.sticky_session_enabled = data.sticky_session_enabled
-  form.sticky_session_ttl = data.sticky_session_ttl
-  form.routing_strategy = data.routing_strategy ?? 'weighted'
-  fallbacks.value = Object.entries(data.model_fallbacks ?? {}).map(([source, targets]) => ({ source, targets: [...targets] }))
-  form.auto_cache_control = data.auto_cache_control ?? false
-  downgradeThreshold.value = Math.round((data.budget_downgrade?.threshold ?? 0.8) * 100)
-  downgrades.value = Object.entries(data.budget_downgrade?.rules ?? {}).map(([source, target]) => ({ source, target }))
-  timeRules.value = (data.time_pricing ?? []).map(rule => ({ ...rule, models: [...rule.models], channel_ids: [...rule.channel_ids] }))
+function apply(data: GatewaySettings, scope = 'all') {
+  if (scope !== 'routing') {
+    form.log_retention_days = data.log_retention_days
+    form.channel_health_threshold = data.channel_health_threshold
+    form.channel_health_check_interval = data.channel_health_check_interval
+    form.auto_cache_control = data.auto_cache_control ?? false
+  }
+  if (scope !== 'general') {
+    form.sticky_session_enabled = data.sticky_session_enabled
+    form.sticky_session_ttl = data.sticky_session_ttl
+    form.routing_strategy = data.routing_strategy ?? 'weighted'
+    fallbacks.value = Object.entries(data.model_fallbacks ?? {}).map(([source, targets]) => ({ source, targets: [...targets] }))
+    downgradeThreshold.value = Math.round((data.budget_downgrade?.threshold ?? 0.8) * 100)
+    downgrades.value = Object.entries(data.budget_downgrade?.rules ?? {}).map(([source, target]) => ({ source, target }))
+    timeRules.value = (data.time_pricing ?? []).map(rule => ({ ...rule, models: [...rule.models], channel_ids: [...rule.channel_ids] }))
+  }
+}
+
+function payload(tab: string): Partial<GatewaySettings> {
+  return tab === 'general' ? {
+    log_retention_days: form.log_retention_days, channel_health_threshold: form.channel_health_threshold,
+    channel_health_check_interval: form.channel_health_check_interval, auto_cache_control: form.auto_cache_control,
+  } : {
+    sticky_session_enabled: form.sticky_session_enabled, sticky_session_ttl: form.sticky_session_ttl,
+    routing_strategy: form.routing_strategy, model_fallbacks: fallbackMap(),
+    budget_downgrade: downgradeConfig(), time_pricing: timeRules.value,
+  }
 }
 
 function downgradeConfig() {
@@ -195,8 +227,11 @@ function fallbackMap(): Record<string, string[]> {
 async function load() {
   loading.value = true
   try {
+    loadError.value = false
     apply(await settingsApi.get())
-    if (auth.hasPermission('channel:read')) {
+    loaded.value = true
+    saved.general = JSON.stringify(payload('general')); saved.routing = JSON.stringify(payload('routing'))
+    if (auth.isPlatformAdmin) {
       modelsApi.list().then(data => {
         modelOptions.value = (data.items || []).map((item: { model: string }) => item.model)
       }).catch(() => {})
@@ -205,6 +240,7 @@ async function load() {
       }).catch(() => {})
     }
   } catch {
+    loadError.value = true
     ElMessage.error(t('settings.loadFailed'))
   } finally {
     loading.value = false
@@ -214,7 +250,9 @@ async function load() {
 async function save() {
   saving.value = true
   try {
-    apply(await settingsApi.save({ ...form, model_fallbacks: fallbackMap(), budget_downgrade: downgradeConfig(), time_pricing: timeRules.value }))
+    const tab = activeTab.value as 'general' | 'routing'
+    apply(await settingsApi.save(payload(tab)), tab)
+    saved[tab] = JSON.stringify(payload(tab))
     ElMessage.success(t('common.saved'))
   } catch {
     ElMessage.error(t('common.saveFailed'))
@@ -227,6 +265,30 @@ onMounted(load)
 </script>
 
 <style scoped>
+.settings-page { max-width: 1180px; margin: 0 auto; }
+.settings-tabs { --el-tabs-header-height: 44px; }
+.settings-tabs :deep(.el-tabs__header) { margin-bottom: 18px; }
+.settings-tabs :deep(.el-tabs__item) { font-weight: 500; }
+.settings-tabs :deep(.el-card) { margin-top: 0 !important; border-radius: 10px; }
+.settings-section { padding-bottom: 20px; margin-bottom: 20px; border-bottom: 1px solid #edf0f3; }
+.settings-section:last-of-type { border-bottom: 0; padding-bottom: 0; margin-bottom: 0; }
+.settings-section :deep(.el-form-item) { margin-bottom: 18px; }
+.settings-section :deep(.el-form-item:last-child) { margin-bottom: 0; }
+.advanced-heading { margin: 24px 0 14px; }
+.advanced-heading h4 { margin-bottom: 4px; }
+.advanced-rules :deep(.el-collapse-item__header) { font-size: 14px; }
+.advanced-rules :deep(.el-collapse-item__content) { padding: 14px 0 18px; }
+.settings-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 24px -20px -20px; padding: 16px 20px; border-top: 1px solid #edf0f3; background: #fafbfc; }
+.settings-footer span { font-size: 13px; color: #86909c; }
+.settings-footer .changed { color: #b7791f; }
+.load-error { margin-bottom: 16px; }
+@media (max-width: 720px) {
+  .fallback-row { flex-wrap: wrap; }
+  .fallback-source, .fallback-targets { width: 100% !important; min-width: 0 !important; flex-basis: 100%; }
+  .time-models { min-width: 0 !important; flex-basis: 100%; }
+  .settings-footer { padding: 12px; }
+}
+
 h4 {
   margin: 8px 0 12px;
   font-size: 14px;

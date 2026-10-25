@@ -5,7 +5,7 @@
         <h3>{{ t('nav.groups') }}</h3>
         <p>{{ t('groups.subtitle') }}</p>
       </div>
-      <el-button v-if="auth.hasPermission('model_group:write')" type="primary" @click="openCreate">{{ t('groups.create') }}</el-button>
+      <el-button v-if="auth.isPlatformAdmin" type="primary" @click="openCreate">{{ t('groups.create') }}</el-button>
     </div>
 
     <el-card shadow="never">
@@ -23,7 +23,7 @@
         <el-table-column :label="t('common.created')" width="170">
           <template #default="{ row }">{{ formatTime(row.created_at) }}</template>
         </el-table-column>
-        <el-table-column v-if="auth.hasPermission('model_group:write')" :label="t('common.actions')" width="140" fixed="right">
+        <el-table-column v-if="auth.isPlatformAdmin" :label="t('common.actions')" width="140" fixed="right">
           <template #default="{ row }">
             <el-button text type="primary" size="small" @click="openEdit(row)">{{ t('common.edit') }}</el-button>
             <el-popconfirm :title="t('groups.deleteConfirm')" @confirm="handleDelete(row.id)">

@@ -1,13 +1,17 @@
+from app.services.management_events import audit_mutation
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 import httpx
 
 from app.models import User, Channel
 from app.schemas.channel import ChannelCreate, ChannelResponse, ChannelUpdate
-from app.services.auth import get_current_admin, require_permission
+from app.services.auth import require_platform_admin
 from app.services.channel_health import force_recover, get_health_status, record_failure, record_success
 from app.services.key_pool import pool_status
 from app.utils.secrets import channel_keys, encrypt_secret, mask_secret, split_keys
 from app.utils.upstream_url import upstream_url
+from app.utils.upstream_security import validate_upstream_base_url
+from app.services.redaction import redact
+from app.services.request_context import remember_credential
 
 router = APIRouter(prefix="/api/channels", tags=["channels"])
 
@@ -23,6 +27,7 @@ def _to_response(ch: Channel) -> ChannelResponse:
         models=ch.models,
         model_mapping=ch.model_mapping,
         model_pricing=ch.model_pricing or {},
+        cost_multiplier=float(ch.cost_multiplier),
         priority=ch.priority,
         weight=ch.weight,
         is_enabled=ch.is_enabled,
@@ -37,7 +42,7 @@ def _to_response(ch: Channel) -> ChannelResponse:
 async def list_channels(
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=100),
-    _: User = require_permission("channel:read"),
+    _: User = Depends(require_platform_admin),
 ):
     total = await Channel.all().count()
     channels = await Channel.all().order_by("-id").offset((page - 1) * size).limit(size)
@@ -45,7 +50,8 @@ async def list_channels(
 
 
 @router.post("", response_model=ChannelResponse, status_code=status.HTTP_201_CREATED)
-async def create_channel(body: ChannelCreate, _: User = require_permission("channel:write")):
+@audit_mutation("channel.create")
+async def create_channel(body: ChannelCreate, _: User = Depends(require_platform_admin)):
     data = body.model_dump()
     data["api_key"] = encrypt_secret("\n".join(split_keys(data["api_key"])))
     ch = await Channel.create(**data)
@@ -55,7 +61,7 @@ async def create_channel(body: ChannelCreate, _: User = require_permission("chan
 # ── 静态路径必须在 /{channel_id} 之前注册 ──────────────────────────────────────
 
 @router.get("/health/status")
-async def channels_health(_: User = require_permission("channel:read")):
+async def channels_health(_: User = Depends(require_platform_admin)):
     channels = await Channel.filter(is_enabled=True)
     status_map = await get_health_status([ch.id for ch in channels])
     for ch in channels:
@@ -66,7 +72,7 @@ async def channels_health(_: User = require_permission("channel:read")):
 @router.post("/fetch-models-preview")
 async def fetch_models_preview(
     body: dict,
-    _: User = require_permission("channel:write"),
+    _: User = Depends(require_platform_admin),
 ):
     provider = body.get("provider", "")
     base_url = body.get("base_url", "")
@@ -79,7 +85,7 @@ async def fetch_models_preview(
 # ── 参数化路径 /{channel_id} ────────────────────────────────────────────────────
 
 @router.get("/{channel_id}", response_model=ChannelResponse)
-async def get_channel(channel_id: int, _: User = require_permission("channel:read")):
+async def get_channel(channel_id: int, _: User = Depends(require_platform_admin)):
     ch = await Channel.get_or_none(id=channel_id)
     if ch is None:
         raise HTTPException(status_code=404, detail="Channel not found")
@@ -87,11 +93,12 @@ async def get_channel(channel_id: int, _: User = require_permission("channel:rea
 
 
 @router.put("/{channel_id}", response_model=ChannelResponse)
-async def update_channel(channel_id: int, body: ChannelUpdate, _: User = require_permission("channel:write")):
+@audit_mutation("channel.update")
+async def update_channel(channel_id: int, body: ChannelUpdate, _: User = Depends(require_platform_admin)):
     ch = await Channel.get_or_none(id=channel_id)
     if ch is None:
         raise HTTPException(status_code=404, detail="Channel not found")
-    update_data = body.model_dump(exclude_unset=True)
+    update_data = body.model_dump(exclude_unset=True, exclude_none=True)
     if update_data.get("api_key"):
         update_data["api_key"] = encrypt_secret("\n".join(split_keys(update_data["api_key"])))
     else:
@@ -103,7 +110,8 @@ async def update_channel(channel_id: int, body: ChannelUpdate, _: User = require
 
 
 @router.delete("/{channel_id}")
-async def delete_channel(channel_id: int, _: User = require_permission("channel:write")):
+@audit_mutation("channel.delete")
+async def delete_channel(channel_id: int, _: User = Depends(require_platform_admin)):
     deleted = await Channel.filter(id=channel_id).delete()
     if not deleted:
         raise HTTPException(status_code=404, detail="Channel not found")
@@ -111,11 +119,12 @@ async def delete_channel(channel_id: int, _: User = require_permission("channel:
 
 
 @router.post("/{channel_id}/test")
-async def test_channel(channel_id: int, _: User = require_permission("channel:read")):
+async def test_channel(channel_id: int, _: User = Depends(require_platform_admin)):
     ch = await Channel.get_or_none(id=channel_id)
     if ch is None:
         raise HTTPException(status_code=404, detail="Channel not found")
     try:
+        validate_upstream_base_url(ch.base_url)
         async with httpx.AsyncClient(timeout=10.0) as client:
             if ch.provider == "anthropic":
                 url = upstream_url(ch.base_url, "/v1/messages")
@@ -150,11 +159,11 @@ async def test_channel(channel_id: int, _: User = require_permission("channel:re
         return {"success": success, "status_code": resp.status_code}
     except Exception as e:
         await record_failure(ch.id)
-        return {"success": False, "error": str(e)}
+        return {"success": False, "error": redact(str(e))}
 
 
 @router.post("/{channel_id}/recover")
-async def recover_channel(channel_id: int, _: User = require_permission("channel:write")):
+async def recover_channel(channel_id: int, _: User = Depends(require_platform_admin)):
     ch = await Channel.get_or_none(id=channel_id)
     if ch is None:
         raise HTTPException(status_code=404, detail="Channel not found")
@@ -172,7 +181,7 @@ ANTHROPIC_MODELS = [
 
 
 @router.post("/{channel_id}/fetch-models")
-async def fetch_models(channel_id: int, _: User = require_permission("channel:read")):
+async def fetch_models(channel_id: int, _: User = Depends(require_platform_admin)):
     ch = await Channel.get_or_none(id=channel_id)
     if ch is None:
         raise HTTPException(status_code=404, detail="Channel not found")
@@ -182,6 +191,11 @@ async def fetch_models(channel_id: int, _: User = require_permission("channel:re
 
 
 async def _fetch_models_from_upstream(provider: str, base_url: str, api_key: str):
+    remember_credential(api_key)
+    try:
+        base_url = validate_upstream_base_url(base_url)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from None
     if provider == "anthropic":
         return {"models": ANTHROPIC_MODELS}
     try:
@@ -198,4 +212,4 @@ async def _fetch_models_from_upstream(provider: str, base_url: str, api_key: str
             models = sorted([m["id"] for m in data.get("data", []) if m.get("id")])
             return {"models": models}
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Failed to fetch models: {e}")
+        raise HTTPException(status_code=502, detail=redact(f"Failed to fetch models: {e}"))

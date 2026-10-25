@@ -1,12 +1,13 @@
 import { defineStore } from 'pinia'
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { authApi } from '@/api/auth'
 
 export const useAuthStore = defineStore('auth', () => {
   const token = ref(localStorage.getItem('token') || '')
   const username = ref('')
-  const roleName = ref('')
-  const permissions = ref<string[]>([])
+  const role = ref<'platform_admin' | 'tenant' | ''>('')
+  const roleName = computed(() => role.value)
+  const isPlatformAdmin = computed(() => role.value === 'platform_admin')
   const mustChangePassword = ref(false)
   const profileLoaded = ref(false)
   let profileRequest: Promise<void> | null = null
@@ -20,12 +21,7 @@ export const useAuthStore = defineStore('auth', () => {
     const res = await authApi.login(user, password)
     setToken(res.access_token)
     profileLoaded.value = false
-    try {
-      await ensureProfile()
-    } catch (error) {
-      logout()
-      throw error
-    }
+    try { await ensureProfile() } catch (error) { logout(); throw error }
   }
 
   async function changePassword(oldPassword: string, newPassword: string) {
@@ -37,8 +33,7 @@ export const useAuthStore = defineStore('auth', () => {
   function logout() {
     token.value = ''
     username.value = ''
-    roleName.value = ''
-    permissions.value = []
+    role.value = ''
     mustChangePassword.value = false
     profileLoaded.value = false
     profileRequest = null
@@ -48,43 +43,17 @@ export const useAuthStore = defineStore('auth', () => {
   async function fetchMe() {
     const res = await authApi.me()
     username.value = res.username
-    roleName.value = res.role_name || ''
-    permissions.value = res.permissions || []
+    role.value = res.role
     mustChangePassword.value = Boolean(res.must_change_password)
     profileLoaded.value = true
   }
 
   async function ensureProfile() {
     if (profileLoaded.value) return
-    if (!profileRequest) {
-      profileRequest = fetchMe().finally(() => {
-        profileRequest = null
-      })
-    }
+    if (!profileRequest) profileRequest = fetchMe().finally(() => { profileRequest = null })
     await profileRequest
   }
 
-  function hasPermission(perm: string): boolean {
-    return permissions.value.includes(perm)
-  }
-
-  function hasAnyPermission(...perms: string[]): boolean {
-    return perms.some(p => permissions.value.includes(p))
-  }
-
-  return {
-    token,
-    username,
-    roleName,
-    permissions,
-    mustChangePassword,
-    profileLoaded,
-    login,
-    changePassword,
-    logout,
-    fetchMe,
-    ensureProfile,
-    hasPermission,
-    hasAnyPermission,
-  }
+  return { token, username, role, roleName, isPlatformAdmin, mustChangePassword, profileLoaded,
+    login, changePassword, logout, fetchMe, ensureProfile }
 })

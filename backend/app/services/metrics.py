@@ -34,6 +34,8 @@ REQUEST_LATENCY = Histogram(
 # 活跃渠道和 Key 数
 ACTIVE_CHANNELS = Gauge("five_active_channels", "Number of enabled channels")
 ACTIVE_KEYS = Gauge("five_active_keys", "Number of enabled API keys")
+SETTLEMENT_WAITING = Gauge("five_settlements_waiting", "Accounting records needing recovery or review", ["state"])
+SETTLEMENT_RETRIES = Counter("five_settlement_retries_total", "Failed accounting attempts", ["error_type"])
 
 
 def record_request_metrics(

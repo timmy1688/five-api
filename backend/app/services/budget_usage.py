@@ -6,7 +6,7 @@ team quota and every rolling window cap. Unlimited budgets are left out.
 
 from dataclasses import dataclass
 
-from app.models import APIKey, Team
+from app.models import APIKey, Tenant
 from app.services.spend_windows import normalize_limits, window_spend
 
 
@@ -24,7 +24,7 @@ class BudgetUsage:
         return self.used / self.limit if self.limit > 0 else 1.0
 
 
-async def _owner_usages(scope: str, owner: APIKey | Team) -> list[BudgetUsage]:
+async def _owner_usages(scope: str, owner: APIKey | Tenant) -> list[BudgetUsage]:
     usages = []
     total = float(owner.quota_total)
     if total >= 0:
@@ -41,8 +41,8 @@ async def _owner_usages(scope: str, owner: APIKey | Team) -> list[BudgetUsage]:
 
 async def budget_usages(api_key: APIKey) -> list[BudgetUsage]:
     usages = await _owner_usages("key", api_key)
-    if api_key.team_id:
-        team = await Team.get_or_none(id=api_key.team_id)
+    if api_key.tenant_id:
+        team = await Tenant.get_or_none(id=api_key.tenant_id)
         if team is not None:
             usages.extend(await _owner_usages("team", team))
     return usages

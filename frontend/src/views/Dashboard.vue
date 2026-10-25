@@ -6,12 +6,13 @@
         <h3>{{ t('nav.overview') }}</h3>
         <p>{{ t('dash.subtitle') }}</p>
       </div>
+      <div style="display:flex; gap:12px; flex-wrap:wrap"><el-button type="primary" @click="$router.push('/keys?create=1')">{{ t('keys.create') }}</el-button>
       <el-radio-group v-model="days" size="small" @change="reload">
         <el-radio-button :value="1">1d</el-radio-button>
         <el-radio-button :value="7">7d</el-radio-button>
         <el-radio-button :value="30">30d</el-radio-button>
         <el-radio-button :value="90">90d</el-radio-button>
-      </el-radio-group>
+      </el-radio-group></div>
     </div>
 
     <!-- Stat cards (6) -->
@@ -113,11 +114,11 @@
       </el-table>
     </el-card>
 
-    <el-card v-if="topTeams.length > 0" shadow="never" style="margin-top: 12px">
-      <template #header><span style="font-weight: 600">{{ t('dash.topTeams', { days }) }}</span></template>
-      <el-table :data="topTeams" stripe size="small">
+    <el-card v-if="topTenants.length > 0" shadow="never" style="margin-top: 12px">
+      <template #header><span style="font-weight: 600">{{ t('dash.topTenants', { days }) }}</span></template>
+      <el-table :data="topTenants" stripe size="small">
         <el-table-column type="index" label="#" width="50" />
-        <el-table-column prop="team_name" :label="t('nav.teams')" min-width="180" show-overflow-tooltip />
+        <el-table-column prop="tenant_name" :label="t('nav.tenants')" min-width="180" show-overflow-tooltip />
         <el-table-column prop="request_count" :label="t('dash.requests')" width="120" align="right">
           <template #default="{ row }">{{ row.request_count.toLocaleString() }}</template>
         </el-table-column>
@@ -159,7 +160,7 @@ const errorRate = ref<any[]>([])
 const latencyData = ref<any>({ p50: 0, p95: 0, p99: 0, trend: [] })
 const throughput = ref<any>({ current_qps: 0, current_rpm: 0, current_tpm: 0, peak_qps: 0, peak_rpm: 0 })
 const topKeys = ref<any[]>([])
-const topTeams = ref<any[]>([])
+const topTenants = ref<any[]>([])
 let refreshTimer: ReturnType<typeof setInterval> | null = null
 
 const cards = computed(() => [
@@ -271,7 +272,7 @@ async function reload() {
       statsApi.latency(days.value),
       statsApi.throughput(days.value),
       statsApi.byKey(days.value),
-      statsApi.byTeam(days.value),
+      statsApi.byTenant(days.value),
     ])
     if (results[0].status === 'fulfilled') overview.value = results[0].value
     if (results[1].status === 'fulfilled') usage.value = results[1].value
@@ -281,7 +282,7 @@ async function reload() {
     if (results[5].status === 'fulfilled') latencyData.value = results[5].value
     if (results[6].status === 'fulfilled') throughput.value = results[6].value
     if (results[7].status === 'fulfilled') topKeys.value = results[7].value
-    if (results[8].status === 'fulfilled') topTeams.value = results[8].value
+    if (results[8].status === 'fulfilled') topTenants.value = results[8].value
     if (results.some(r => r.status === 'rejected')) {
       ElMessage.warning(t('dash.statsFailed'))
     }

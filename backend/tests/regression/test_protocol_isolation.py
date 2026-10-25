@@ -1,3 +1,4 @@
+from tests.conftest import create_test_tenant
 """回归：请求只走同协议渠道，跨协议渠道不能成为故障转移。"""
 
 from decimal import Decimal
@@ -26,7 +27,7 @@ class _Upstream:
 
 
 async def _key(raw: str) -> str:
-    await APIKey.create(
+    await APIKey.create(tenant_id=(await create_test_tenant()).id,
         name=raw,
         key_hash=hash_api_key(raw),
         key_prefix=raw[:8],

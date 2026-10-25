@@ -5,7 +5,7 @@
         <h4>{{ t('alerts.title') }}</h4>
         <p class="hint">{{ t('alerts.subtitle') }}</p>
       </div>
-      <el-button v-if="canWrite" type="primary" :loading="saving" @click="save">{{ t('common.save') }}</el-button>
+      <el-button v-if="canWrite" type="primary" :loading="saving" @click="save">{{ t('alerts.save') }}</el-button>
     </div>
     <el-form label-position="top" :disabled="!canWrite">
       <el-form-item :label="t('alerts.enabled')">
@@ -68,7 +68,7 @@ import { useI18n } from '@/i18n'
 
 const { t } = useI18n()
 const auth = useAuthStore()
-const canWrite = computed(() => auth.hasPermission('setting:write'))
+const canWrite = computed(() => auth.isPlatformAdmin)
 const types: WebhookType[] = ['feishu', 'dingtalk', 'wecom', 'generic']
 const loading = ref(false)
 const saving = ref(false)
@@ -183,6 +183,13 @@ h4 {
 
 .hook-type {
   width: 110px;
+}
+
+.hook-row { padding: 14px; border: 1px solid #e5e9ef; border-radius: 8px; background: #fafbfc; box-sizing: border-box; }
+.event-row { padding: 4px 0; }
+@media (max-width: 720px) {
+  .hook-name, .hook-url, .hook-secret { width: 100% !important; min-width: 0 !important; flex-basis: 100%; }
+  .card-head { flex-wrap: wrap; }
 }
 
 .hook-name {

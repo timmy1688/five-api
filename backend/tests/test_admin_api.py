@@ -1,12 +1,13 @@
+from tests.conftest import create_test_tenant
 from decimal import Decimal
 
 import pytest
 import respx
 from httpx import Response
 
-from app.models import APIKey, Channel, ModelGroup, ModelPrice, Role, User
+from app.models import APIKey, Channel, ModelGroup, ModelPrice, Tenant, User
 from app.services.auth import create_access_token, hash_api_key, hash_password
-from tests.conftest import auth_header, create_admin
+from tests.conftest import auth_header, create_admin, create_tenant_account
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.regression]
 
@@ -195,9 +196,10 @@ async def test_key_crud(client):
     h = auth_header(token)
 
     # create
+    _, _, customer_headers = await create_tenant_account()
     resp = await client.post("/api/keys", json={
-        "name": "my-key", "quota_total": 50.0, "concurrent_limit": 3, "quota_reset_day": 15,
-    }, headers=h)
+        "name": "my-key", "quota_total": 50.0, "concurrent_limit": 3,
+    }, headers=customer_headers)
     assert resp.status_code == 201
     data = resp.json()
     assert "key" in data
@@ -205,9 +207,9 @@ async def test_key_crud(client):
     assert "key_raw" not in data
     assert data["quota_total"] == 50.0
     assert data["quota_remaining"] == 50.0
-    assert data["quota_reset_day"] == 15
+    assert data["quota_reset_day"] is None
     assert data["tpm_limit"] == -1
-    assert data["quota_last_reset_at"] is not None
+    assert data["quota_last_reset_at"] is None
     key_id = data["id"]
 
     # list
@@ -227,9 +229,9 @@ async def test_key_crud(client):
     assert resp.json()["name"] == "renamed-key"
     assert resp.json()["quota_reset_day"] == 1
 
-    # reset quota
+    # Manual reset is removed; spending cannot be erased.
     resp = await client.post(f"/api/keys/{key_id}/reset-quota", headers=h)
-    assert resp.status_code == 200
+    assert resp.status_code == 405
 
     # delete
     resp = await client.delete(f"/api/keys/{key_id}", headers=h)
@@ -240,7 +242,8 @@ async def test_key_unlimited_remaining(client):
     admin = await create_admin("keyunlim", "pw")
     token = create_access_token({"sub": str(admin.id)})
     h = auth_header(token)
-    resp = await client.post("/api/keys", json={"name": "unlim", "quota_total": -1}, headers=h)
+    _, _, customer_headers = await create_tenant_account()
+    resp = await client.post("/api/keys", json={"name": "unlim", "quota_total": -1}, headers=customer_headers)
     assert resp.status_code == 201
     assert resp.json()["quota_remaining"] == -1.0
 
@@ -250,10 +253,11 @@ async def test_invalid_numeric_configuration_is_rejected(client):
     token = create_access_token({"sub": str(admin.id)})
     h = auth_header(token)
 
+    _, _, customer_headers = await create_tenant_account()
     key_resp = await client.post(
         "/api/keys",
         json={"name": "bad-limit", "concurrent_limit": 0},
-        headers=h,
+        headers=customer_headers,
     )
     price_resp = await client.post(
         "/api/model-prices",
@@ -290,7 +294,7 @@ async def test_assigned_model_group_cannot_be_deleted(client):
     token = create_access_token({"sub": str(admin.id)})
     group = await ModelGroup.create(name="assigned", models=["gpt-4o"])
     raw_key = "sk-groupguard123"
-    await APIKey.create(
+    await APIKey.create(tenant_id=(await create_test_tenant()).id,
         name="group-key",
         key_hash=hash_api_key(raw_key),
         key_prefix=raw_key[:8],
@@ -322,14 +326,11 @@ async def test_admin_cannot_disable_or_delete_self(client):
 
 
 async def test_last_super_admin_cannot_be_deleted_by_manager(client):
-    manager_role = await Role.create(
-        name="Admin Manager",
-        permissions=["user:read", "user:write"],
-    )
+    tenant = await Tenant.create(quota_total=Decimal("-1"), name="manager-tenant")
     manager = await User.create(
         username="manager",
         hashed_password=hash_password("pw"),
-        role=manager_role,
+        role="tenant", tenant_id=tenant.id,
     )
     super_admin = await create_admin("onlysuper", "pw")
     token = create_access_token({"sub": str(manager.id)})
@@ -338,7 +339,7 @@ async def test_last_super_admin_cannot_be_deleted_by_manager(client):
         f"/api/users/{super_admin.id}",
         headers=auth_header(token),
     )
-    assert resp.status_code == 409
+    assert resp.status_code == 403
     assert await User.exists(id=super_admin.id)
 
 
@@ -382,7 +383,7 @@ async def test_model_price_crud(client):
     assert resp.status_code == 200
 
 
-async def test_model_price_sync_updates_only_builtin_prices(client):
+async def test_model_price_sync_preserves_all_existing_prices(client):
     admin = await create_admin("mpsync", "pw")
     token = create_access_token({"sub": str(admin.id)})
     h = auth_header(token)
@@ -406,21 +407,21 @@ async def test_model_price_sync_updates_only_builtin_prices(client):
     await builtin.refresh_from_db()
     assert builtin.prompt_price == Decimal("999")
 
-    # Explicit overwrite refreshes built-ins without touching custom rows/status.
+    # Even legacy overwrite=true calls only fill missing prices.
     resp = await client.post(
         "/api/model-prices/sync-defaults?overwrite=true", headers=h
     )
     data = resp.json()
     assert resp.status_code == 200
     assert data["catalog_version"] == "2026-10-18.2"
-    assert data["updated"] == 1
+    assert data["updated"] == 0
     assert data["total"] >= 70
 
     await builtin.refresh_from_db()
     await custom.refresh_from_db()
-    assert builtin.prompt_price == Decimal("0.05")
-    assert builtin.completion_price == Decimal("0.4")
-    assert builtin.cache_write_price == Decimal("0.05")
+    assert builtin.prompt_price == Decimal("999")
+    assert builtin.completion_price == Decimal("999")
+    assert builtin.cache_write_price == Decimal("0")
     assert builtin.is_active is False
     claude = await ModelPrice.get(model="claude-sonnet-4-6")
     assert claude.cache_write_price == Decimal("3.75")
@@ -462,12 +463,10 @@ async def test_models_show_channel_specific_price_variants(client):
         item for item in resp.json()["items"]
         if item["model"] == "shared-model"
     )
-    assert model["pricing"] is None
-    assert model["pricing_varies"] is True
-    assert {channel["pricing_source"] for channel in model["channels"]} == {
-        "global",
-        "channel",
-    }
+    assert model["pricing"]["prompt"] == 1
+    assert model["pricing_varies"] is False
+    assert {channel["pricing_source"] for channel in model["channels"]} == {"global"}
+    assert {channel["upstream_source"] for channel in model["channels"]} == {"selling_price_estimate", "channel"}
 
 
 # ── logs ────────────────────────────────────────────────────
@@ -612,7 +611,7 @@ async def test_gateway_settings_round_trip(client):
     }
     saved = await client.put("/api/settings", json=body, headers=headers)
     assert saved.status_code == 200
-    assert saved.json() == body
+    assert saved.json() == {**body, "model_checks": current.json()["model_checks"]}
     again = await client.get("/api/settings", headers=headers)
     assert again.json()["log_retention_days"] == 14
 
@@ -623,17 +622,17 @@ async def test_gateway_settings_round_trip(client):
     )
     assert rejected.status_code == 422
 
-    reader_role = await Role.create(name="settings-reader", permissions=["setting:read"])
+    tenant = await Tenant.create(quota_total=Decimal("-1"), name="reader-tenant")
     reader = await User.create(
         username="settings-reader",
         hashed_password=hash_password("pw"),
-        role=reader_role,
+        role="tenant", tenant_id=tenant.id,
     )
     reader_headers = auth_header(create_access_token({"sub": str(reader.id)}))
     denied = await client.put("/api/settings", json=body, headers=reader_headers)
     assert denied.status_code == 403
     visible = await client.get("/api/settings", headers=reader_headers)
-    assert visible.status_code == 200
+    assert visible.status_code == 403
 
 
 async def test_admin_endpoints_require_auth(client):

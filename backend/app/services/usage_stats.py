@@ -15,15 +15,15 @@ MINUTE_PREFIX = "five:rpm_minute:"
 PEAK_TTL = 92 * 86400
 
 _COLUMNS = (
-    "day", "api_key_id", "api_key_name", "team_id", "model", "channel_id",
+    "day", "api_key_id", "api_key_name", "tenant_id", "model", "channel_id",
     "channel_name", "request_count", "error_count", "prompt_tokens",
     "completion_tokens", "total_tokens", "cost", "cached_tokens",
-    "cache_write_tokens", "cache_savings",
+    "cache_write_tokens", "cache_savings", "upstream_cost",
 )
 _SUMMED = (
     "request_count", "error_count", "prompt_tokens",
     "completion_tokens", "total_tokens", "cost", "cached_tokens",
-    "cache_write_tokens", "cache_savings",
+    "cache_write_tokens", "cache_savings", "upstream_cost",
 )
 
 
@@ -36,7 +36,7 @@ def _upsert_sql(dialect: str) -> str:
             f"INSERT INTO usage_daily ({cols}) VALUES ({values}) "
             f"ON CONFLICT(day, api_key_id, model, channel_id) DO UPDATE SET {sums}, "
             "api_key_name = excluded.api_key_name, channel_name = excluded.channel_name, "
-            "team_id = excluded.team_id"
+            "tenant_id = excluded.tenant_id"
         )
     values = ", ".join("%s" for _ in _COLUMNS)
     # Row alias needs MySQL 8.0.19+. VALUES(col) is deprecated and warns on every insert.
@@ -44,7 +44,7 @@ def _upsert_sql(dialect: str) -> str:
     return (
         f"INSERT INTO usage_daily ({cols}) VALUES ({values}) AS new "
         f"ON DUPLICATE KEY UPDATE {sums}, api_key_name = new.api_key_name, "
-        "channel_name = new.channel_name, team_id = new.team_id"
+        "channel_name = new.channel_name, tenant_id = new.tenant_id"
     )
 
 
@@ -52,7 +52,7 @@ async def record_daily_usage(
     *,
     api_key_id: int,
     api_key_name: str,
-    team_id: int,
+    tenant_id: int,
     model: str,
     channel_id: int | None,
     channel_name: str,
@@ -64,18 +64,21 @@ async def record_daily_usage(
     cache_write_tokens: int = 0,
     cache_savings: Decimal = Decimal(0),
     when: datetime | None = None,
+    upstream_cost: Decimal = Decimal(0),
+    realtime: bool = True,
 ) -> None:
     when = when or datetime.now(timezone.utc)
     conn = connections.get("default")
     params = [
-        when.date().isoformat(), api_key_id, api_key_name[:128], team_id or 0,
+        when.date().isoformat(), api_key_id, api_key_name[:128], tenant_id or 0,
         model[:64], channel_id or 0, channel_name[:128], 1,
         1 if status_code >= 400 else 0,
         prompt_tokens, completion_tokens, prompt_tokens + completion_tokens,
-        str(cost), cached_tokens, cache_write_tokens, str(cache_savings),
+        str(cost), cached_tokens, cache_write_tokens, str(cache_savings), str(upstream_cost),
     ]
     await conn.execute_query(_upsert_sql(conn.capabilities.dialect), params)
-    await _record_minute(when)
+    if realtime:
+        await _record_minute(when)
 
 
 async def _record_minute(when: datetime) -> None:

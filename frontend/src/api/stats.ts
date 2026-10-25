@@ -17,8 +17,8 @@ export const statsApi = {
     const { data } = await client.get('/stats/by-key', { params: { days } })
     return data
   },
-  byTeam: async (days = 7) => {
-    const { data } = await client.get('/stats/by-team', { params: { days } })
+  byTenant: async (days = 7) => {
+    const { data } = await client.get('/stats/by-tenant', { params: { days } })
     return data
   },
   byChannel: async (days = 7) => {

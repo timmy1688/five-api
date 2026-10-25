@@ -6,6 +6,7 @@ from urllib.parse import urlparse
 import httpx
 
 from app.providers.base import ERROR_IN_OK
+from app.services.redaction import redact
 
 # 这些主机是厂商自己的 API。其余地址按渠道商中转处理。
 OFFICIAL_HOSTS = {
@@ -30,6 +31,7 @@ def classify_base_url(base_url: str) -> str:
 
 
 def _clip(text: str) -> str:
+    text = redact(text)
     if len(text) <= MAX_ERROR_CHARS:
         return text
     return text[:MAX_ERROR_CHARS] + "\n…[truncated]"
@@ -108,7 +110,7 @@ def upstream_json_error(exc: Exception) -> tuple[int, dict] | None:
         return None
     if not isinstance(data, dict):
         return None
-    return status, data
+    return status, redact(data)
 
 
 def client_status(exc: Exception) -> int:
@@ -126,6 +128,11 @@ def client_message(exc: Exception) -> str:
     if isinstance(exc, httpx.NetworkError):
         return "Upstream error: network unreachable"
     return "Upstream error"
+
+
+def outcome_uncertain(exc: Exception) -> bool:
+    return isinstance(exc, (httpx.ReadTimeout, httpx.WriteTimeout, httpx.ReadError,
+                            httpx.WriteError, httpx.RemoteProtocolError))
 
 
 def gateway_failure(message: str) -> dict:

@@ -5,7 +5,7 @@
         <h3>{{ t('nav.onboarding') }}</h3>
         <p>{{ t('onboard.subtitle') }}</p>
       </div>
-      <el-button v-if="auth.hasPermission('key:write')" type="primary" @click="router.push('/keys')">{{ t('onboard.createKey') }}</el-button>
+      <el-button v-if="auth.isPlatformAdmin" type="primary" @click="router.push('/keys')">{{ t('onboard.createKey') }}</el-button>
     </div>
 
     <el-card shadow="never" class="block">
@@ -171,7 +171,7 @@ async function copy(text: string) {
 }
 
 onMounted(async () => {
-  if (!auth.hasPermission('channel:read')) return
+  if (!auth.isPlatformAdmin) return
   try {
     const data = await modelsApi.list()
     models.value = (data.items || []).map((item: { model: string }) => item.model)

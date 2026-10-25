@@ -1,6 +1,6 @@
 from fastapi import HTTPException
 
-from app.models import APIKey, ModelGroup
+from app.models import APIKey, ModelGroup, Tenant
 from app.services.quota import check_quota
 from app.services.rate_limit import RPMExceeded, rate_limiter
 
@@ -21,12 +21,19 @@ def anthropic_error(status_code: int, error_type: str, code: str, message: str):
 
 async def get_effective_allowed_models(api_key: APIKey) -> list[str] | None:
     """返回有效模型白名单；None 表示不限制，空列表表示禁止全部。"""
+    effective = api_key.allowed_models or None
     if api_key.model_group_id:
         group = await ModelGroup.get_or_none(id=api_key.model_group_id)
         if group:
-            return group.models or []
+            effective = [m for m in effective if m in group.models] if effective is not None else (group.models or [])
+        else:
+            effective = []
+    tenant = await Tenant.get_or_none(id=api_key.tenant_id, is_enabled=True)
+    if tenant is None:
         return []
-    return api_key.allowed_models or None
+    if tenant.allowed_models:
+        return [m for m in effective if m in tenant.allowed_models] if effective is not None else tenant.allowed_models
+    return effective
 
 
 async def check_model_access(api_key: APIKey, model: str, raise_error=openai_error) -> None:
@@ -41,8 +48,3 @@ async def run_pre_checks(api_key: APIKey, model: str, raise_error=openai_error) 
         raise_error(429, "rate_limit_error", "quota_exceeded", "Spending quota exceeded")
 
     await check_model_access(api_key, model, raise_error)
-
-    try:
-        await rate_limiter.check_rpm(api_key.id, api_key.rpm_limit)
-    except RPMExceeded:
-        raise_error(429, "rate_limit_error", "rpm_limit", "Requests per minute limit exceeded")

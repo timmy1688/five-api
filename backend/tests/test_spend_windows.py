@@ -1,10 +1,11 @@
+from tests.conftest import create_test_tenant
 from decimal import Decimal
 from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
 
-from app.models import APIKey, Channel, ModelPrice, Team
+from app.models import APIKey, Channel, ModelPrice, Tenant
 from app.services.auth import hash_api_key
 from app.services.spend_windows import normalize_limits
 from tests.conftest import auth_header
@@ -38,11 +39,11 @@ async def _env(key_limits=None, team_limits=None):
         api_key="sk-up", models=["gpt-4o"], timeout=60,
     )
     await ModelPrice.create(model="gpt-4o", prompt_price=Decimal("1000000"), completion_price=Decimal("0"))
-    team = await Team.create(name="w-team", window_limits=team_limits or {}) if team_limits else None
+    team = await Tenant.create(quota_total=Decimal("-1"), name="w-team", window_limits=team_limits or {}) if team_limits else None
     return await APIKey.create(
         name="w-key", key_hash=hash_api_key(RAW_KEY), key_prefix=RAW_KEY[:8],
         quota_total=Decimal("-1"), window_limits=key_limits or {},
-        team_id=team.id if team else None,
+        tenant_id=team.id if team else (await create_test_tenant()).id,
     ), team
 
 
@@ -63,9 +64,10 @@ async def test_key_window_blocks_after_cap_and_reset_clears(client, admin_token)
     assert listed.json()["window_spend"]["5h"] == 1.0
     assert listed.json()["window_limits"] == {"5h": 0.5}
 
-    await client.post(f"/api/keys/{key.id}/reset-quota", headers=auth_header(admin_token))
+    response = await client.post(f"/api/keys/{key.id}/reset-quota", headers=auth_header(admin_token))
+    assert response.status_code == 405
     with patch("app.providers.base._shared_http_client", return_value=_http()):
-        assert (await _call(client)).status_code == 200
+        assert (await _call(client)).status_code == 429
 
 
 async def test_team_window_blocks_every_key(client, admin_token):
@@ -74,14 +76,15 @@ async def test_team_window_blocks_every_key(client, admin_token):
         assert (await _call(client)).status_code == 200
         blocked = await _call(client)
     assert blocked.status_code == 429
-    assert "team_window_limit" in blocked.text
-    shown = await client.get(f"/api/teams/{team.id}", headers=auth_header(admin_token))
+    assert "tenant_window_limit" in blocked.text
+    shown = await client.get(f"/api/tenants/{team.id}", headers=auth_header(admin_token))
     assert shown.json()["window_spend"]["1d"] == 1.0
 
 
 async def test_key_form_round_trips_windows(client, admin_token):
-    created = await client.post(
-        "/api/keys", json={"name": "wk", "window_limits": {"7d": 20, "5h": ""}},
+    key, _ = await _env()
+    created = await client.put(
+        f"/api/keys/{key.id}", json={"window_limits": {"7d": 20, "5h": ""}},
         headers=auth_header(admin_token),
     )
     assert created.json()["window_limits"] == {"7d": 20.0}
@@ -93,6 +96,8 @@ async def test_key_form_round_trips_windows(client, admin_token):
 
 
 async def test_budget_downgrade_switches_model_past_threshold(client):
+    await ModelPrice.create(model="big-model")
+    await ModelPrice.create(model="small-model")
     from app.models import RequestLog
     from app.services.settings_service import clear_settings_cache, set_gateway_config
 
@@ -100,7 +105,7 @@ async def test_budget_downgrade_switches_model_past_threshold(client):
         name="big", provider="openai", base_url="https://api.openai.test",
         api_key="sk-up", models=["big-model", "small-model"], timeout=60,
     )
-    key = await APIKey.create(
+    key = await APIKey.create(tenant_id=(await create_test_tenant()).id,
         name="d-key", key_hash=hash_api_key(RAW_KEY), key_prefix=RAW_KEY[:8],
         quota_total=Decimal("10"), quota_used=Decimal("7"),
     )

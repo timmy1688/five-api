@@ -1,16 +1,19 @@
 import os
 from decimal import Decimal
+from uuid import uuid4
 from unittest.mock import patch
+from contextlib import ExitStack
 
 os.environ.setdefault("SECRET_KEY", "test-secret-key-for-pytest-only-0123456789")
+os.environ.setdefault("ENCRYPTION_KEY", "test-upstream-encryption-only-0123456789abcd")
 
 import pytest
 from httpx import ASGITransport, AsyncClient
 from tortoise import Tortoise
 
 from app.main import create_app
-from app.models import APIKey, Channel, ModelPrice, Role, User
-from app.services.auth import ALL_PERMISSIONS, create_access_token, hash_api_key, hash_password
+from app.models import APIKey, Channel, ModelPrice, Tenant, User
+from app.services.auth import create_access_token, hash_api_key, hash_password
 
 TEST_TORTOISE_ORM = {
     "connections": {"default": "sqlite://:memory:"},
@@ -19,19 +22,32 @@ TEST_TORTOISE_ORM = {
 
 
 async def create_admin(username: str, password: str = "pw") -> User:
-    role, _ = await Role.get_or_create(
-        name="Super Admin",
-        defaults={"permissions": ALL_PERMISSIONS, "is_builtin": True},
-    )
     return await User.create(
-        username=username, hashed_password=hash_password(password), role=role
+        username=username, hashed_password=hash_password(password), role="platform_admin"
     )
+
+
+
+async def create_test_tenant() -> Tenant:
+    return await Tenant.create(name="test-" + uuid4().hex, quota_total=Decimal("-1"),
+                               rpm_limit=-1, tpm_limit=-1, concurrent_limit=-1)
+
+
+async def create_tenant_account():
+    tenant = await create_test_tenant()
+    user = await User.create(username="customer-" + uuid4().hex, hashed_password=hash_password("customer-pass"),
+                             role="tenant", tenant_id=tenant.id)
+    return tenant, user, auth_header(create_access_token({"sub": str(user.id)}))
 
 
 class FakeRedis:
     def __init__(self):
         self.data = {}
         self.hashes: dict[str, dict[str, int]] = {}
+        self.zsets = {}
+
+    async def hgetall(self, key):
+        return self.hashes.get(key, {}).copy()
 
     async def ping(self):
         return True
@@ -39,6 +55,31 @@ class FakeRedis:
     async def eval(self, script, numkeys, *keys_and_args):
         key = keys_and_args[0]
         args = keys_and_args[int(numkeys):]
+        if "settlement_spend_v1" in script:
+            if key in self.data:
+                return 0
+            self.data[key] = "1"
+            for counter in keys_and_args[1:int(numkeys)]:
+                await self.incrby(counter, int(args[0]))
+            return 1
+        if "ZREMRANGEBYSCORE" in script:
+            limit, ttl, member, now = int(args[0]), int(args[1]), args[2], int(args[3])
+            bucket = self.zsets.setdefault(key, {})
+            for item, expiry in list(bucket.items()):
+                if expiry <= now:
+                    bucket.pop(item)
+            if len(bucket) >= limit:
+                return 0
+            bucket[member] = now + ttl
+            return 1
+        if "ZSCORE" in script:
+            bucket = self.zsets.get(key, {})
+            if args[1] not in bucket:
+                return 0
+            bucket[args[1]] = int(args[2]) + int(args[0])
+            return 1
+        if "ZREM" in script:
+            return int(self.zsets.get(key, {}).pop(args[0], None) is not None)
         if "HVALS" in script:
             return self._quota_reserve(key, args)
         if "HDEL" in script:
@@ -143,6 +184,8 @@ async def setup_db():
     clear_settings_cache()
     clear_filter_cache()
     clear_alert_cache()
+    from app.services.settlements import _unsaved
+    _unsaved.clear()
     await Tortoise.init(config=TEST_TORTOISE_ORM)
     await Tortoise.generate_schemas()
     yield
@@ -181,8 +224,10 @@ async def channel():
 
 @pytest.fixture
 async def api_key():
+    tenant = await Tenant.create(name="fixture-tenant", quota_total=Decimal("100"))
     raw_key = "sk-testkey1234567890abcdef"
     return await APIKey.create(
+        tenant_id=tenant.id,
         name="test-key",
         key_hash=hash_api_key(raw_key),
         key_prefix=raw_key[:8],
@@ -207,17 +252,14 @@ def mock_redis():
         "app.dependencies.get_redis",
         "app.services.concurrency.get_redis",
         "app.services.rate_limit.get_redis",
-        "app.services.quota.get_redis",
         "app.services.sticky_session.get_redis",
         "app.services.channel_health.get_redis",
     ]
-    with patch(targets[0], return_value=fake), \
-         patch(targets[1], return_value=fake), \
-         patch(targets[2], return_value=fake), \
-         patch(targets[3], return_value=fake), \
-         patch(targets[4], return_value=fake), \
-         patch(targets[5], return_value=fake):
+    with ExitStack() as stack:
+        for target in targets:
+            stack.enter_context(patch(target, return_value=fake))
         yield fake
+
 
 
 @pytest.fixture

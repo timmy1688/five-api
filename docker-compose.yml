@@ -1,5 +1,5 @@
 # 启动：docker compose up -d
-# 打开 http://localhost ，账号 admin / admin123，首次登录会要求改密码
+# 打开 http://127.0.0.1:8080；商用入口使用 docs/OPERATIONS.md 的 HTTPS 配置
 # 改端口或密码时，直接改下面的值。
 
 services:
@@ -9,15 +9,19 @@ services:
     build: .
     restart: always
     ports:
-      - "80:8000"
+      - "127.0.0.1:8080:8000"
     environment:
       MYSQL_HOST: mysql
       MYSQL_USER: five
-      MYSQL_PASSWORD: five_password
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-five_password}
       MYSQL_DATABASE: five_api
       REDIS_URL: redis://redis:6379/0
-      INIT_ADMIN_USERNAME: admin
-      INIT_ADMIN_PASSWORD: admin123
+      INIT_ADMIN_USERNAME: ${INIT_ADMIN_USERNAME:-admin}
+      INIT_ADMIN_PASSWORD: ${INIT_ADMIN_PASSWORD:-admin123}
+      SECRETS_FILE: /var/lib/five-api/secrets.json
+      FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-127.0.0.1}
+    volumes:
+      - gateway_secrets:/var/lib/five-api
     stop_grace_period: 40s
     depends_on:
       mysql:
@@ -43,18 +47,21 @@ services:
     image: mysql:8.0
     restart: always
     environment:
-      MYSQL_ROOT_PASSWORD: root_password
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root_password}
       MYSQL_DATABASE: five_api
       MYSQL_USER: five
-      MYSQL_PASSWORD: five_password
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-five_password}
     volumes:
       - ./data/mysql:/var/lib/mysql
     ports:
       - "127.0.0.1:3306:3306"
     healthcheck:
       # 用 TCP 检查。首次初始化时 MySQL 先起一个不开网络的临时实例，socket 检查会提前通过。
-      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-proot_password"]
+      test: ["CMD-SHELL", 'MYSQL_PWD="$$MYSQL_ROOT_PASSWORD" mysqladmin ping -h 127.0.0.1 -uroot --silent']
       interval: 5s
       timeout: 3s
       retries: 30
       start_period: 30s
+
+volumes:
+  gateway_secrets:

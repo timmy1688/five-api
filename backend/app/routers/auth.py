@@ -2,7 +2,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from tortoise.expressions import F
 
 from app import dependencies
-from app.models import User
+from app.config import settings
+from app.models import User, Tenant
 from app.schemas.user import UserInfo, ChangePasswordRequest, LoginRequest, TokenResponse
 from app.services.auth import (
     DEFAULT_ADMIN_PASSWORD,
@@ -59,30 +60,26 @@ async def login(body: LoginRequest, request: Request):
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail="Too many failed logins, try again later",
         )
-    admin = await User.get_or_none(username=body.username, is_active=True).select_related("role")
+    admin = await User.get_or_none(username=body.username, is_active=True)
     if admin is None or not verify_password(body.password, admin.hashed_password):
         await _record_failure(keys)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
     await (await dependencies.get_redis()).delete(keys[1])
-    must_change = body.password == DEFAULT_ADMIN_PASSWORD
+    if admin.role == "tenant" and not await Tenant.exists(id=admin.tenant_id, is_enabled=True):
+        raise HTTPException(403, "Tenant unavailable")
+    must_change = admin.must_change_password or body.password == DEFAULT_ADMIN_PASSWORD
+    if must_change and not admin.must_change_password:
+        await User.filter(id=admin.id).update(must_change_password=True)
     return TokenResponse(
         access_token=admin_token(admin, must_change),
         must_change_password=must_change,
+        expires_in=settings.JWT_EXPIRE_MINUTES * 60,
     )
 
 
 @router.get("/me", response_model=UserInfo)
 async def me(admin: User = Depends(get_current_admin)):
-    return UserInfo(
-        id=admin.id,
-        username=admin.username,
-        role_id=admin.role_id,
-        role_name=admin.role.name,
-        permissions=admin.role.permissions or [],
-        is_active=admin.is_active,
-        created_at=admin.created_at,
-        must_change_password=admin.must_change_password,
-    )
+    return UserInfo.model_validate(admin, from_attributes=True)
 
 
 @router.put("/password", response_model=TokenResponse)
@@ -94,7 +91,8 @@ async def change_password(body: ChangePasswordRequest, admin: User = Depends(get
     # Every token issued before this point stops working.
     await User.filter(id=admin.id).update(
         hashed_password=hash_password(body.new_password),
+        must_change_password=False,
         token_version=F("token_version") + 1,
     )
     await admin.refresh_from_db(fields=["token_version"])
-    return TokenResponse(access_token=admin_token(admin))
+    return TokenResponse(access_token=admin_token(admin), expires_in=settings.JWT_EXPIRE_MINUTES * 60)

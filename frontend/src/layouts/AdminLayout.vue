@@ -74,7 +74,7 @@ import type { NavigationIcon } from '@/config/navigation'
 import { useAuthStore } from '@/stores/auth'
 import { useI18n } from '@/i18n'
 import LangSwitch from '@/components/LangSwitch.vue'
-import { DataBoard, Connection, Key, Document, PriceTag, Menu, FolderOpened, Lock, Expand, User, Warning, Memo, Setting, UserFilled, TrendCharts, Guide, Tickets } from '@element-plus/icons-vue'
+import { DataBoard, Connection, Key, Document, PriceTag, Menu, FolderOpened, Lock, Expand, User, Warning, Memo, Setting, UserFilled, TrendCharts, Guide } from '@element-plus/icons-vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -84,7 +84,6 @@ const mobileMenuOpen = ref(false)
 const navigationIcons: Record<NavigationIcon, unknown> = {
   dashboard: DataBoard,
   insights: TrendCharts,
-  reconcile: Tickets,
   onboarding: Guide,
   channels: Connection,
   models: Menu,
@@ -96,13 +95,12 @@ const navigationIcons: Record<NavigationIcon, unknown> = {
   audit: Memo,
   security: Warning,
   admins: User,
-  roles: Lock,
   settings: Setting,
 }
 const visibleNavigation = computed(() => navigationGroups
   .map(group => ({
     ...group,
-    items: group.items.filter(item => auth.hasPermission(item.permission)),
+    items: group.items.filter(item => auth.isPlatformAdmin || item.tenantAccess),
   }))
   .filter(group => group.items.length > 0))
 const mobileMedia = window.matchMedia('(max-width: 720px)')

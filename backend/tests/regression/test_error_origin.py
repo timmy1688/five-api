@@ -1,3 +1,4 @@
+from tests.conftest import create_test_tenant
 from decimal import Decimal
 from unittest.mock import AsyncMock, patch
 
@@ -53,7 +54,7 @@ async def _key_and_channel(base_url: str):
         max_retries=0,
     )
     raw_key = "sk-originlog123456"
-    await APIKey.create(
+    await APIKey.create(tenant_id=(await create_test_tenant()).id,
         name="origin-key",
         key_hash=hash_api_key(raw_key),
         key_prefix=raw_key[:8],
@@ -124,7 +125,7 @@ async def test_reseller_upstream_error_is_logged(client):
     assert log.error_origin == "reseller"
     assert log.upstream_status_code == 502
     assert "bad gateway from relay" in log.upstream_error
-    assert resp.json()["detail"]["error"]["code"] == "upstream_error"
+    assert resp.json()["error"]["code"] == "upstream_error"
 
 
 async def test_system_audit_switch_records_content(client):

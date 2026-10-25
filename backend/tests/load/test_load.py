@@ -1,3 +1,4 @@
+from tests.conftest import create_test_tenant
 """并发压测：成功突发、并发上限、安全过滤，以及密钥扫描耗时。"""
 
 import asyncio
@@ -52,7 +53,7 @@ async def _ready(name: str, *, concurrent_limit: int = 1000, quota: str = "100")
         completion_price=Decimal("1"),
     )
     raw = f"sk-{name}"
-    await APIKey.create(
+    await APIKey.create(tenant_id=(await create_test_tenant()).id,
         name=name,
         key_hash=hash_api_key(raw),
         key_prefix=raw[:8],
@@ -125,7 +126,7 @@ async def test_concurrency_limit_sheds_the_overflow(client, mock_redis):
     assert codes == [200] * 3 + [429] * 37
     for resp in responses:
         if resp.status_code == 429:
-            assert resp.json()["detail"]["error"]["code"] == "concurrent_limit"
+            assert resp.json()["error"]["code"] == "concurrent_limit"
 
 
 async def test_keyword_filter_stays_correct_under_concurrency(client):
@@ -140,7 +141,7 @@ async def test_keyword_filter_stays_correct_under_concurrency(client):
         max_retries=0,
     )
     raw = "sk-load-filter"
-    await APIKey.create(
+    await APIKey.create(tenant_id=(await create_test_tenant()).id,
         name="load-filter",
         key_hash=hash_api_key(raw),
         key_prefix=raw[:8],

@@ -147,6 +147,8 @@ def _serving(provider_cls: type[BaseProvider], model: str):
         provider.model_override = model
         return provider
 
+    build.serving_model = model
+
     return build
 
 

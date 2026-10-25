@@ -54,23 +54,25 @@ class ConcurrencyLimiter:
     def __init__(self):
         self._tasks: dict[str, asyncio.Task] = {}
 
-    async def acquire(self, key_id: int, limit: int) -> str:
+    async def acquire(self, key_id: int, limit: int, scope: str = "key") -> str:
+        if limit == -1:
+            return ""
         r = await get_redis()
-        rk = f"{self.KEY_PREFIX}{key_id}"
+        rk = f"{self.KEY_PREFIX}{scope + ':' if scope != 'key' else ''}{key_id}"
         lease_id = uuid.uuid4().hex
         now = int(time.time())
         result = await r.eval(
             ACQUIRE_SCRIPT, 1, rk, limit, self.LEASE_TTL, lease_id, now
         )
         if result == 0:
-            raise ConcurrencyExceeded(key_id, limit)
+            raise ConcurrencyExceeded(key_id, limit, scope)
         self._tasks[lease_id] = asyncio.create_task(
-            self._keepalive(key_id, lease_id)
+            self._keepalive(key_id, lease_id, scope)
         )
         return lease_id
 
-    async def _keepalive(self, key_id: int, lease_id: str) -> None:
-        rk = f"{self.KEY_PREFIX}{key_id}"
+    async def _keepalive(self, key_id: int, lease_id: str, scope: str = "key") -> None:
+        rk = f"{self.KEY_PREFIX}{scope + ':' if scope != 'key' else ''}{key_id}"
         try:
             while True:
                 await asyncio.sleep(self.REFRESH_INTERVAL)
@@ -86,19 +88,22 @@ class ConcurrencyLimiter:
         except Exception:
             logger.exception("Failed to refresh concurrency lease for key %s", key_id)
 
-    async def release(self, key_id: int, lease_id: str) -> None:
+    async def release(self, key_id: int, lease_id: str, scope: str = "key") -> None:
+        if not lease_id:
+            return
         task = self._tasks.pop(lease_id, None)
         if task:
             task.cancel()
             with suppress(asyncio.CancelledError):
                 await task
         r = await get_redis()
-        rk = f"{self.KEY_PREFIX}{key_id}"
+        rk = f"{self.KEY_PREFIX}{scope + ':' if scope != 'key' else ''}{key_id}"
         await r.eval(RELEASE_SCRIPT, 1, rk, lease_id)
 
 
 class ConcurrencyExceeded(Exception):
-    def __init__(self, key_id: int, limit: int):
+    def __init__(self, key_id: int, limit: int, scope: str = "key"):
+        self.scope = scope
         self.key_id = key_id
         self.limit = limit
         super().__init__(f"Key {key_id} concurrent limit {limit} exceeded")

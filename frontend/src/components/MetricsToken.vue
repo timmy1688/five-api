@@ -20,7 +20,7 @@ import { useI18n } from '@/i18n'
 
 const { t } = useI18n()
 const auth = useAuthStore()
-const canWrite = computed(() => auth.hasPermission('setting:write'))
+const canWrite = computed(() => auth.isPlatformAdmin)
 const token = ref('')
 const loading = ref(false)
 const resetting = ref(false)
@@ -100,6 +100,7 @@ h4 {
   display: flex;
   gap: 8px;
   max-width: 640px;
+  flex-wrap: wrap;
 }
 
 .token-input {

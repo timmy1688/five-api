@@ -13,7 +13,7 @@ class UsageDaily(Model):
     day = fields.DateField()
     api_key_id = fields.IntField(default=0)
     api_key_name = fields.CharField(max_length=128, default="")
-    team_id = fields.IntField(default=0, index=True)
+    tenant_id = fields.IntField(default=0, index=True)
     model = fields.CharField(max_length=64, default="")
     channel_id = fields.IntField(default=0)
     channel_name = fields.CharField(max_length=128, default="")
@@ -26,6 +26,7 @@ class UsageDaily(Model):
     cache_write_tokens = fields.BigIntField(default=0)
     cache_savings = fields.DecimalField(max_digits=18, decimal_places=6, default=0)
     cost = fields.DecimalField(max_digits=18, decimal_places=6, default=0)
+    upstream_cost = fields.DecimalField(max_digits=18, decimal_places=6, default=0)
 
     class Meta:
         table = "usage_daily"

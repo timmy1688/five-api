@@ -1,9 +1,10 @@
+from tests.conftest import create_test_tenant
 from decimal import Decimal
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from app.models import APIKey, Channel, RequestLog, Role, SecurityKeyword, User
+from app.models import APIKey, Channel, RequestLog, Tenant, SecurityKeyword, User
 from app.services.auth import create_access_token, hash_api_key, hash_password
 from app.services.content_filter import ResponseScanner, match_secret, request_text
 from app.services.settings_service import (
@@ -75,7 +76,7 @@ async def _ready_key():
         max_retries=0,
     )
     raw_key = "sk-filterkey123456"
-    await APIKey.create(
+    await APIKey.create(tenant_id=(await create_test_tenant()).id,
         name="filter-key",
         key_hash=hash_api_key(raw_key),
         key_prefix=raw_key[:8],
@@ -305,15 +306,15 @@ async def test_secret_scan_off_allows_the_token(client):
 
 
 async def test_security_writes_require_more_than_read(client):
-    role = await Role.create(name="Security Reader", permissions=["security:read"])
+    tenant = await Tenant.create(quota_total=Decimal("-1"), name="security-tenant")
     reader = await User.create(
         username="security-reader",
         hashed_password=hash_password("pw"),
-        role=role,
+        role="tenant", tenant_id=tenant.id,
     )
     headers = auth_header(create_access_token({"sub": str(reader.id)}))
     listed = await client.get("/api/security", headers=headers)
-    assert listed.status_code == 200
+    assert listed.status_code == 403
     denied = await client.put("/api/security", json={"enabled": True}, headers=headers)
     assert denied.status_code == 403
     denied_audit = await client.put(

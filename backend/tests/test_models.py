@@ -1,3 +1,4 @@
+from tests.conftest import create_test_tenant
 from decimal import Decimal
 
 import pytest
@@ -32,7 +33,7 @@ async def test_channel_create():
 
 async def test_api_key_create():
     raw = "sk-model-test-key"
-    k = await APIKey.create(
+    k = await APIKey.create(tenant_id=(await create_test_tenant()).id,
         name="test",
         key_hash=hash_api_key(raw),
         key_prefix=raw[:8],
@@ -46,7 +47,7 @@ async def test_api_key_create():
 
 async def test_api_key_with_reset_day():
     raw = "sk-reset-day-key"
-    k = await APIKey.create(
+    k = await APIKey.create(tenant_id=(await create_test_tenant()).id,
         name="reset-key",
         key_hash=hash_api_key(raw),
         key_prefix=raw[:8],

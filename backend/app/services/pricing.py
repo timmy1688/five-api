@@ -176,7 +176,7 @@ def estimate_request_tokens(
             output = int(raw_out)
         except (TypeError, ValueError):
             output = 4096
-    output = min(max(output, 0), 128_000)
+    output = max(output, 0)
     text_parts = (
         body.get("messages"),
         body.get("system"),
@@ -200,9 +200,10 @@ def count_text_tokens(value) -> int:
     cjk = 0
     other = 0
     blobs = 0
+    explicit_tokens = 0
 
     def walk(item) -> None:
-        nonlocal cjk, other, blobs
+        nonlocal cjk, other, blobs, explicit_tokens
         if isinstance(item, str):
             if _is_blob(item):
                 blobs += 1
@@ -218,11 +219,14 @@ def count_text_tokens(value) -> int:
                 walk(child)
             return
         if isinstance(item, (list, tuple)):
+            if item and all(type(child) is int for child in item):
+                explicit_tokens += len(item)
+                return
             for child in item:
                 walk(child)
 
     walk(value)
-    return cjk + (other + 3) // 4 + blobs * BLOB_TOKENS
+    return cjk + (other + 3) // 4 + blobs * BLOB_TOKENS + explicit_tokens
 
 
 def _is_blob(text: str) -> bool:

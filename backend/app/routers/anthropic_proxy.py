@@ -30,6 +30,7 @@ from app.services.auto_cache import with_cache_control
 from app.services.routing import plan_route
 from app.services.settings_service import gateway_config
 from app.utils.ip_check import get_client_ip
+from app.services.unbilled_limits import guard_unbilled
 
 router = APIRouter(tags=["anthropic-proxy"])
 
@@ -77,6 +78,7 @@ async def _passthrough_stream_with_usage(
     output_tokens = 0
     cache_read = 0
     cache_creation = 0
+    reported_prompt = reported_completion = False
 
     async for line in provider.stream_anthropic_passthrough(body, extra_headers):
         stripped = line.strip()
@@ -86,16 +88,19 @@ async def _passthrough_stream_with_usage(
                 event_msg = data.get("message", {})
                 if event_msg:
                     u = event_msg.get("usage", {})
+                    reported_prompt = reported_prompt or "input_tokens" in u
                     input_tokens = u.get("input_tokens", input_tokens)
                     cache_read = u.get("cache_read_input_tokens", cache_read)
                     cache_creation = u.get("cache_creation_input_tokens", cache_creation)
                 delta_usage = data.get("usage", {})
                 if delta_usage:
+                    reported_completion = reported_completion or "output_tokens" in delta_usage
                     output_tokens = delta_usage.get("output_tokens", output_tokens)
             except (json.JSONDecodeError, ValueError):
                 pass
 
-        yield line, _billing_usage(input_tokens, output_tokens, cache_read, cache_creation)
+        yield line, {**_billing_usage(input_tokens, output_tokens, cache_read, cache_creation),
+                     "reported_prompt": reported_prompt, "reported_completion": reported_completion}
 
 
 @router.post("/v1/messages/count_tokens")
@@ -103,7 +108,17 @@ async def count_tokens(
     request: Request,
     api_key: APIKey = Depends(verify_api_key_anthropic),
 ):
-    """Token count for Claude Code. Free, so it skips quota, RPM and logging.
+    raw = await request.body()
+    try:
+        estimated, _ = estimate_request_tokens(json.loads(raw))
+    except (ValueError, TypeError):
+        estimated = 0
+    async with guard_unbilled(api_key, estimated):
+        return await _count_tokens(request, api_key)
+
+
+async def _count_tokens(request: Request, api_key: APIKey):
+    """Free token counting; tenant/key RPM, TPM and concurrency still apply.
 
     Anthropic-compatible upstreams without this endpoint get a local estimate.
     """
@@ -172,11 +187,11 @@ async def messages(
 
     budget = None
     try:
-        budget = await begin_request_budget(api_key, request_id, raw_body)
+        budget = await begin_request_budget(api_key, request_id, raw_body, candidates=plan.candidates)
         concurrency_lease_id = await concurrency_limiter.acquire(
             api_key.id, api_key.concurrent_limit
         )
-    except ConcurrencyExceeded:
+    except ConcurrencyExceeded as exc:
         if budget is not None:
             await budget.release()
         await log_rejected_request(
@@ -184,12 +199,12 @@ async def messages(
             start_time, ip, "Too many concurrent requests", audit=audit,
             security_hit=format_hits(security_hits),
         )
-        anthropic_error(429, "rate_limit_error", "concurrent_limit", "Too many concurrent requests")
+        anthropic_error(429, "rate_limit_error", "tenant_concurrent_limit" if exc.scope == "tenant" else "concurrent_limit", "Too many concurrent requests")
     except (QuotaExceeded, TPMExceeded) as exc:
         if isinstance(exc, QuotaExceeded):
             status, code, message = exc.status, exc.code, exc.message
         else:
-            status, code, message = 429, "tpm_limit", "Tokens per minute limit exceeded"
+            status, code, message = 429, "tenant_tpm_limit" if exc.scope == "tenant" else "tpm_limit", "Tokens per minute limit exceeded"
         error_type = "permission_error" if status == 403 else "rate_limit_error"
         await log_rejected_request(
             api_key, request_id, "/v1/messages", body.model, status,
@@ -228,7 +243,9 @@ async def messages(
 
     async def _send_fn(provider: AnthropicProvider, channel):
         result = await provider.send_anthropic_passthrough(raw_body, extra_headers)
-        return JSONResponse(content=result), _extract_anthropic_usage(result)
+        reported = result.get("usage") or {}
+        return JSONResponse(content=result), {**_extract_anthropic_usage(result),
+            "reported_prompt": "input_tokens" in reported, "reported_completion": "output_tokens" in reported}
 
     response = await execute_with_failover(
         plan.candidates, _send_fn, api_key, "/v1/messages", body.model,

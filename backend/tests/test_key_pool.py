@@ -1,3 +1,4 @@
+from tests.conftest import create_test_tenant
 from decimal import Decimal
 from unittest.mock import AsyncMock, patch
 
@@ -35,7 +36,7 @@ async def _env(keys: str):
         name="pool", provider="openai", base_url="https://api.openai.test",
         api_key=encrypt_secret(keys), models=["gpt-4o"], timeout=60,
     )
-    await APIKey.create(
+    await APIKey.create(tenant_id=(await create_test_tenant()).id,
         name="pool-key", key_hash=hash_api_key(RAW_KEY), key_prefix=RAW_KEY[:8],
         quota_total=Decimal("-1"),
     )
@@ -115,6 +116,7 @@ async def test_channel_response_reports_key_count(client, admin_token):
 async def test_model_fallback_after_primary_fails(client, admin_token):
     from app.models import ModelPrice, RequestLog
     from app.services.settings_service import clear_settings_cache
+    await ModelPrice.create(model="big-model")
 
     await Channel.create(
         name="opus", provider="openai", base_url="https://api.openai.test",
@@ -125,7 +127,7 @@ async def test_model_fallback_after_primary_fails(client, admin_token):
         api_key="sk-b", models=["small-model"], timeout=60,
         model_mapping={"small-model": "small-model-2026"},
     )
-    await APIKey.create(
+    await APIKey.create(tenant_id=(await create_test_tenant()).id,
         name="fb-key", key_hash=hash_api_key(RAW_KEY), key_prefix=RAW_KEY[:8],
         quota_total=Decimal("-1"),
     )

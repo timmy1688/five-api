@@ -1,188 +1,83 @@
 # Five API
 
-[更新记录](CHANGELOG.md)
+[English](docs/README.en.md) · [开发计划](docs/DEVELOPMENT_PLAN.md) · [运维与升级](docs/OPERATIONS.md) · [兼容矩阵](docs/COMPATIBILITY.md)
 
 [![CI](https://github.com/timmy1688/five-api/actions/workflows/ci.yml/badge.svg)](https://github.com/timmy1688/five-api/actions/workflows/ci.yml)
 
-面向团队的自托管 AI 网关。Claude Code、Codex、Cursor 和各类 SDK 接同一个地址：上游 Key 集中托管，每个人按美元记账，渠道出故障自动切换，花费能和厂商账单逐行对上。
+轻量多租户 AI 网关，提供 OpenAI、Anthropic 原生协议与 Vue 管理后台。采用 MIT 许可证，可用于商业部署。当前开发版本为 **0.4.0**，发布状态见 [CHANGELOG](CHANGELOG.md)。
 
-一条 `docker compose up -d` 部署，管理后台和 API 在同一个进程里。
+## 产品范围
 
-## 为什么选 Five API
+- **两种固定身份**：平台管理员、租户。平台负责开户、总额度、模型授权和限流；一个租户一个账号，租户自行管理 Key，不创建子账号。
+- **平台自用 Key**：首页和 API Key 页面均可创建，自动归入平台内部额度空间。管理员不代租户创建客户 Key。
+- **可靠计费**：多个 Key 共享租户累计美元额度，并受各自上限约束。足额预占、报价快照、MySQL 事务结算、幂等恢复；结果不确定时保留占用供核对。
+- **租户限流**：共享 RPM、TPM 与并发限制，创建新 Key 不能绕过。新租户默认 120 RPM、100,000 TPM、10 并发，均可由平台调整。
+- **模型广场**：展示实际计费价、渠道、健康结果和巡检时间。可用性默认每 15 分钟检测；GPT、Claude 的降智参考检测默认每天一次，也可立即检测。
+- **售价与成本分开**：客户计费倍率与渠道折扣独立设置。导入参考价格只补缺失项，保留已有价格、倍率及启停状态。
+- **路由与协议**：保留渠道优先级、号池、故障转移、粘性会话、缓存计量、模型回退及现有多模态端点。
+- **最小运营界面**：账号管理合并租户账号与平台管理员；设置按配置、路由、告警、监控分组。取消 CSV 账单对账和独立结算恢复页签，异常才显示核对入口。
 
-### 原生协议，客户端只改地址
+首期不提供在线支付、组织成员层级、动态 RBAC、SSO 或多副本调度。[权限边界与管理 API](docs/MANAGEMENT_API.md) 说明账号、JWT 与推理 Key 的区别。
 
-- Claude Code 和 Anthropic SDK 走 `/v1/messages`，原样进 Anthropic 渠道，`tool_use`、`thinking`、流式和厂商 Beta 字段完整保留。
-- OpenAI SDK、Codex、Cursor 走 `/v1/*`：chat、responses、embeddings、图片、语音、rerank 全部透传。
-- 上游的限流响应头原样交回，SDK 的退避逻辑照常工作。同一个模型可以同时建两种协议的渠道。
-- Claude Code 和 Codex CLI 都经网关实测跑通了带工具调用的多轮任务。
+## 本地开发
 
-```bash
-export ANTHROPIC_BASE_URL=http://your-server
-export ANTHROPIC_API_KEY=sk-your-gateway-key
-```
-
-### 高可用，上游出问题自动绕开
-
-- 同协议的渠道按优先级分层，层内按权重、最少进行中请求或最低延迟选路。
-- 一个渠道放多把上游 Key 组成号池：429 按 `retry-after` 冷却，401、403 冷却 10 分钟，自动换下一把。
-- 5xx、超时、网络错误自动切换渠道，流式请求在首包前切换。连续失败自动熔断，后台探测恢复。
-- 一个模型的渠道全部失败，按回退链换备选模型，例如 `claude-opus-4-7 → claude-sonnet-4-6`。
-- 粘性会话把同一段对话固定在同一渠道、同一把 Key 上，上游缓存持续命中。
-- 客户端中途断开、上游流中断时，照样结算费用、写日志、释放并发名额。
-
-### 精确计费，每一分钱都有来处
-
-- 额度按美元记在 Key 上。一次请求四档计价：输入、缓存读取、缓存写入、输出。图片、语音、rerank 另有按次价。
-- OpenAI 和 Anthropic 的用量口径统一折算，Anthropic 的缓存 token 补齐后再计费。
-- 请求开始时预留估算金额，结束后按实际用量结算。并发请求互相占位，额度最多超出一次请求的费用。
-- 团队共用一笔预算。Key 和团队都能设最近 5 小时、24 小时、7 天的滚动美元上限。
-- 分时定价给指定时段的费用乘一个倍率，对应厂商的夜间折扣或高峰加价。
-- 每条日志带费用明细：各档用量、单价、价格来源和缓存节省。
-
-### 成本优化，花得少还看得见
-
-- 「成本洞察」按天画缓存命中率和节省金额，按模型、Key、渠道拆开，再按会话列出花费最多的对话。
-- 自动缓存：没带 `cache_control` 的 Anthropic 请求，在工具、系统提示和最后一条消息上自动加缓存标记。
-- 预算降级：快到上限时按规则把贵模型换成便宜模型，响应头 `x-five-downgraded-to` 写明换成了哪个。
-- 「账单对账」上传厂商导出的 CSV，自动识别日期、金额和模型列，按天和模型逐行比对，标出偏高和偏低的行。
-
-### 安全合规，管得住也不打扰
-
-- 上游 Key 加密保存，成员只拿网关 Key。每把 Key 可以限制模型、IP、每分钟请求数、每分钟 token 数、并发数和过期时间。
-- 关键词和密钥扫描（私钥、AWS 访问密钥、GitHub token、Slack token）只在日志里打标记，调用照常进行，日志只记模式名，密钥原文不入库。
-- 推理审计按 Key 开启，只保存请求。AI 审查在审计页按需逐条进行，每条只送系统提示开头 400 字和最后一条用户消息末尾 1200 字，审完生成报告。
-- 21 项细粒度权限，可自建角色。登录失败限速，改密码后旧凭证立即失效。
-
-### 运维省心
-
-- 不需要 `.env`，网关无状态，迁移自动执行，数据都在 `./data`。
-- `/healthz` 报告 MySQL 和 Redis 状态，`/metrics` 提供 Prometheus 指标。
-- 预算到阈值、渠道熔断和恢复、5xx 占比过高，推送到飞书、钉钉、企业微信或任意 JSON Webhook。
-- 「接入指南」页填入 Key，直接复制 Claude Code、Codex、Cursor 和 SDK 的配置。
-- 冒烟、回归、压测三套自动化测试，覆盖透传、故障转移、计费和限流。
-
-| | Five API | 常见网关 |
-|---|---|---|
-| 协议 | 原样透传，Claude Code 的工具和 thinking 完整到达上游 | 转成另一种格式再转发 |
-| 计费 | 按人按美元，四档计价，先预留再结算 | 只记总量 |
-| 可用性 | 号池冷却、故障转移、熔断、模型回退、粘性会话 | 一个渠道出错，请求就失败 |
-| 成本 | 缓存洞察、自动缓存、预算降级、账单对账 | 只有总账 |
-| 安全 | 命中只标记，按 Key 审查摘录 | 命中就中断这次请求 |
-
-## 界面
-
-![概览](docs/images/dashboard.png)
-
-![成本洞察](docs/images/insights.png)
-
-![渠道](docs/images/channels.png)
-
-![API Key](docs/images/api-keys.png)
-
-![请求日志](docs/images/logs.png)
-
-![审计](docs/images/audit.png)
-
-![安全](docs/images/security.png)
-
-![模型定价](docs/images/model-prices.png)
-
-## 生产部署
-
-安装 Docker 后，在项目目录执行：
-
-```bash
-docker compose up -d
-```
-
-不需要复制 `.env`。有发布镜像时直接拉取 `ghcr.io/timmy1688/five-api`，拉不到就用本地源码构建。管理后台和 API 在同一个端口，默认是宿主机的 80，浏览器打开 `http://服务器地址`。首次登录 `admin` / `admin123`，系统会先要求改密码，改完才能进后台。数据库和 Redis 数据在 `./data`，`docker compose down` 不会删掉这个目录。
-
-加密渠道 Key 和签发登录凭证用的密钥首次启动时自动生成，存在数据库里，网关不挂载任何目录，可以多副本运行。数据库备份要妥善保管，拿到它就能解出渠道 Key。
-
-从 0.3.0 及更早版本升级，先把旧密钥导入数据库，再正常启动：
-
-```bash
-docker compose run --rm -e SECRET_KEY="$(cat data/.secret_key)" gateway python -m app.import_secret
-docker compose up -d
-```
-
-MySQL 和 Redis 的端口只绑在 `127.0.0.1`，其他机器连不上，网关走容器内网。网关只信任本机发来的 `X-Forwarded-For`。
-
-网关等 MySQL 和 Redis 就绪后才执行迁移。`/healthz` 返回两者的状态，Docker 健康检查用的就是它。`/metrics` 默认只允许容器内访问；Prometheus 要从外面抓，到「系统设置」复制自动生成的令牌，抓取时带 `Authorization: Bearer <令牌>`。
-
-要改对外端口或密码，直接改 `docker-compose.yml` 里的对应值，然后重新执行 `docker compose up -d`。管理员账号已经创建之后，再改 `INIT_ADMIN_PASSWORD` 不会更新已有密码。改密码后旧的登录凭证立即失效。同一 IP 或同一用户名 15 分钟内登录失败 10 次，暂停登录 15 分钟。
-
-```bash
-docker compose up -d --build   # 改了源码后重新构建，pip 和 npm 走国内镜像源
-docker compose logs -f gateway
-docker compose down
-```
-
-升级到新版本后，在「模型定价」点一次「同步最新价格」。每个版本的变化见 [CHANGELOG.md](CHANGELOG.md)。
-
-## 开发
-
-本机需要 Python 3.11+、Node.js 20+ 和 Docker。数据库仍由 Compose 启动，账号用上面的默认值，也不需要 `.env`。
+需要 Python 3.12、Node.js 20.19+（CI 使用 24）、Docker 中的 MySQL 8 和 Redis 7：
 
 ```bash
 ./service.sh install
 ./service.sh start
 ```
 
-前端在 `http://localhost:5001`，后端在 `http://localhost:5002`。页面上的 `/api` 和 `/v1` 会转到后端。
+前端：`http://127.0.0.1:5001`；后端：`http://127.0.0.1:5002`。开发使用本地 Uvicorn 和 Vite，只有数据库和 Redis 使用容器。依赖下载默认使用阿里云与 npmmirror。
+
+首次全新安装默认账号 `admin / admin123`，首次登录必须改密。已有环境修改 `INIT_ADMIN_PASSWORD` 不会重置既有账号密码。
+
+## 单机部署
 
 ```bash
-./service.sh stop
-./service.sh logs
+docker compose up -d --build
 ```
 
-数据库账号和 `docker-compose.yml` 里写的是同一套。要改密码，两边写成一样：Compose 改那个文件，本机后端再放一份 `.env`。
+单镜像提供后台与 API，默认只在本机 `http://127.0.0.1:8080` 监听。商用外部入口使用现有 Nginx 终止 HTTPS，参考 [Nginx 配置](deploy/nginx.conf) 和 [运维文档](docs/OPERATIONS.md)。配置正式数据库密码、初始管理员密码，并保管独立密钥文件。
 
-## 接入
+渠道凭据加密主密钥与 JWT 签名密钥分离，保存在外置文件或独立环境变量中，数据库不保存主密钥。**从旧版本升级必须按运维文档完成迁移**，不能直接换回旧镜像。
 
-渠道的 `provider` 是线协议。`openai` 接 OpenAI、Gemini、千问、vLLM 和兼容中转；`anthropic` 接 Claude 或 DeepSeek 的 Anthropic 端点（`https://api.deepseek.com/anthropic`）。
+## 开通与接入
 
-创建 Key 后复制 `sk-xxx`（只显示一次）。模型定价页同步一次内置价格。渠道上某档价格设成 0，这一档就免费。
-
-请求里没写的字段不会补上，上游用自己的默认值。上游的 `x-request-id` 改名为 `x-upstream-request-id`，网关自己的 `X-Request-ID` 用来查日志。Claude Code 调的 `/v1/messages/count_tokens` 转发到 Anthropic 渠道，不计费，上游没有这个接口时返回本地估算。
-
-| 接口 | 渠道 | 计费 |
-|---|---|---|
-| `/v1/chat/completions` `/v1/completions` `/v1/embeddings` | openai | token |
-| `/v1/responses`（含流式） | openai | token，读 `response.completed` 里的用量 |
-| `/v1/messages` | anthropic | token |
-| `/v1/images/generations` `/v1/images/edits` `/v1/images/variations` | openai | 每张图按次价，上游返回 token 时另计 token |
-| `/v1/audio/speech` | openai | 输入字符数按输入价计（填每百万字符价），另加按次价 |
-| `/v1/audio/transcriptions` `/v1/audio/translations` | openai | 按次价，上游返回 token 时另计 token |
-| `/v1/rerank` | openai | 上游返回的 token，另加按次价 |
-| `/v1/videos` 及 `/{id}`、`/{id}/content`、`/{id}/remix` | openai | 提交时按秒数 × 按次价（填每秒价），查询和下载不计费 |
-
-按次价在「模型定价」或渠道定价的 Q 列填写。
+1. 平台配置渠道、模型售价、客户账号、总额度和共享限流。
+2. 租户首次登录修改临时密码，自行创建应用 Key，明文只显示一次。
+3. 应用使用推理 Key，自动化管理使用账号登录取得的短期 JWT。
 
 ```python
 from openai import OpenAI
-client = OpenAI(api_key="sk-your-gateway-key", base_url="http://your-server/v1")
-client.chat.completions.create(model="gpt-4o", messages=[{"role": "user", "content": "Hello"}])
+
+client = OpenAI(
+    api_key="sk-your-gateway-key",
+    base_url="https://ai.example.com/v1",
+)
+result = client.chat.completions.create(
+    model="your-configured-model",
+    max_tokens=128,
+    messages=[{"role": "user", "content": "Hello"}],
+)
+print(result.choices[0].message.content)
 ```
 
-```
-fresh = prompt - cache_read - cache_write
-cost  = (fresh × 输入价 + cache_read × 缓存读价 + cache_write × 缓存写入价 + completion × 输出价) / 1_000_000
-```
+Anthropic SDK 的 `base_url` 使用网关根地址。具体端点、流式、工具与 SDK 实测版本见 [兼容矩阵](docs/COMPATIBILITY.md)。
 
-先用渠道价，再用全局价。渠道没填写入价时按该渠道的输入价计，填 0 则写入免费。配额先预留再结算。已有的全局价格要在定价页点一次「同步最新价格」，Claude 的写入价才会变成输入价的 1.25 倍。
+计费价 = 基础单价 × 计费倍率；上游成本 = 渠道基础单价 × 渠道成本倍率。输入、缓存读、缓存写、输出分别计量，按次费用另计。报价缺失的未知模型不会静默免费放行；显式 0 为有效免费价格。内置目录是版本化参考数据，不是实时厂商报价。
 
-## 其他
+降智参考检测通过合成题检查指令遵循、推理和工具调用，记录结果供比较，无法证明上游真实型号。定时检测会产生平台上游费用，不扣租户额度；开关与周期位于模型广场的「巡检设置」。
+
+## 验证与贡献
 
 ```bash
-cd backend && ../.venv/bin/pytest -m smoke && ../.venv/bin/pytest -m regression
+cd backend
+../.venv/bin/pytest -q
+../.venv/bin/python -m scripts.smoke_tenants --ui
+../.venv/bin/python scripts/release_check.py
 ```
 
-可选的环境变量见 [.env.example](.env.example)。开发说明见 [CLAUDE.md](CLAUDE.md)。[MIT License](LICENSE)。
+真实 MySQL/Redis 测试、依赖更新、性能基准和浏览器准备见 [贡献指南](CONTRIBUTING.md)。安全问题请按 [安全报告流程](SECURITY.md) 处理。
 
-## 免责声明
-
-Five API 是通用的开源网关软件，不提供模型服务，与任何上游厂商无隶属或背书关系。部署者自行确保使用方式符合当地法律和上游服务协议，不得用于未授权访问、转售密钥或绕过技术限制，并负责用户数据授权、访问控制和密钥轮换。
-
-费用按上游返回的用量和配置价格估算，可能因计量口径、调价、舍入或缺失用量而和厂商账单不同，额度也可能小幅超出。请同时在上游账户设置预算和告警。模型输出由第三方提供，可能不准确，高风险场景须经专业复核。本软件按 MIT License 原样提供，不作任何保证，维护者不对服务中断、数据丢失、密钥泄露或额外费用承担责任。
+网关的估算、上游计量和厂商账单可能存在差异；并发在途请求及未知结果不承诺绝对零超额。仅支持当前单进程部署方式。未验证的客户端和生产域名部署状态会在兼容、运维文档中明确列出。

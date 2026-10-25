@@ -41,7 +41,7 @@
                 {{ reportVisible ? t('audit.viewReport') : t('audit.generate') }}
               </el-button>
               <el-button
-                v-if="auth.hasPermission('security:write') && requests.length"
+                v-if="auth.isPlatformAdmin && requests.length"
                 type="primary"
                 :disabled="!aiEnabled"
                 :loading="reviewing"

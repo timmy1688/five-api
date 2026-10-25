@@ -1,170 +1,191 @@
 from datetime import datetime, timezone
+from decimal import Decimal
+from json import JSONDecodeError
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from pydantic import ValidationError
+from tortoise.transactions import in_transaction
 
-from app.models import User, APIKey, ModelGroup, Team
-from app.schemas.api_key import APIKeyCreate, APIKeyCreateResponse, APIKeyResponse, APIKeyUpdate
-from app.services.auth import hash_api_key, require_permission
-from app.services.spend_windows import normalize_limits, reset_windows, window_spend
+from app.models import APIKey, ModelGroup, RequestLog, Tenant, User
+from app import dependencies
+from app.schemas.api_key import (
+    APIKeyCreateResponse, APIKeyResponse, APIKeyUpdate, TenantKeyCreate, TenantKeyUpdate,
+)
+from app.services.auth import PLATFORM_ADMIN, hash_api_key, require_account
+from app.services.management_events import record_event
+from app.services.quota import occupied_quota
+from app.services.rate_limit import RPM_CHECK_SCRIPT
+from app.services.spend_windows import normalize_limits, window_spend
 from app.utils.key_generator import generate_api_key
 
-router = APIRouter(prefix="/api/keys", tags=["keys"])
+router = APIRouter(prefix="/api", tags=["keys"])
 
 
-async def _to_response(
-    k: APIKey,
-    group_name_map: dict[int, str] | None = None,
-    team_name_map: dict[int, str] | None = None,
-) -> APIKeyResponse:
-    total = float(k.quota_total)
-    used = float(k.quota_used)
-    remaining = -1.0 if total == -1 else max(0.0, total - used)
-    model_group_name = None
-    if k.model_group_id:
-        if group_name_map is not None:
-            model_group_name = group_name_map.get(k.model_group_id)
-        else:
-            group = await ModelGroup.get_or_none(id=k.model_group_id)
-            if group:
-                model_group_name = group.name
-    team_name = None
-    if k.team_id:
-        if team_name_map is not None:
-            team_name = team_name_map.get(k.team_id)
-        else:
-            team = await Team.get_or_none(id=k.team_id)
-            team_name = team.name if team else None
-    return APIKeyResponse(
-        id=k.id,
-        name=k.name,
-        key_prefix=k.key_prefix,
-        quota_total=total,
-        quota_used=used,
-        quota_remaining=remaining,
-        concurrent_limit=k.concurrent_limit,
-        rpm_limit=k.rpm_limit,
-        tpm_limit=k.tpm_limit,
-        allowed_models=k.allowed_models,
-        allowed_ips=k.allowed_ips,
-        model_group_id=k.model_group_id,
-        model_group_name=model_group_name,
-        team_id=k.team_id,
-        team_name=team_name,
-        is_enabled=k.is_enabled,
-        audit_policy=k.audit_policy if k.audit_policy in {"on", "off"} else "on",
-        quota_reset_day=k.quota_reset_day,
-        quota_last_reset_at=k.quota_last_reset_at,
-        window_limits=normalize_limits(k.window_limits),
-        window_spend=await window_spend("key", k.id),
-        expires_at=k.expires_at,
-        created_at=k.created_at,
-        updated_at=k.updated_at,
+def scoped_keys(actor: User):
+    query = APIKey.all()
+    return query if actor.role == PLATFORM_ADMIN else query.filter(tenant_id=actor.tenant_id)
+
+
+async def find_key(key_id: int, actor: User) -> APIKey:
+    key = await scoped_keys(actor).filter(id=key_id).first()
+    if key is None:
+        raise HTTPException(404, "Key not found")
+    return key
+
+
+async def _to_response(key: APIKey, actor: User) -> APIKeyResponse:
+    occupied = await occupied_quota("key", key.id)
+    remaining = -1 if key.quota_total == -1 else max(Decimal("0"), key.quota_total - key.quota_used - occupied)
+    tenant = await Tenant.get_or_none(id=key.tenant_id)
+    data = dict(
+        id=key.id, name=key.name, key_prefix=key.key_prefix,
+        quota_total=key.quota_total, quota_used=key.quota_used, quota_occupied=occupied,
+        quota_remaining=remaining, concurrent_limit=key.concurrent_limit, rpm_limit=key.rpm_limit,
+        tpm_limit=key.tpm_limit, allowed_models=key.allowed_models, allowed_ips=key.allowed_ips,
+        tenant_id=key.tenant_id, tenant_name=tenant.name if tenant else None,
+        tenant_is_system=tenant.is_system if tenant else False,
+        is_enabled=key.is_enabled, is_revoked=key.is_revoked, expires_at=key.expires_at,
+        created_at=key.created_at, updated_at=key.updated_at,
     )
+    if actor.role == PLATFORM_ADMIN:
+        group = await ModelGroup.get_or_none(id=key.model_group_id) if key.model_group_id else None
+        data.update(model_group_id=key.model_group_id, model_group_name=group.name if group else None,
+                    audit_policy=key.audit_policy, quota_reset_day=key.quota_reset_day,
+                    quota_last_reset_at=key.quota_last_reset_at,
+                    window_limits=normalize_limits(key.window_limits),
+                    window_spend=await window_spend("key", key.id))
+    return APIKeyResponse(**data)
 
 
-async def _build_group_name_map(keys: list[APIKey]) -> dict[int, str]:
-    group_ids = {k.model_group_id for k in keys if k.model_group_id}
-    if not group_ids:
-        return {}
-    groups = await ModelGroup.filter(id__in=list(group_ids))
-    return {g.id: g.name for g in groups}
+async def validate_models(tenant: Tenant, data: dict):
+    if data.get("model_group_id") is not None:
+        group = await ModelGroup.get_or_none(id=data["model_group_id"])
+        if group is None:
+            raise HTTPException(404, "Model group not found")
+    models = data.get("allowed_models", [])
+    if tenant.allowed_models and not set(models).issubset(set(tenant.allowed_models)):
+        raise HTTPException(403, "Models exceed tenant allowance")
 
 
-@router.get("")
-async def list_keys(
-    page: int = Query(1, ge=1),
-    size: int = Query(20, ge=1, le=100),
-    _: User = require_permission("key:read"),
-):
-    total = await APIKey.all().count()
-    keys = await APIKey.all().order_by("-id").offset((page - 1) * size).limit(size)
-    group_name_map = await _build_group_name_map(keys)
-    team_ids = list({k.team_id for k in keys if k.team_id})
-    team_name_map = dict(await Team.filter(id__in=team_ids).values_list("id", "name")) if team_ids else {}
-    return {
-        "total": total,
-        "items": [await _to_response(k, group_name_map, team_name_map) for k in keys],
-    }
+async def _create(tenant_id: int, body: TenantKeyCreate, actor: User, response: Response):
+    data = body.model_dump()
+    redis = await dependencies.get_redis()
+    if not await redis.eval(RPM_CHECK_SCRIPT, 1, f"five:management:key_create:{tenant_id}", 20, 60):
+        raise HTTPException(429, "Key creation rate limit exceeded", headers={"Retry-After": "60"})
+    async with in_transaction():
+        tenant = await Tenant.filter(id=tenant_id).select_for_update().first()
+        if tenant is None:
+            raise HTTPException(404, "Tenant not found")
+        if not tenant.is_enabled:
+            raise HTTPException(403, "Tenant disabled")
+        if await APIKey.filter(tenant_id=tenant_id, is_revoked=False).count() >= tenant.max_keys:
+            raise HTTPException(409, "Tenant key limit reached; revoke unused keys first")
+        await validate_models(tenant, data)
+        if data.get("quota_reset_day") is not None:
+            data["quota_last_reset_at"] = datetime.now(timezone.utc)
+        raw = generate_api_key()
+        key = await APIKey.create(**data, tenant_id=tenant_id, key_hash=hash_api_key(raw), key_prefix=raw[:8])
+        await record_event(actor, "key.create", key.id, tenant_id)
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Pragma"] = "no-cache"
+    return APIKeyCreateResponse(**(await _to_response(key, actor)).model_dump(), key=raw)
 
 
-@router.post("", response_model=APIKeyCreateResponse, status_code=status.HTTP_201_CREATED)
-async def create_key(body: APIKeyCreate, _: User = require_permission("key:write")):
-    if body.model_group_id is not None:
-        if not await ModelGroup.exists(id=body.model_group_id):
-            raise HTTPException(status_code=404, detail="Model group not found")
-    if body.team_id is not None and not await Team.exists(id=body.team_id):
-        raise HTTPException(status_code=404, detail="Team not found")
-    raw_key = generate_api_key()
-    k = await APIKey.create(
-        name=body.name,
-        key_hash=hash_api_key(raw_key),
-        key_prefix=raw_key[:8],
-        quota_total=body.quota_total,
-        concurrent_limit=body.concurrent_limit,
-        rpm_limit=body.rpm_limit,
-        tpm_limit=body.tpm_limit,
-        allowed_models=body.allowed_models,
-        allowed_ips=body.allowed_ips,
-        model_group_id=body.model_group_id,
-        team_id=body.team_id,
-        audit_policy=body.audit_policy,
-        quota_reset_day=body.quota_reset_day,
-        quota_last_reset_at=(
-            datetime.now(timezone.utc) if body.quota_reset_day is not None else None
-        ),
-        window_limits=body.window_limits,
-        expires_at=body.expires_at,
+@router.get("/keys")
+async def list_keys(page: int = Query(1, ge=1), size: int = Query(20, ge=1, le=100),
+                    tenant_id: int | None = None, actor: User = Depends(require_account)):
+    if actor.role != PLATFORM_ADMIN and tenant_id is not None:
+        raise HTTPException(403, "Tenant selection requires platform administrator")
+    query = scoped_keys(actor)
+    if tenant_id is not None:
+        query = query.filter(tenant_id=tenant_id)
+    keys = await query.order_by("-id").offset((page - 1) * size).limit(size)
+    return {"total": await query.count(), "items": [await _to_response(k, actor) for k in keys]}
+
+
+@router.get("/keys/summary")
+async def tenant_summary(actor: User = Depends(require_account)):
+    if actor.role == PLATFORM_ADMIN:
+        raise HTTPException(400, "Use /api/tenants/{tenant_id}")
+    from app.routers.tenants import tenant_response
+    tenant = await Tenant.get(id=actor.tenant_id)
+    return await tenant_response(tenant)
+
+
+@router.post("/keys", response_model=APIKeyCreateResponse, status_code=201)
+async def create_key(body: TenantKeyCreate, response: Response, actor: User = Depends(require_account)):
+    if actor.role == PLATFORM_ADMIN:
+        tenant, _ = await Tenant.get_or_create(name="__platform_internal__", defaults={
+            "is_system": True, "quota_total": -1, "max_keys": 1000,
+            "rpm_limit": -1, "tpm_limit": -1, "concurrent_limit": -1,
+        })
+        if not tenant.is_system:
+            raise HTTPException(409, "Platform key namespace is unavailable")
+        return await _create(tenant.id, body, actor, response)
+    return await _create(actor.tenant_id, body, actor, response)
+
+
+@router.get("/keys/{key_id}", response_model=APIKeyResponse)
+async def get_key(key_id: int, actor: User = Depends(require_account)):
+    return await _to_response(await find_key(key_id, actor), actor)
+
+
+@router.put("/keys/{key_id}", response_model=APIKeyResponse, openapi_extra={
+    "requestBody": {"required": True, "content": {"application/json": {
+        "schema": {"anyOf": [TenantKeyUpdate.model_json_schema(), APIKeyUpdate.model_json_schema()]},
+    }}},
+})
+async def update_key(key_id: int, request: Request, actor: User = Depends(require_account)):
+    # Different allowlists avoid parsing tenant writes through the platform's schema.
+    try:
+        payload = await request.json()
+    except JSONDecodeError:
+        raise HTTPException(400, "Invalid JSON body")
+    schema = APIKeyUpdate if actor.role == PLATFORM_ADMIN else TenantKeyUpdate
+    try:
+        body = schema.model_validate(payload)
+    except ValidationError as exc:
+        raise HTTPException(422, exc.errors(include_input=False, include_context=False))
+    data = body.model_dump(exclude_unset=True)
+    existing = await find_key(key_id, actor)
+    async with in_transaction():
+        # Same lock order as creation and quota adjustments: tenant, then key.
+        tenant = await Tenant.filter(id=existing.tenant_id).select_for_update().first()
+        key = await scoped_keys(actor).filter(id=key_id).select_for_update().first()
+        if key is None or tenant is None:
+            raise HTTPException(404, "Key not found")
+        if key.is_revoked:
+            raise HTTPException(409, "Revoked key cannot be modified")
+        await validate_models(tenant, data)
+        if data.get("quota_total", -1) != -1:
+            occupied = await occupied_quota("key", key_id)
+            if data["quota_total"] < key.quota_used + occupied:
+                raise HTTPException(409, "Quota cannot be below used plus occupied")
+        if "quota_reset_day" in data:
+            data["quota_last_reset_at"] = datetime.now(timezone.utc) if data["quota_reset_day"] else None
+        if data:
+            await APIKey.filter(id=key_id).update(**data)
+            await record_event(actor, "key.update", key_id, key.tenant_id,
+                               {"fields": sorted(data)})
+        await key.refresh_from_db()
+    return await _to_response(key, actor)
+
+
+@router.delete("/keys/{key_id}")
+async def revoke_key(key_id: int, actor: User = Depends(require_account)):
+    async with in_transaction():
+        key = await find_key(key_id, actor)
+        await APIKey.filter(id=key.id).update(is_enabled=False, is_revoked=True)
+        await record_event(actor, "key.revoke", key.id, key.tenant_id)
+    return {"message": "Key revoked"}
+
+
+@router.get("/keys/{key_id}/usage")
+async def key_usage(key_id: int, actor: User = Depends(require_account)):
+    key = await find_key(key_id, actor)
+    query = RequestLog.filter(api_key_id=key.id, tenant_id=key.tenant_id)
+    rows = await query.order_by("-id").limit(50).values(
+        "request_id", "created_at", "model_requested", "endpoint", "status_code",
+        "total_tokens", "cost", "latency_ms",
     )
-    resp = await _to_response(k)
-    return APIKeyCreateResponse(**resp.model_dump(), key=raw_key)
-
-
-@router.get("/{key_id}", response_model=APIKeyResponse)
-async def get_key(key_id: int, _: User = require_permission("key:read")):
-    k = await APIKey.get_or_none(id=key_id)
-    if k is None:
-        raise HTTPException(status_code=404, detail="Key not found")
-    return await _to_response(k)
-
-
-@router.put("/{key_id}", response_model=APIKeyResponse)
-async def update_key(key_id: int, body: APIKeyUpdate, _: User = require_permission("key:write")):
-    k = await APIKey.get_or_none(id=key_id)
-    if k is None:
-        raise HTTPException(status_code=404, detail="Key not found")
-    update_data = body.model_dump(exclude_unset=True)
-    if "model_group_id" in update_data and update_data["model_group_id"] is not None:
-        if not await ModelGroup.exists(id=update_data["model_group_id"]):
-            raise HTTPException(status_code=404, detail="Model group not found")
-    if update_data.get("team_id") is not None and not await Team.exists(id=update_data["team_id"]):
-        raise HTTPException(status_code=404, detail="Team not found")
-    if "quota_reset_day" in update_data:
-        update_data["quota_last_reset_at"] = (
-            datetime.now(timezone.utc)
-            if update_data["quota_reset_day"] is not None
-            else None
-        )
-    if update_data:
-        await APIKey.filter(id=key_id).update(**update_data)
-        k = await APIKey.get(id=key_id)
-    return await _to_response(k)
-
-
-@router.delete("/{key_id}")
-async def delete_key(key_id: int, _: User = require_permission("key:write")):
-    deleted = await APIKey.filter(id=key_id).delete()
-    if not deleted:
-        raise HTTPException(status_code=404, detail="Key not found")
-    return {"message": "Deleted"}
-
-
-@router.post("/{key_id}/reset-quota")
-async def reset_quota(key_id: int, _: User = require_permission("key:write")):
-    updated = await APIKey.filter(id=key_id).update(
-        quota_used=0,
-        quota_last_reset_at=datetime.now(timezone.utc),
-    )
-    if not updated:
-        raise HTTPException(status_code=404, detail="Key not found")
-    await reset_windows("key", key_id)
-    return {"message": "Quota reset"}
+    return {"items": rows}

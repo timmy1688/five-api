@@ -1,0 +1,23 @@
+name: Bug report
+description: Report a reproducible gateway or console problem
+body:
+  - type: textarea
+    attributes:
+      label: Version and environment
+      description: Include version/commit, Python, MySQL and Redis versions, endpoint and upstream protocol.
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Reproduction
+      description: Share minimal steps and a redacted request. Never include keys, tokens, passwords or private prompts.
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Expected and actual behavior
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Request ID and safe diagnostic information

@@ -12,6 +12,7 @@ class ModelPriceCreate(BaseModel):
     request_price: float = Field(0, ge=0, allow_inf_nan=False)
     currency: str = Field("USD", min_length=1, max_length=8)
     is_active: bool = True
+    multiplier: float = Field(1, ge=0, le=100, allow_inf_nan=False)
 
 
 class ModelPriceUpdate(BaseModel):
@@ -23,6 +24,7 @@ class ModelPriceUpdate(BaseModel):
     request_price: float | None = Field(None, ge=0, allow_inf_nan=False)
     currency: str | None = Field(None, min_length=1, max_length=8)
     is_active: bool | None = None
+    multiplier: float | None = Field(None, ge=0, le=100, allow_inf_nan=False)
 
 
 class ModelPriceResponse(BaseModel):
@@ -35,5 +37,6 @@ class ModelPriceResponse(BaseModel):
     request_price: float = 0
     currency: str
     is_active: bool
+    multiplier: float = 1
     created_at: datetime
     updated_at: datetime

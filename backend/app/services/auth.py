@@ -3,42 +3,20 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from jose import JWTError, jwt
+import jwt
+from jwt.exceptions import InvalidTokenError
 from passlib.context import CryptContext
 
 from app.config import settings
-from app.models import User, APIKey
+from app.models import User, APIKey, Tenant
 from app.utils.ip_check import check_ip_allowed, get_client_ip
+from app.services.request_context import remember_credential
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-bearer_scheme = HTTPBearer()
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto", bcrypt__truncate_error=True)
+bearer_scheme = HTTPBearer(auto_error=False)
 
-ALL_PERMISSIONS = [
-    "channel:read", "channel:write",
-    "key:read", "key:write",
-    "model_group:read", "model_group:write",
-    "model_price:read", "model_price:write",
-    "log:read", "log:write",
-    "stat:read",
-    "user:read", "user:write",
-    "role:read", "role:write",
-    "security:read", "security:write",
-    "setting:read", "setting:write",
-    "team:read", "team:write",
-]
-
-BUILTIN_ROLES = [
-    {
-        "name": "Super Admin",
-        "description": "Full access to all resources",
-        "permissions": ALL_PERMISSIONS,
-    },
-    {
-        "name": "Viewer",
-        "description": "Read-only access to all resources",
-        "permissions": [p for p in ALL_PERMISSIONS if p.endswith(":read")],
-    },
-]
+PLATFORM_ADMIN = "platform_admin"
+TENANT = "tenant"
 
 
 DEFAULT_ADMIN_PASSWORD = "admin123"
@@ -57,50 +35,66 @@ def create_access_token(data: dict) -> str:
     to_encode = data.copy()
     expire = datetime.now(timezone.utc) + timedelta(minutes=settings.JWT_EXPIRE_MINUTES)
     to_encode["exp"] = expire
+    to_encode["aud"] = "five-api-management"
     return jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
 
 
 async def get_current_admin(
-    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
 ) -> User:
+    if credentials is None:
+        raise HTTPException(status_code=401, detail="Missing management token")
+    remember_credential(credentials.credentials)
     try:
         payload = jwt.decode(
-            credentials.credentials,
-            settings.SECRET_KEY,
-            algorithms=[settings.JWT_ALGORITHM],
+            credentials.credentials, settings.SECRET_KEY,
+            algorithms=[settings.JWT_ALGORITHM], audience="five-api-management",
+            options={"require": ["exp", "sub", "aud"]},
         )
-        raw_id = payload.get("sub")
-        if raw_id is None:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
-        admin_id = int(raw_id)
-    except JWTError:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
-    admin = await User.get_or_none(id=admin_id, is_active=True).select_related("role")
-    if admin is None:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Admin not found")
-    if int(payload.get("ver", 0)) != admin.token_version:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token revoked")
-    # Set at login when the public default password was used.
-    admin.must_change_password = bool(payload.get("pwd"))
+        admin_id = int(payload["sub"])
+        version = int(payload.get("ver", 0))
+    except (InvalidTokenError, ValueError, TypeError, KeyError):
+        raise HTTPException(status_code=401, detail="Invalid management token")
+    admin = await User.get_or_none(id=admin_id, is_active=True)
+    if admin is None or version != admin.token_version:
+        raise HTTPException(status_code=401, detail="Token revoked or account unavailable")
+    if admin.role not in {PLATFORM_ADMIN, TENANT}:
+        raise HTTPException(status_code=403, detail="Account has no assigned role")
+    if admin.role == TENANT:
+        tenant = await Tenant.get_or_none(id=admin.tenant_id, is_enabled=True)
+        if tenant is None:
+            raise HTTPException(status_code=403, detail="Tenant unavailable")
+    elif admin.tenant_id is not None:
+        raise HTTPException(status_code=403, detail="Invalid administrator binding")
     return admin
 
 
-def require_permission(*required: str):
-    """权限检查依赖工厂。用法: admin = require_permission("channel:write")"""
-    async def checker(admin: User = Depends(get_current_admin)) -> User:
-        if admin.must_change_password:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=PASSWORD_CHANGE_REQUIRED,
-            )
-        user_perms = set(admin.role.permissions or [])
-        if not set(required).issubset(user_perms):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Permission denied",
-            )
-        return admin
-    return Depends(checker)
+async def require_account(admin: User = Depends(get_current_admin)) -> User:
+    if admin.must_change_password:
+        raise HTTPException(status_code=403, detail=PASSWORD_CHANGE_REQUIRED)
+    return admin
+
+
+async def require_platform_admin(admin: User = Depends(require_account)) -> User:
+    if admin.role != PLATFORM_ADMIN:
+        raise HTTPException(status_code=403, detail="Platform administrator required")
+    return admin
+
+
+async def check_key_tenant(api_key: APIKey) -> Tenant:
+    tenant = await Tenant.get_or_none(id=api_key.tenant_id, is_enabled=True)
+    if tenant is None:
+        raise HTTPException(status_code=403, detail={"error": {
+            "message": "Tenant unavailable", "type": "permission_error", "code": "tenant_disabled",
+        }})
+    from app.services.rate_limit import rate_limiter, RPMExceeded
+    try:
+        await rate_limiter.check_rpm(api_key.id, api_key.rpm_limit)
+        await rate_limiter.check_rpm(tenant.id, tenant.rpm_limit, scope="tenant")
+    except RPMExceeded as exc:
+        raise HTTPException(429, {"error": {"message": "Requests per minute limit exceeded",
+            "type": "rate_limit_error", "code": "tenant_rpm_limit" if exc.scope == "tenant" else "rpm_limit"}})
+    return tenant
 
 
 def hash_api_key(raw_key: str) -> str:
@@ -111,7 +105,10 @@ async def verify_api_key(
     request: Request,
     credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
 ) -> APIKey:
+    if credentials is None:
+        raise HTTPException(status_code=401, detail={"error": {"message": "Missing API key", "type": "authentication_error", "code": "invalid_api_key"}})
     raw_key = credentials.credentials
+    remember_credential(raw_key)
     key_hash = hash_api_key(raw_key)
     api_key = await APIKey.get_or_none(key_hash=key_hash)
 
@@ -120,7 +117,7 @@ async def verify_api_key(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail={"error": {"message": "Invalid API key", "type": "authentication_error", "code": "invalid_api_key"}},
         )
-    if not api_key.is_enabled:
+    if not api_key.is_enabled or api_key.is_revoked:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail={"error": {"message": "API key is disabled", "type": "authentication_error", "code": "key_disabled"}},
@@ -139,6 +136,7 @@ async def verify_api_key(
             status_code=status.HTTP_403_FORBIDDEN,
             detail={"error": {"message": "IP address not allowed", "type": "authentication_error", "code": "ip_not_allowed"}},
         )
+    await check_key_tenant(api_key)
     return api_key
 
 
@@ -155,6 +153,7 @@ async def verify_api_key_anthropic(request: Request) -> APIKey:
             detail={"type": "error", "error": {"type": "authentication_error", "message": "Missing API key"}},
         )
 
+    remember_credential(raw_key)
     key_hash = hash_api_key(raw_key)
     api_key = await APIKey.get_or_none(key_hash=key_hash)
 
@@ -163,7 +162,7 @@ async def verify_api_key_anthropic(request: Request) -> APIKey:
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail={"type": "error", "error": {"type": "authentication_error", "message": "Invalid API key"}},
         )
-    if not api_key.is_enabled:
+    if not api_key.is_enabled or api_key.is_revoked:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail={"type": "error", "error": {"type": "authentication_error", "message": "API key is disabled"}},
@@ -182,4 +181,5 @@ async def verify_api_key_anthropic(request: Request) -> APIKey:
             status_code=status.HTTP_403_FORBIDDEN,
             detail={"type": "error", "error": {"type": "authentication_error", "message": "IP address not allowed"}},
         )
+    await check_key_tenant(api_key)
     return api_key

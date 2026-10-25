@@ -19,15 +19,17 @@ return 1
 
 
 class RPMExceeded(Exception):
-    def __init__(self, key_id: int, limit: int):
+    def __init__(self, key_id: int, limit: int, scope: str = "key"):
         self.key_id = key_id
+        self.scope = scope
         self.limit = limit
         super().__init__(f"RPM limit {limit} exceeded for key {key_id}")
 
 
 class TPMExceeded(Exception):
-    def __init__(self, key_id: int, limit: int):
+    def __init__(self, key_id: int, limit: int, scope: str = "key"):
         self.key_id = key_id
+        self.scope = scope
         self.limit = limit
         super().__init__(f"TPM limit {limit} exceeded for key {key_id}")
 
@@ -65,29 +67,29 @@ return 1
 
 
 class RateLimiter:
-    async def check_rpm(self, key_id: int, limit: int) -> None:
+    async def check_rpm(self, key_id: int, limit: int, scope: str = "key") -> None:
         if limit == -1:
             return
         r = await get_redis()
-        result = await r.eval(RPM_CHECK_SCRIPT, 1, f"{RPM_KEY}{key_id}", limit, WINDOW)
+        result = await r.eval(RPM_CHECK_SCRIPT, 1, f"{RPM_KEY}{'tenant:' if scope == 'tenant' else ''}{key_id}", limit, WINDOW)
         if result == 0:
-            raise RPMExceeded(key_id, limit)
+            raise RPMExceeded(key_id, limit, scope)
 
-    async def reserve_tpm(self, key_id: int, limit: int, tokens: int) -> None:
+    async def reserve_tpm(self, key_id: int, limit: int, tokens: int, scope: str = "key") -> None:
         if limit == -1 or tokens <= 0:
             return
         r = await get_redis()
         result = await r.eval(
-            TPM_RESERVE_SCRIPT, 1, f"{TPM_KEY}{key_id}", limit, tokens, WINDOW
+            TPM_RESERVE_SCRIPT, 1, f"{TPM_KEY}{'tenant:' if scope == 'tenant' else ''}{key_id}", limit, tokens, WINDOW
         )
         if result == 0:
-            raise TPMExceeded(key_id, limit)
+            raise TPMExceeded(key_id, limit, scope)
 
-    async def adjust_tpm(self, key_id: int, limit: int, delta: int) -> None:
+    async def adjust_tpm(self, key_id: int, limit: int, delta: int, scope: str = "key") -> None:
         if limit == -1 or delta == 0:
             return
         r = await get_redis()
-        await r.eval(TPM_ADJUST_SCRIPT, 1, f"{TPM_KEY}{key_id}", delta)
+        await r.eval(TPM_ADJUST_SCRIPT, 1, f"{TPM_KEY}{'tenant:' if scope == 'tenant' else ''}{key_id}", delta)
 
 
 rate_limiter = RateLimiter()

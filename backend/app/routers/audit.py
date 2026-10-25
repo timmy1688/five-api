@@ -1,13 +1,13 @@
 import json
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import Depends, APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from app.models import APIKey, RequestLog, RequestLogAudit, User
 from app.services.ai_audit import MIN_CHARS, _mark, _verdict, build_excerpt
 from app.services.audit import saved_transcript
 from app.services.content_filter import keyword_was_hit
-from app.services.auth import require_permission
+from app.services.auth import require_platform_admin
 from app.services.settings_service import ai_audit_config
 
 router = APIRouter(prefix="/api/audit", tags=["audit"])
@@ -57,7 +57,7 @@ def _excerpt(stored: str) -> str:
 
 
 @router.get("/keys")
-async def list_people(_: User = require_permission("security:read")):
+async def list_people(_: User = Depends(require_platform_admin)):
     """Every key can be opened. Counts only include requests whose body was saved."""
     keys = await APIKey.all().order_by("name").values("id", "name")
     rows = await RequestLog.filter(has_audit=True).order_by("-id").limit(_SCAN_LIMIT).values(
@@ -87,7 +87,7 @@ async def list_people(_: User = require_permission("security:read")):
 async def list_requests(
     key_id: int,
     page: int = Query(1, ge=1),
-    _: User = require_permission("security:read"),
+    _: User = Depends(require_platform_admin),
 ):
     size = MAX_REVIEW
     query = RequestLog.filter(api_key_id=key_id, has_audit=True)
@@ -116,7 +116,7 @@ async def list_requests(
 
 
 @router.post("/review")
-async def review_requests(body: AuditReviewBody, _: User = require_permission("security:write")):
+async def review_requests(body: AuditReviewBody, _: User = Depends(require_platform_admin)):
     config = await ai_audit_config()
     if not config["enabled"] or not config["model"]:
         raise HTTPException(status_code=400, detail="AI audit is off")

@@ -1,8 +1,8 @@
 [project]
 name = "five-api"
-version = "0.3.0"
+version = "0.4.0"
 description = "Simplified AI API Gateway"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 license = { text = "MIT" }
 
 [tool.aerich]
@@ -21,4 +21,5 @@ markers = [
     "smoke: release gate for login, passthrough, and quota",
     "regression: protocol isolation, failover, billing, and admin behavior",
     "load: concurrent request and security-scan pressure",
+    "integration: real MySQL, Redis and HTTP; requires an explicit disposable database",
 ]

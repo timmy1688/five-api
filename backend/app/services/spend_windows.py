@@ -6,6 +6,7 @@ reached new requests stop, and requests already in flight still finish.
 """
 
 import time
+from datetime import datetime
 from decimal import Decimal
 
 from app import dependencies
@@ -14,6 +15,26 @@ WINDOWS: dict[str, int] = {"5h": 5, "1d": 24, "7d": 168}
 BUCKET_PREFIX = "five:spend:"
 BUCKET_TTL = 8 * 86400
 MICRO = Decimal("1000000")
+
+# One marker and both counters change atomically. Recovery can safely replay this operation.
+SETTLEMENT_SPEND_SCRIPT = """
+-- settlement_spend_v1
+if redis.call('EXISTS', KEYS[1]) == 1 then return 0 end
+redis.call('SET', KEYS[1], '1', 'EX', ARGV[2])
+for i = 2, #KEYS do
+    redis.call('INCRBY', KEYS[i], ARGV[1])
+    redis.call('EXPIRE', KEYS[i], ARGV[2])
+end
+return 1
+"""
+
+
+async def record_settlement_spend(request_id: str, key_id: int, tenant_id: int, cost: Decimal, when: datetime):
+    r = await dependencies.get_redis()
+    hour = int(when.timestamp() // 3600)
+    await r.eval(SETTLEMENT_SPEND_SCRIPT, 3, f"five:settled:{request_id}",
+                 _bucket("key", key_id, hour), _bucket("team", tenant_id, hour),
+                 max(0, int(cost * MICRO)), BUCKET_TTL)
 
 
 def normalize_limits(value) -> dict[str, float]:

@@ -1,3 +1,4 @@
+from tests.conftest import create_test_tenant
 import base64
 import hashlib
 import hmac
@@ -90,7 +91,7 @@ async def test_error_spike_alerts_once():
 
 
 async def test_budget_alert_respects_threshold_and_switch():
-    key = await APIKey.create(
+    key = await APIKey.create(tenant_id=(await create_test_tenant()).id,
         name="dev", key_hash=hash_api_key("sk-alert"), key_prefix="sk-alert",
         quota_total=Decimal("10"), quota_used=Decimal("8"),
     )

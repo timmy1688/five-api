@@ -13,37 +13,13 @@ from app.config import settings, TORTOISE_ORM
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
-async def init_roles():
-    from app.models import Role
-    from app.services.auth import BUILTIN_ROLES
-
-    for role_def in BUILTIN_ROLES:
-        existing = await Role.get_or_none(name=role_def["name"])
-        if existing:
-            if existing.permissions != role_def["permissions"]:
-                existing.permissions = role_def["permissions"]
-                existing.description = role_def["description"]
-                await existing.save()
-        else:
-            await Role.create(
-                name=role_def["name"],
-                description=role_def["description"],
-                permissions=role_def["permissions"],
-                is_builtin=True,
-            )
-
-
 async def init_admin():
-    from app.models import User, Role
-
-    count = await User.all().count()
-    if count == 0:
-        super_admin_role = await Role.get(name="Super Admin")
-        hashed = pwd_context.hash(settings.INIT_ADMIN_PASSWORD)
+    from app.models import User
+    if not await User.exists(role="platform_admin"):
         await User.create(
             username=settings.INIT_ADMIN_USERNAME,
-            hashed_password=hashed,
-            role=super_admin_role,
+            hashed_password=pwd_context.hash(settings.INIT_ADMIN_PASSWORD),
+            role="platform_admin", must_change_password=True,
         )
 
 
@@ -58,22 +34,38 @@ async def lifespan(app: FastAPI):
         from app.utils.secrets import encrypt_plaintext_channel_keys, load_secret_key
         await load_secret_key()
         await encrypt_plaintext_channel_keys()
-        await init_roles()
         await init_admin()
         from app.services.quota import quota_reset_loop
         from app.services.channel_health import health_check_loop
         from app.services.logging_service import log_cleanup_loop
         from app.services.metrics import ACTIVE_CHANNELS, ACTIVE_KEYS
+        from app.services.settlements import recovery_loop
+        from app.services.model_monitor import model_check_loop
         from app.models import Channel, APIKey
         ACTIVE_CHANNELS.set(await Channel.filter(is_enabled=True).count())
         ACTIVE_KEYS.set(await APIKey.filter(is_enabled=True).count())
         reset_task = asyncio.create_task(quota_reset_loop())
         health_task = asyncio.create_task(health_check_loop())
         cleanup_task = asyncio.create_task(log_cleanup_loop())
-        yield
-        reset_task.cancel()
-        health_task.cancel()
-        cleanup_task.cancel()
+        settlement_task = asyncio.create_task(recovery_loop())
+        monitor_task = asyncio.create_task(model_check_loop())
+        tasks = (reset_task, health_task, cleanup_task, settlement_task, monitor_task)
+        try:
+            yield
+        finally:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            from app.services.alerts import drain_alerts
+            from app.services.ai_audit import drain_ai_reviews
+            from app.services.settlements import recover_once
+            try:
+                async with asyncio.timeout(10):
+                    await asyncio.gather(drain_alerts(), drain_ai_reviews())
+                    await recover_once()
+            except Exception:
+                import logging
+                logging.getLogger(__name__).exception("Shutdown recovery incomplete; durable records remain for restart")
     from app.dependencies import close_redis
     from app.providers.base import close_http_clients
 
@@ -131,7 +123,11 @@ def _mount_frontend(app: FastAPI) -> None:
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="Five API Gateway", version="0.3.0", lifespan=lifespan)
+    app = FastAPI(title="Five API Gateway", version="0.4.0", lifespan=lifespan)
+    from app.services.protocol_errors import install_error_handlers
+    from app.services.redaction import configure_safe_logging
+    install_error_handlers(app)
+    configure_safe_logging()
 
     app.add_middleware(
         CORSMiddleware,
@@ -146,9 +142,9 @@ def create_app() -> FastAPI:
     app.add_middleware(RequestIDMiddleware)
 
     from app.routers import (
-        auth, channels, insights, keys, logs, reconcile,
+        auth, channels, insights, keys, logs,
         model_groups, model_prices, models,
-        roles, stats, teams, users,
+        stats, tenants, users,
         openai_proxy, anthropic_proxy, metrics,
     )
 
@@ -161,7 +157,8 @@ def create_app() -> FastAPI:
     app.include_router(model_groups.router)
     app.include_router(model_prices.router)
     app.include_router(models.router)
-    app.include_router(roles.router)
+    from app.routers import model_checks
+    app.include_router(model_checks.router)
     from app.routers import audit as audit_router
     from app.routers import security as security_router
 
@@ -172,10 +169,11 @@ def create_app() -> FastAPI:
     app.include_router(settings_router.router)
     app.include_router(stats.router)
     app.include_router(insights.router)
-    app.include_router(reconcile.router)
-    app.include_router(teams.router)
+    app.include_router(tenants.router)
     app.include_router(users.router)
     app.include_router(metrics.router)
+    from app.routers import settlements as settlement_router
+    app.include_router(settlement_router.router)
     _mount_frontend(app)
 
     return app

@@ -6,19 +6,17 @@ import { useAuthStore } from '@/stores/auth'
 const viewComponents: Record<NavigationName, () => Promise<unknown>> = {
   Dashboard: () => import('@/views/Dashboard.vue'),
   Insights: () => import('@/views/Insights.vue'),
-  Reconcile: () => import('@/views/Reconcile.vue'),
   Onboarding: () => import('@/views/Onboarding.vue'),
   Channels: () => import('@/views/Channels.vue'),
   Models: () => import('@/views/Models.vue'),
   ApiKeys: () => import('@/views/ApiKeys.vue'),
-  Teams: () => import('@/views/Teams.vue'),
+  Tenants: () => import('@/views/Tenants.vue'),
   ModelGroups: () => import('@/views/ModelGroups.vue'),
   ModelPrices: () => import('@/views/ModelPrices.vue'),
   Logs: () => import('@/views/Logs.vue'),
   Audit: () => import('@/views/Audit.vue'),
   Security: () => import('@/views/Security.vue'),
   Admins: () => import('@/views/Admins.vue'),
-  Roles: () => import('@/views/Roles.vue'),
   Settings: () => import('@/views/Settings.vue'),
 }
 
@@ -45,7 +43,7 @@ const router = createRouter({
           component: viewComponents[item.name],
           meta: {
             titleKey: item.titleKey,
-            permission: item.permission,
+            tenantAccess: item.tenantAccess,
           },
         })),
         {
@@ -78,17 +76,13 @@ router.beforeEach(async (to) => {
   }
   if (to.name === 'ChangePassword') return
 
-  const fallback = firstAllowedPath(auth.hasPermission)
+  const fallback = firstAllowedPath(auth.isPlatformAdmin)
   if (to.name === 'Login') {
     return fallback ?? { name: 'AccessDenied' }
   }
 
-  const requiredPermission = to.meta.permission as string | undefined
-  if (requiredPermission && !auth.hasPermission(requiredPermission)) {
-    return fallback && fallback !== to.path
-      ? fallback
-      : { name: 'AccessDenied' }
-  }
+  if (!auth.isPlatformAdmin && !to.meta.tenantAccess) return '/keys'
+
 })
 
 export default router

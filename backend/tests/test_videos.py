@@ -1,3 +1,5 @@
+from tests.conftest import create_test_tenant
+from app.services.video_jobs import find_video, forget_video, remember_video
 from decimal import Decimal
 from unittest.mock import AsyncMock, patch
 
@@ -10,6 +12,17 @@ from tests.conftest import auth_header
 
 pytestmark = pytest.mark.asyncio
 
+
+async def test_identical_video_ids_do_not_overwrite_other_key_jobs():
+    for owner, channel in ((101, 10), (202, 20)):
+        await remember_video("same-id", channel_id=channel, api_key_id=owner,
+                             upstream_key="test-upstream", model="test-model", seconds=4)
+    assert (await find_video("same-id", 101))["channel_id"] == 10
+    assert (await find_video("same-id", 202))["channel_id"] == 20
+    await forget_video("same-id", 101)
+    assert await find_video("same-id", 101) is None
+    assert (await find_video("same-id", 202))["channel_id"] == 20
+
 RAW_KEY = "sk-video-owner-key"
 OTHER_KEY = "sk-video-other-key"
 
@@ -19,8 +32,8 @@ async def _env():
         name="video-ch", provider="openai", base_url="https://api.openai.test",
         api_key="sk-up-a\nsk-up-b", models=["sora-2"], model_mapping={"sora-2": "sora-2-2026"}, timeout=60,
     )
-    await APIKey.create(name="owner", key_hash=hash_api_key(RAW_KEY), key_prefix=RAW_KEY[:8], quota_total=Decimal("100"))
-    await APIKey.create(name="other", key_hash=hash_api_key(OTHER_KEY), key_prefix=OTHER_KEY[:8], quota_total=Decimal("100"))
+    await APIKey.create(tenant_id=(await create_test_tenant()).id, name="owner", key_hash=hash_api_key(RAW_KEY), key_prefix=RAW_KEY[:8], quota_total=Decimal("100"))
+    await APIKey.create(tenant_id=(await create_test_tenant()).id, name="other", key_hash=hash_api_key(OTHER_KEY), key_prefix=OTHER_KEY[:8], quota_total=Decimal("100"))
     await ModelPrice.create(model="sora-2-2026", request_price=Decimal("0.10"))
     return ch
 

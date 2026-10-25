@@ -2,11 +2,11 @@
 
 from typing import Literal
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import Depends, APIRouter, HTTPException, Query
 from tortoise.functions import Count, Max, Min, Sum
 
 from app.models import RequestLog, UsageDaily, User
-from app.services.auth import require_permission
+from app.services.auth import require_platform_admin
 from app.services.usage_stats import start_day
 
 router = APIRouter(prefix="/api/stats", tags=["stats"])
@@ -39,7 +39,7 @@ def _cache_row(row: dict, **extra) -> dict:
 @router.get("/cache")
 async def cache_stats(
     days: int = Query(7, ge=1, le=90),
-    _: User = require_permission("stat:read"),
+    _: User = Depends(require_platform_admin),
 ):
     """Hit rate is cache reads over all input tokens, the share billed at the cache price."""
     base = UsageDaily.filter(day__gte=start_day(days))
@@ -71,7 +71,7 @@ async def sessions(
     api_key_id: int | None = None,
     sort: Literal["cost", "recent", "requests"] = "cost",
     size: int = Query(50, ge=1, le=200),
-    _: User = require_permission("stat:read"),
+    _: User = Depends(require_platform_admin),
 ):
     """Sessions come from request logs, so log retention bounds how far back they go."""
     query = RequestLog.filter(created_at__gte=start_day(days)).exclude(session_id="")
@@ -125,7 +125,7 @@ async def sessions(
 @router.get("/sessions/{session_id}")
 async def session_detail(
     session_id: str,
-    _: User = require_permission("stat:read"),
+    _: User = Depends(require_platform_admin),
 ):
     logs = await RequestLog.filter(session_id=session_id).order_by("created_at").limit(500)
     if not logs:

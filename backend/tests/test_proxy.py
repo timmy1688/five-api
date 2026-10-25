@@ -1,3 +1,4 @@
+from tests.conftest import create_test_tenant
 import time
 from decimal import Decimal
 from unittest.mock import AsyncMock, patch
@@ -28,7 +29,7 @@ async def _setup_proxy_env():
     )
     await ModelPrice.create(model="gpt-4o", prompt_price=Decimal("2.5"), completion_price=Decimal("10.0"))
     raw_key = "sk-proxytest123456"
-    api_key = await APIKey.create(
+    api_key = await APIKey.create(tenant_id=(await create_test_tenant()).id,
         name="proxy-key",
         key_hash=hash_api_key(raw_key),
         key_prefix=raw_key[:8],
@@ -143,7 +144,7 @@ async def test_anthropic_cache_read_and_write_are_deducted(client):
         cache_write_price=Decimal("12.5"),
     )
     raw = "sk-anthropic-bill"
-    api_key = await APIKey.create(
+    api_key = await APIKey.create(tenant_id=(await create_test_tenant()).id,
         name="anthropic-bill",
         key_hash=hash_api_key(raw),
         key_prefix=raw[:8],
@@ -255,10 +256,10 @@ async def test_cross_channel_failover_is_logged(client):
     assert log.failed_over is True
 
 
-async def test_quota_hold_admits_a_request_larger_than_the_remainder(client):
+async def test_quota_hold_rejects_a_request_larger_than_the_remainder(client):
     ch, _, _ = await _setup_proxy_env()
     raw = "sk-hold-small"
-    key = await APIKey.create(
+    key = await APIKey.create(tenant_id=(await create_test_tenant()).id,
         name="hold-small",
         key_hash=hash_api_key(raw),
         key_prefix=raw[:8],
@@ -275,15 +276,16 @@ async def test_quota_hold_admits_a_request_larger_than_the_remainder(client):
             json={"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}]},
             headers=auth_header(raw),
         )
-    assert resp.status_code == 200
+    assert resp.status_code == 429
+    provider.send_request.assert_not_awaited()
     await key.refresh_from_db()
-    assert key.quota_used > 0
+    assert key.quota_used == 0
 
 
 async def test_tpm_limit_rejects_before_upstream(client):
     await _setup_proxy_env()
     raw = "sk-tpm-reject"
-    await APIKey.create(
+    await APIKey.create(tenant_id=(await create_test_tenant()).id,
         name="tpm-reject",
         key_hash=hash_api_key(raw),
         key_prefix=raw[:8],
@@ -312,14 +314,14 @@ async def test_tpm_limit_rejects_before_upstream(client):
             headers=auth_header(raw),
         )
     assert blocked.status_code == 429
-    assert blocked.json()["detail"]["error"]["code"] == "tpm_limit"
+    assert blocked.json()["error"]["code"] == "tpm_limit"
     assert allowed.status_code == 200
     http.post.assert_awaited()
 
 
 async def test_chat_completions_quota_exceeded(client):
     raw_key = "sk-quotaexceeded123"
-    await APIKey.create(
+    await APIKey.create(tenant_id=(await create_test_tenant()).id,
         name="over-key",
         key_hash=hash_api_key(raw_key),
         key_prefix=raw_key[:8],
@@ -346,7 +348,7 @@ async def test_chat_completions_quota_exceeded(client):
 
 async def test_chat_completions_model_not_allowed(client):
     raw_key = "sk-modelforbid123"
-    await APIKey.create(
+    await APIKey.create(tenant_id=(await create_test_tenant()).id,
         name="restricted-key",
         key_hash=hash_api_key(raw_key),
         key_prefix=raw_key[:8],
@@ -371,7 +373,7 @@ async def test_chat_completions_model_not_allowed(client):
 async def test_empty_model_group_denies_all_models(client):
     group = await ModelGroup.create(name="empty-group", models=[])
     raw_key = "sk-emptygroup123"
-    await APIKey.create(
+    await APIKey.create(tenant_id=(await create_test_tenant()).id,
         name="empty-group-key",
         key_hash=hash_api_key(raw_key),
         key_prefix=raw_key[:8],
@@ -412,7 +414,7 @@ async def test_chat_completions_invalid_key(client):
 
 async def test_chat_completions_disabled_key(client):
     raw_key = "sk-disabledkey123"
-    await APIKey.create(
+    await APIKey.create(tenant_id=(await create_test_tenant()).id,
         name="disabled",
         key_hash=hash_api_key(raw_key),
         key_prefix=raw_key[:8],
@@ -434,7 +436,7 @@ async def test_list_models(client):
         models=["gpt-4o", "gpt-4o-mini"], is_enabled=True, timeout=60,
     )
     raw_key = "sk-listmodels123"
-    await APIKey.create(
+    await APIKey.create(tenant_id=(await create_test_tenant()).id,
         name="list-key",
         key_hash=hash_api_key(raw_key),
         key_prefix=raw_key[:8],
@@ -455,7 +457,7 @@ async def test_list_models_filtered_by_allowed(client):
         models=["gpt-4o", "gpt-4o-mini", "gpt-3.5-turbo"], is_enabled=True, timeout=60,
     )
     raw_key = "sk-filtermodels123"
-    await APIKey.create(
+    await APIKey.create(tenant_id=(await create_test_tenant()).id,
         name="filter-key",
         key_hash=hash_api_key(raw_key),
         key_prefix=raw_key[:8],
@@ -470,6 +472,8 @@ async def test_list_models_filtered_by_allowed(client):
 
 
 async def test_embeddings_and_completions_accept_token_arrays(client):
+    await ModelPrice.create(model="text-embedding-3-small")
+    await ModelPrice.create(model="gpt-3.5-turbo")
     ch = await Channel.create(
         name="token-ch", provider="openai",
         base_url="https://api.openai.com", api_key="sk-up",
@@ -477,7 +481,7 @@ async def test_embeddings_and_completions_accept_token_arrays(client):
         is_enabled=True, timeout=60,
     )
     raw_key = "sk-tokenarrays"
-    await APIKey.create(
+    await APIKey.create(tenant_id=(await create_test_tenant()).id,
         name="token-key",
         key_hash=hash_api_key(raw_key),
         key_prefix=raw_key[:8],
@@ -517,6 +521,7 @@ async def test_embeddings_and_completions_accept_token_arrays(client):
 
 
 async def test_unknown_anthropic_beta_is_forwarded(client):
+    await ModelPrice.create(model="claude-sonnet")
     await Channel.create(
         name="beta-ch",
         provider="anthropic",
@@ -525,7 +530,7 @@ async def test_unknown_anthropic_beta_is_forwarded(client):
         models=["claude-sonnet"],
     )
     raw = "sk-beta-forward"
-    await APIKey.create(
+    await APIKey.create(tenant_id=(await create_test_tenant()).id,
         name="beta-key",
         key_hash=hash_api_key(raw),
         key_prefix=raw[:8],
@@ -579,7 +584,7 @@ async def test_stream_forwards_upstream_4xx_json(client):
             json={"model": "gpt-4o", "stream": True, "messages": [{"role": "user", "content": "hi"}]},
             headers=auth_header(raw_key),
         )
-    assert resp.status_code == 200
+    assert resp.status_code == 400
     assert "max_tokens is too large" in resp.text
     assert "Upstream error" not in resp.text
 
@@ -614,12 +619,13 @@ async def test_openai_forwards_only_sent_fields_and_rate_limit_headers(client):
 
 
 async def _anthropic_env(base_url: str = "https://upstream.anthropic.test") -> str:
+    await ModelPrice.create(model="claude-sonnet")
     await Channel.create(
         name="ant-ch", provider="anthropic", base_url=base_url,
         api_key="sk-ant", models=["claude-sonnet"],
     )
     raw = "sk-anthropic-env"
-    await APIKey.create(
+    await APIKey.create(tenant_id=(await create_test_tenant()).id,
         name="ant-key", key_hash=hash_api_key(raw), key_prefix=raw[:8],
         quota_total=Decimal("-1"),
     )
@@ -691,13 +697,14 @@ async def test_count_tokens_estimates_when_upstream_lacks_it(client):
 
 
 async def test_embeddings_non_stream(client):
+    await ModelPrice.create(model="text-embedding-3-small")
     ch = await Channel.create(
         name="embed-ch", provider="openai",
         base_url="https://api.openai.com", api_key="sk-up",
         models=["text-embedding-3-small"], is_enabled=True, timeout=60,
     )
     raw_key = "sk-embed123456"
-    api_key = await APIKey.create(
+    api_key = await APIKey.create(tenant_id=(await create_test_tenant()).id,
         name="embed-key",
         key_hash=hash_api_key(raw_key),
         key_prefix=raw_key[:8],
@@ -735,7 +742,7 @@ async def test_embeddings_rejects_anthropic_only_channel(client):
         models=["embedding-lookalike"],
     )
     raw_key = "sk-anthropicembed"
-    await APIKey.create(
+    await APIKey.create(tenant_id=(await create_test_tenant()).id,
         name="anthropic-embed-key",
         key_hash=hash_api_key(raw_key),
         key_prefix=raw_key[:8],
@@ -751,7 +758,7 @@ async def test_embeddings_rejects_anthropic_only_channel(client):
 
 async def test_no_channel_for_model(client):
     raw_key = "sk-nomodel123456"
-    await APIKey.create(
+    await APIKey.create(tenant_id=(await create_test_tenant()).id,
         name="nomodel-key",
         key_hash=hash_api_key(raw_key),
         key_prefix=raw_key[:8],

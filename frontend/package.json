@@ -1,7 +1,7 @@
 {
   "name": "five-api-frontend",
   "private": true,
-  "version": "0.3.0",
+  "version": "0.4.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -10,12 +10,12 @@
   },
   "dependencies": {
     "@element-plus/icons-vue": "^2.3.0",
-    "axios": "^1.18.1",
+    "axios": "^1.20.0",
     "dayjs": "^1.11.0",
     "echarts": "^6.1.0",
     "element-plus": "^2.8.0",
     "pinia": "^2.2.0",
-    "vue": "^3.5.0",
+    "vue": "^3.5.42",
     "vue-echarts": "^8.0.1",
     "vue-router": "^4.4.0"
   },

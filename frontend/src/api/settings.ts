@@ -28,7 +28,7 @@ export const settingsApi = {
     const { data } = await client.get('/settings')
     return data
   },
-  save: async (body: GatewaySettings): Promise<GatewaySettings> => {
+  save: async (body: Partial<GatewaySettings>): Promise<GatewaySettings> => {
     const { data } = await client.put('/settings', body)
     return data
   },
