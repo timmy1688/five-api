@@ -8,15 +8,15 @@
 
 只运行一个 Uvicorn worker：结算恢复与定时巡检未设计为多进程调度。单进程是异步的，等待上游时不占 CPU，并发流式连接数不受进程数限制；瓶颈是每个请求约 7 毫秒的网关自身 CPU（鉴权、限额、预占与结算 SQL），实测约 120 请求/秒，即每分钟 7000 次左右。超过这个量级再考虑多进程。
 
-- `./service.sh deploy`：首次在 `.env` 写入网关密钥（已有则不变），再 `docker compose up -d --build`；缺少密钥时 Compose 拒绝启动。
-- 网关只绑定宿主机 127.0.0.1:8080，其他机器直连时修改端口绑定。
-- 网关容器无状态，可随时重建。MySQL、Redis 数据位于 `data/mysql`、`data/redis`，密钥只在 `.env`。
+- `./service.sh deploy`：`docker compose up -d --build`，不需要预先生成任何配置。
+- 网关对外开放 8080 端口，客户端直连时 Key 的 IP 白名单直接按真实来源 IP 判断。MySQL、Redis 端口只绑定本机。
+- 网关容器无状态，可随时重建。MySQL、Redis 数据位于 `data/mysql`、`data/redis`。
 - `/healthz` 检查 MySQL、Redis；镜像探针 4 秒超时。
 - Compose 给网关 40 秒退出时间，Uvicorn 请求排空上限 30 秒，再处理后台收尾。未完成的账务记录由下次启动恢复。
 
 ## 网络
 
-网关前面有反向代理或负载均衡时，只把这些受控来源写入 `FORWARDED_ALLOW_IPS`，不能使用 `*`，否则客户端可伪造来源 IP 绕过 Key 的 IP 白名单。代理需关闭响应缓冲，读取超时不低于 600 秒以支持流式响应。
+网关前面有反向代理或负载均衡时，只把这些受控来源写入 `FORWARDED_ALLOW_IPS`，不能使用 `*`，否则客户端可伪造来源 IP 绕过 Key 的 IP 白名单。Compose 部署时在 gateway 的 environment 里添加 `FORWARDED_ALLOW_IPS`；本机反代经发布端口到达容器的来源是 Compose 网络的网关地址（`docker network inspect five-api_default` 查看），不是 127.0.0.1。代理需关闭响应缓冲，读取超时不低于 600 秒以支持流式响应。
 
 公共上游默认要求 HTTPS；本机、私网和内部 DNS 可使用 HTTP 接 vLLM 等服务。开发确需访问公网 HTTP 时可显式设置 `ALLOW_INSECURE_UPSTREAMS=true`。上游 URL 不接受用户名密码或查询参数，凭据填写在渠道 Key 字段。
 
@@ -30,9 +30,15 @@
 | ENCRYPTION_KEY | 渠道 Key、告警地址和签名秘密的加密 |
 | SECRETS_FILE | 包含 jwt_secret、encryption_key 的 JSON 文件 |
 
-Compose 部署通过 `.env` 的 SECRET_KEY、ENCRYPTION_KEY 提供密钥，`./service.sh secrets` 生成两个互不相同的随机值；已有 `data/secrets.json` 时沿用其中的值，保证本地进程与容器解密同一份数据。本地开发未配置环境变量时，全新数据会自动生成 `data/secrets.json`。已有密文时，密钥缺失或不匹配会拒绝启动；不能删除后重新生成。
+本地开发未配置环境变量时，全新数据会自动生成 `data/secrets.json`。已有密文时，密钥缺失或不匹配会拒绝启动；不能删除后重新生成。
 
-旧版 Compose 把密钥放在 `gateway_secrets` 卷里。升级前在旧网关运行时导出：`docker compose exec -T gateway cat /var/lib/five-api/secrets.json > data/secrets.json`，再执行 `./service.sh secrets` 写入 `.env`，确认 `.env` 已有两个密钥后再换用新的 Compose 文件。
+镜像设置 `SECRETS_FILE` 为空，网关容器不读写密钥文件，两个密钥都可不填，与 new-api 默认方式一致：
+
+- 不填 SECRET_KEY：每次启动随机生成，重启或重建容器后需重新登录。
+- 不填 ENCRYPTION_KEY：上游 Key 用代码内置的公开密钥加密，数据库泄露即等于上游 Key 泄露。
+- 需要更高安全时，在 Compose 的 gateway environment 填入两个至少 32 位、互不相同的随机值，并与数据库分开保管。已用内置密钥保存过渠道时，先填好 ENCRYPTION_KEY，执行 `docker compose run --rm --no-deps gateway python -m app.migrate_secrets --from-default` 重新加密，再启动网关；否则启动会因无法解密而拒绝。
+
+旧版 Compose 把密钥放在 `gateway_secrets` 卷里。升级前在旧网关运行时导出 `/var/lib/five-api/secrets.json`，把其中 jwt_secret、encryption_key 分别填入新 Compose 的 SECRET_KEY、ENCRYPTION_KEY 后再启动。
 
 从旧版数据库 `system_settings.app_secret` 升级：
 
@@ -42,7 +48,7 @@ Compose 部署通过 `.env` 的 SECRET_KEY、ENCRYPTION_KEY 提供密钥，`./se
 4. 迁移先生成外置秘密文件，再用一个数据库事务重加密渠道、告警等密文并删除数据库旧根密钥。失败时保留文件，修复原因后重跑，不要换一套文件。
 5. 启动网关，验证登录、渠道解密、两个租户、Key 创建、推理和费用。
 
-如果秘密仅在旧文件中，本地执行 `python -m app.migrate_secrets --legacy-secret-file ../data/.secret_key`。容器中执行时需将旧文件只读挂载供迁移命令读取，新密钥取自 `.env`。不要把文件内容放进命令行参数或工单。旧管理 JWT 需重新登录。
+如果秘密仅在旧文件中，本地执行 `python -m app.migrate_secrets --legacy-secret-file ../data/.secret_key`。容器中执行时需将旧文件只读挂载供迁移命令读取，新密钥取自 Compose 的 ENCRYPTION_KEY，未填则用内置密钥。不要把文件内容放进命令行参数或工单。旧管理 JWT 需重新登录。
 
 迁移 18 不提供自动降级：旧账号到租户的映射无法可靠反推。迁移 19–22 加入账务记录、用量来源、限流、模型检测、倍率和平台自用 Key 标记。旧自定义角色进入停用租户等待人工核对，旧 roles 表不再参与授权。
 
@@ -50,7 +56,7 @@ Compose 部署通过 `.env` 的 SECRET_KEY、ENCRYPTION_KEY 提供密钥，`./se
 
 当前开发测试数据按用户授权不额外备份。下面流程用于真实商用数据；自动化恢复测试仅使用专用隔离库。
 
-数据库和密钥文件分开保存，限制访问并在独立位置保管。仅有数据库备份不能解密渠道 Key。
+数据库和密钥文件分开保存，限制访问并在独立位置保管。配置了自有 ENCRYPTION_KEY 时，仅有数据库备份不能解密渠道 Key；使用内置密钥时数据库备份须按含上游 Key 对待。
 
 停止网关后，在受控终端设置 `umask 077`，使用现有数据库账号执行：
 

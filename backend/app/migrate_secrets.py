@@ -1,6 +1,7 @@
 """Move legacy encrypted credentials to independent external secrets, without printing them."""
 import argparse
 import asyncio
+import secrets
 from pathlib import Path
 
 from tortoise import Tortoise
@@ -9,16 +10,20 @@ from tortoise.transactions import in_transaction
 from app.config import TORTOISE_ORM, settings
 from app.models import Channel, ManagementEvent, SystemSetting
 from app.utils.secrets import (
-    PREFIX, SECRET_SETTING_KEY, cipher, create_external, read_external, load_secret_key,
+    DEFAULT_ENCRYPTION_KEY, PREFIX, SECRET_SETTING_KEY, cipher, create_external, read_external, load_secret_key,
 )
 from uuid import uuid4
 
 
-async def migrate(legacy_secret_file: str | None = None):
+async def migrate(legacy_secret_file: str | None = None, from_default: bool = False):
     legacy = await SystemSetting.get_or_none(key=SECRET_SETTING_KEY)
     previous = legacy.value["secret"] if legacy else ""
     if not previous and legacy_secret_file:
         previous = Path(legacy_secret_file).read_text().strip()
+    if not previous and from_default:
+        if not settings.ENCRYPTION_KEY or settings.ENCRYPTION_KEY == DEFAULT_ENCRYPTION_KEY:
+            raise RuntimeError("Set a new ENCRYPTION_KEY before re-encrypting from the default key")
+        previous = DEFAULT_ENCRYPTION_KEY
     if not previous:
         await load_secret_key()
         return {"channels": 0, "settings": 0}
@@ -26,7 +31,10 @@ async def migrate(legacy_secret_file: str | None = None):
         raise RuntimeError("Remove the legacy SECRET_KEY setting or supply a new JWT signing secret before migration")
     external = read_external()
     if external is None:
-        if settings.SECRET_KEY and settings.ENCRYPTION_KEY:
+        if not settings.SECRETS_FILE:
+            external = {"jwt_secret": settings.SECRET_KEY or secrets.token_urlsafe(48),
+                        "encryption_key": settings.ENCRYPTION_KEY or DEFAULT_ENCRYPTION_KEY}
+        elif settings.SECRET_KEY and settings.ENCRYPTION_KEY:
             external = {"jwt_secret": settings.SECRET_KEY, "encryption_key": settings.ENCRYPTION_KEY}
         else:
             external = create_external(settings.SECRET_KEY, settings.ENCRYPTION_KEY)
@@ -66,10 +74,12 @@ async def migrate(legacy_secret_file: str | None = None):
 async def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--legacy-secret-file", help="Only for installations using the old data/.secret_key file")
+    parser.add_argument("--from-default", action="store_true",
+                        help="Re-encrypt credentials saved under the built-in container key with ENCRYPTION_KEY")
     args = parser.parse_args()
     await Tortoise.init(config=TORTOISE_ORM)
     try:
-        result = await migrate(args.legacy_secret_file)
+        result = await migrate(args.legacy_secret_file, args.from_default)
         print(f"External secrets ready; migrated channels={result['channels']}, settings={result['settings']}. Legacy database root removed.")
     finally:
         await Tortoise.close_connections()

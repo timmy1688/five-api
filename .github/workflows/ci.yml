@@ -51,7 +51,6 @@ jobs:
       MYSQL_PASSWORD: five_password
       FIVE_TEST_MYSQL_DB: five_api_test_ci
       FIVE_TEST_REDIS_URL: redis://127.0.0.1:6379/15
-      FIVE_TEST_MYSQL_CONTAINER: ${{ job.services.mysql.id }}
       NO_PROXY: 127.0.0.1,localhost,::1
     defaults:
       run:
@@ -65,6 +64,9 @@ jobs:
           cache-dependency-path: backend/requirements.txt
       - run: pip install -r requirements.txt
       - run: pytest -q tests/integration
+        env:
+          # The job context is only available at step level.
+          FIVE_TEST_MYSQL_CONTAINER: ${{ job.services.mysql.id }}
   frontend:
     runs-on: ubuntu-latest
     defaults:

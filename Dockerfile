@@ -7,7 +7,7 @@ RUN npm run build
 
 FROM python:3.12-slim@sha256:a0f57064cbdcd6285fa45f51237ab0b35ea8ebaed06a1f5973e89e19dfb86704
 WORKDIR /app
-ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 \
+ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 SECRETS_FILE= \
     PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple PIP_DEFAULT_TIMEOUT=60
 COPY backend/requirements.txt ./
 RUN pip install --no-cache-dir --no-compile -r requirements.txt

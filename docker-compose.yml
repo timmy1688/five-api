@@ -1,27 +1,26 @@
-# 部署：./service.sh deploy（首次自动生成 .env 密钥并构建镜像），打开 http://127.0.0.1:8080。
-# 改端口或密码时，直接改下面的值。
+# 部署：./service.sh deploy，打开 http://服务器IP:8080。
+# 改端口或密码时，直接改下面的值；数据库密码要在 gateway 和 mysql 两处同时改。
 
 services:
   gateway:
     image: five-api:latest
     build: .
     restart: always
-    # 默认只允许本机访问；需要其他机器直连时去掉 "127.0.0.1:"。
     ports:
-      - "127.0.0.1:8080:8000"
+      - "8080:8000"
     environment:
       MYSQL_HOST: mysql
       MYSQL_USER: five
-      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-five_password}
+      MYSQL_PASSWORD: five_password
       MYSQL_DATABASE: five_api
       REDIS_URL: redis://redis:6379/0
       # 只在首次启动、还没有管理员时创建这个账号，之后改这里不生效。首次登录会强制修改密码。
       INIT_ADMIN_USERNAME: admin
       INIT_ADMIN_PASSWORD: admin123
-      # 网关本身不保存状态。两把密钥只放在 .env，丢失后数据库里的上游 Key 无法解密。
-      SECRET_KEY: ${SECRET_KEY:?先执行 ./service.sh secrets 生成网关密钥}
-      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?先执行 ./service.sh secrets 生成网关密钥}
-      FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-127.0.0.1}
+      # 可选，各填至少 32 位且互不相同的随机串。不填时登录在重启后失效，上游 Key 用内置公开密钥加密。
+      # 已保存渠道后再设 ENCRYPTION_KEY，先执行 python -m app.migrate_secrets --from-default 重新加密。
+      # SECRET_KEY: random_string
+      # ENCRYPTION_KEY: random_string
     stop_grace_period: 40s
     depends_on:
       mysql:
@@ -47,10 +46,10 @@ services:
     image: mysql:8.0
     restart: always
     environment:
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root_password}
+      MYSQL_ROOT_PASSWORD: root_password
       MYSQL_DATABASE: five_api
       MYSQL_USER: five
-      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-five_password}
+      MYSQL_PASSWORD: five_password
     volumes:
       - ./data/mysql:/var/lib/mysql
     ports:

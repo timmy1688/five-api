@@ -8,7 +8,7 @@ from app.config import settings
 from app.models import Channel, SystemSetting
 from app.migrate_secrets import migrate
 from app.utils.secrets import (
-    PREFIX, SECRET_SETTING_KEY, cipher, create_external, decrypt_secret,
+    DEFAULT_ENCRYPTION_KEY, PREFIX, SECRET_SETTING_KEY, cipher, create_external, decrypt_secret,
     encrypt_secret, load_secret_key,
 )
 
@@ -116,6 +116,36 @@ async def test_legacy_file_migration(configured, tmp_path):
                          api_key=PREFIX + cipher(old_root).encrypt(b"old-file-upstream").decode(), models=["m"])
     await migrate(str(legacy_file))
     assert decrypt_secret((await Channel.get()).api_key) == "old-file-upstream"
+
+
+async def test_stateless_container_uses_per_start_signing_key_and_default_encryption(configured, monkeypatch):
+    monkeypatch.setattr(settings, "SECRETS_FILE", "")
+    await load_secret_key()
+    first_signing = settings.SECRET_KEY
+    assert len(first_signing) >= 32
+    assert settings.ENCRYPTION_KEY == DEFAULT_ENCRYPTION_KEY
+    await Channel.create(name="c", provider="openai", base_url="https://example.test",
+                         api_key=encrypt_secret("upstream-key"), models=["m"])
+    settings.SECRET_KEY = settings.ENCRYPTION_KEY = ""
+    await load_secret_key()
+    assert settings.SECRET_KEY != first_signing
+    assert decrypt_secret((await Channel.get()).api_key) == "upstream-key"
+    assert not configured.exists()
+
+
+async def test_custom_container_key_reencrypts_from_default(configured, monkeypatch):
+    monkeypatch.setattr(settings, "SECRETS_FILE", "")
+    await load_secret_key()
+    await Channel.create(name="c", provider="openai", base_url="https://example.test",
+                         api_key=encrypt_secret("upstream-key"), models=["m"])
+    settings.SECRET_KEY = ""
+    settings.ENCRYPTION_KEY = "operator-chosen-encryption-key-0123456789"
+    with pytest.raises(RuntimeError, match="cannot decrypt"):
+        await load_secret_key()
+    assert await migrate(from_default=True) == {"channels": 1, "settings": 0}
+    assert settings.ENCRYPTION_KEY == "operator-chosen-encryption-key-0123456789"
+    assert decrypt_secret((await Channel.get()).api_key) == "upstream-key"
+    assert not configured.exists()
 
 
 async def test_same_signing_and_encryption_keys_are_rejected(configured):

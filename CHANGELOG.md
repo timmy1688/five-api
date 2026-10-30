@@ -45,7 +45,7 @@
 - Python 依赖合并为一个 `backend/requirements.txt`，全部固定版本，含测试库；删除 requirements.in/.lock、requirements-dev.in/.lock，playwright、pip-audit 改为按需安装。Dockerfile 的 pip 走阿里云镜像、npm 走 npmmirror，删除未使用的 `backend/Dockerfile`、`frontend/Dockerfile`、`frontend/nginx.conf`。新增 `./service.sh deploy` 一条命令部署，Compose 镜像名改为本地构建的 `five-api:latest`。
 - 前端依赖锁定并修复已知生产依赖漏洞；镜像固定基础摘要、非 root 运行。补齐真实 MySQL/Redis、HTTP/SDK、恢复与浏览器检查。
 - 提供运维升级、贡献、兼容矩阵和可复现轻量 HTTP 基准；移除 Nginx HTTPS 示例，反向代理与证书由部署方自行处理。
-- 网关容器改为无状态：Compose 不再挂载 `gateway_secrets` 卷，密钥由 `.env` 的 SECRET_KEY、ENCRYPTION_KEY 提供，缺失时拒绝启动；`./service.sh secrets` 生成或沿用 `data/secrets.json`。旧部署升级前须先从卷中导出密钥，见运维文档。
+- 网关容器改为无状态：Compose 不再挂载 `gateway_secrets` 卷，也不读取 `.env`，数据库密码等直接写在文件里。SECRET_KEY、ENCRYPTION_KEY 可选：不填时 JWT 每次启动随机（重启需重新登录），上游 Key 用内置公开密钥加密；之后改用自有密钥执行 `python -m app.migrate_secrets --from-default` 重新加密。删除 `./service.sh secrets`。旧部署升级前须先从卷中导出密钥并填入 Compose，见运维文档。网关端口改为对外开放 `8080`，直连时 Key IP 白名单按真实来源 IP 判断。
 - README 改为产品介绍：说明用途、与 new-api 和 LiteLLM 的差异、选型建议和使用边界，按 0.4.0 界面重新截图；开发计划与测试命令移出首页。删除 `push.sh` 和 `SECURITY.md`，安全处置以运维文档为准。
 - 测试新增全路由鉴权矩阵、推理 Key 拒绝路径、计费不变量、渠道熔断与 SQL 预算护栏；删除未引用的计费上限函数，清理测试警告。删除已被真实 HTTP 冒烟脚本取代的 `tests/smoke` 及其 `smoke` 标记。
 - 商用部署按单进程验收；小规模降智题仅供参考，不能证明真实型号。CLI/桌面客户端未在本次验收中认证。

@@ -23,7 +23,7 @@ FastAPI、Tortoise ORM、MySQL 8、Redis 7；Vue 3、Element Plus。开发使用
 - 管理 JWT 与推理 Key 用途分离。JWT 固定 aud、短期有效，改密递增 token_version。
 - 所有开放接口都在服务端校验租户范围，含历史用量、视频查询、下载和删除。
 - APIKey 明文只展示一次，永久撤销保留已用；Key 新建不能恢复租户额度。
-- 主密钥位于 data/secrets.json 或独立环境变量，与 JWT 密钥不同，数据库不存根密钥。旧版升级使用 app.migrate_secrets。
+- 主密钥位于 data/secrets.json 或独立环境变量，与 JWT 密钥不同，数据库不存根密钥。网关容器不读写密钥文件：未配置时 JWT 每次启动随机、上游 Key 用内置公开密钥加密（同 new-api 默认安全级别），改用自有密钥用 migrate_secrets --from-default。旧版升级使用 app.migrate_secrets。
 
 ## 请求与结算
 

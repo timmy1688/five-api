@@ -31,7 +31,7 @@ Vite runs on localhost:5001 and Uvicorn on localhost:5002. Only MySQL/Redis use 
 ./service.sh deploy
 ```
 
-The first run writes the gateway secrets to `.env` (existing values are kept), then builds and starts the gateway, MySQL and Redis. The stateless, non-root image serves the API and UI on localhost:8080. Configure production passwords and back up `.env` separately from the database: stored upstream keys cannot be decrypted without it.
+This builds and starts the gateway, MySQL and Redis. The stateless, non-root image serves the API and UI on port 8080. Change the database passwords in `docker-compose.yml` before production. SECRET_KEY and ENCRYPTION_KEY are optional: without them logins end on restart and upstream keys are encrypted with a built-in public key; set your own, as the comments in the file describe, to keep logins and protect upstream keys.
 
 Default first-install credentials are admin/admin123, with a mandatory password change. They do not reset existing accounts. Read the operations guide before upgrading: migrations and external-secret migration are required.
 

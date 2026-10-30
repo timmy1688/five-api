@@ -12,6 +12,8 @@ from app.config import settings
 
 PREFIX = "fernet:"
 SECRET_SETTING_KEY = "app_secret"
+# Public fallback for stateless containers; it hides keys from casual reads but not from anyone with the source.
+DEFAULT_ENCRYPTION_KEY = "five-api-default-upstream-encryption-key"
 
 
 def cipher(secret: str) -> Fernet:
@@ -21,6 +23,8 @@ def cipher(secret: str) -> Fernet:
 
 
 def read_external() -> dict | None:
+    if not settings.SECRETS_FILE:
+        return None
     path = Path(settings.SECRETS_FILE)
     if not path.is_file():
         return None
@@ -72,6 +76,14 @@ async def load_secret_key() -> None:
     from app.models import Channel, SystemSetting
     if await SystemSetting.exists(key=SECRET_SETTING_KEY):
         raise RuntimeError("Legacy same-database secret found; run python -m app.migrate_secrets")
+    if not settings.SECRETS_FILE:
+        # Stateless container: a per-start signing key means logging in again after a restart.
+        settings.SECRET_KEY = settings.SECRET_KEY or secrets.token_urlsafe(48)
+        settings.ENCRYPTION_KEY = settings.ENCRYPTION_KEY or DEFAULT_ENCRYPTION_KEY
+        if settings.SECRET_KEY == settings.ENCRYPTION_KEY:
+            raise RuntimeError("Signing and encryption secrets must differ")
+        await verify_stored_ciphertexts()
+        return
     external = read_external()
     if settings.SECRET_KEY and settings.ENCRYPTION_KEY:
         if settings.SECRET_KEY == settings.ENCRYPTION_KEY:
@@ -93,6 +105,11 @@ async def load_secret_key() -> None:
         external = create_external(settings.SECRET_KEY, settings.ENCRYPTION_KEY)
     settings.SECRET_KEY = external["jwt_secret"]
     settings.ENCRYPTION_KEY = external["encryption_key"]
+    await verify_stored_ciphertexts()
+
+
+async def verify_stored_ciphertexts() -> None:
+    from app.models import Channel, SystemSetting
     try:
         for channel in await Channel.all():
             if channel.api_key.startswith(PREFIX):
@@ -101,7 +118,8 @@ async def load_secret_key() -> None:
             for value in encrypted_values(row.value):
                 decrypt_secret(value)
     except ValueError as exc:
-        raise RuntimeError("External master key cannot decrypt stored credentials; startup refused") from exc
+        raise RuntimeError("Encryption key cannot decrypt stored credentials; restore the previous key or run "
+                           "python -m app.migrate_secrets; startup refused") from exc
 
 
 def _fernet() -> Fernet:
