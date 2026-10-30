@@ -3,14 +3,17 @@ from contextlib import asynccontextmanager
 
 from fastapi import HTTPException
 
-from app.models import Tenant
+from app.services.auth import key_tenant
 from app.services.concurrency import concurrency_limiter, ConcurrencyExceeded
 from app.services.rate_limit import rate_limiter, TPMExceeded
 
 
 @asynccontextmanager
 async def guard_unbilled(api_key, input_tokens=0):
-    tenant = await Tenant.get(id=api_key.tenant_id, is_enabled=True)
+    tenant = await key_tenant(api_key)
+    if tenant is None:
+        raise HTTPException(403, {"error": {"type": "permission_error", "code": "tenant_disabled",
+                                            "message": "Tenant unavailable"}})
     leases = []
     tokens = []
     admitted = False

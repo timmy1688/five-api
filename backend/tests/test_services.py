@@ -17,7 +17,10 @@ from app.routers.anthropic_proxy import (
 )
 from app.services.channel_health import is_channel_healthy, record_failure
 from app.services.logging_service import cleanup_old_logs
-from app.services.pricing import BLOB_TOKENS, calculate_cost, catalog_prices, estimate_request_tokens
+from fastapi import HTTPException
+
+from app.services.billing_quotes import quote_cost, selling_quote
+from app.services.pricing import BLOB_TOKENS, catalog_prices, estimate_request_tokens
 from app.services.settings_service import set_gateway_config
 from app.services.sticky_session import make_session_key
 from app.services.proxy import extract_openai_usage
@@ -32,7 +35,7 @@ from app.utils.secrets import decrypt_secret, encrypt_secret, mask_secret
 from app.utils.upstream_url import upstream_url
 import httpx
 
-pytestmark = [pytest.mark.asyncio, pytest.mark.regression]
+pytestmark = pytest.mark.regression
 
 
 async def test_secret_round_trip_and_mask():
@@ -79,6 +82,11 @@ async def test_openai_compatible_channel_accepts_v1_base_url_without_key():
 
 # ── pricing ─────────────────────────────────────────────────
 
+async def calculate_cost(model, prompt, output, channel, cached_tokens=0, cache_write_tokens=0, alias=""):
+    quote = await selling_quote(model, alias, channel)
+    return quote_cost(quote, prompt, output, cached_tokens, cache_write_tokens, 0)["cost"]
+
+
 async def test_calculate_cost_global_price():
     await ModelPrice.create(model="pricing-test-model", prompt_price=Decimal("3.0"), completion_price=Decimal("15.0"))
     cost = await calculate_cost("pricing-test-model", 1000, 500, None)
@@ -93,7 +101,7 @@ async def test_calculate_cost_channel_override():
         base_url="https://api.openai.com",
         api_key="sk-x",
         models=["override-model"],
-        model_pricing={"override-model": {"prompt": 5.0, "completion": 20.0}},
+        price_overrides={"override-model": {"prompt": 5.0, "completion": 20.0}},
     )
     cost = await calculate_cost("override-model", 2000, 1000, ch)
     expected = (2000 * Decimal("5.0") + 1000 * Decimal("20.0")) / Decimal("1000000")
@@ -112,7 +120,7 @@ async def test_calculate_cost_explicit_zero_channel_override():
         base_url="https://example.test/v1",
         api_key="",
         models=["free-channel-model"],
-        model_pricing={
+        price_overrides={
             "free-channel-model": {
                 "prompt": 0,
                 "completion": 0,
@@ -133,14 +141,15 @@ async def test_calculate_cost_uses_mapped_alias_price():
         api_key="sk-x",
         models=["public-model"],
         model_mapping={"public-model": "upstream-model"},
-        model_pricing={"public-model": {"prompt": 1.0, "completion": 2.0}},
+        price_overrides={"public-model": {"prompt": 1.0, "completion": 2.0}},
     )
-    assert await calculate_cost("upstream-model", 1000, 500, ch) == Decimal("0.002000")
+    assert await calculate_cost("upstream-model", 1000, 500, ch, alias="public-model") == Decimal("0.002000")
 
 
-async def test_calculate_cost_no_pricing():
-    cost = await calculate_cost("unknown-model-xyz", 1000, 500, None)
-    assert cost == Decimal("0.000000")
+async def test_calculate_cost_no_pricing_refuses():
+    with pytest.raises(HTTPException) as refused:
+        await calculate_cost("unknown-model-xyz", 1000, 500, None)
+    assert refused.value.status_code == 503
 
 
 async def test_calculate_cost_zero_tokens():
@@ -214,7 +223,7 @@ async def test_missing_channel_write_price_uses_prompt_price():
         base_url="https://example.test",
         api_key="sk-x",
         models=["channel-write-fallback"],
-        model_pricing={
+        price_overrides={
             "channel-write-fallback": {"prompt": 10, "completion": 20, "cached": 1},
         },
     )
@@ -239,7 +248,7 @@ async def test_explicit_zero_write_price_is_free():
         base_url="https://example.test",
         api_key="sk-x",
         models=["free-write-model"],
-        model_pricing={
+        price_overrides={
             "free-write-model": {
                 "prompt": 10, "completion": 20, "cached": 1, "cache_write": 0,
             },
@@ -267,14 +276,20 @@ async def test_cache_tokens_above_prompt_do_not_make_negative_cost():
     assert cost == expected.quantize(Decimal("0.000001"))
 
 
-async def test_inactive_price_is_not_billed():
+async def test_inactive_price_refuses_even_with_channel_price():
     await ModelPrice.create(
         model="inactive-price",
         prompt_price=Decimal("10"),
         completion_price=Decimal("20"),
         is_active=False,
     )
-    assert await calculate_cost("inactive-price", 1000, 500, None) == Decimal("0.000000")
+    channel = await Channel.create(name="inactive-fixed", provider="openai", base_url="https://example.test", api_key="",
+                                   models=["inactive-price"],
+                                   price_overrides={"inactive-price": {"prompt": 1, "completion": 1}})
+    for target in (None, channel):
+        with pytest.raises(HTTPException) as refused:
+            await calculate_cost("inactive-price", 1000, 500, target)
+        assert refused.value.status_code == 503
 
 
 async def test_catalog_write_price_matches_vendor_rule():
@@ -530,7 +545,7 @@ async def test_saved_retention_deletes_only_older_logs():
     old = await RequestLog.create(request_id="old-log", api_key_id=1, model_requested="m")
     recent = await RequestLog.create(request_id="recent-log", api_key_id=1, model_requested="m")
     await RequestLog.filter(id=old.id).update(
-        created_at=datetime.utcnow() - timedelta(days=5)
+        created_at=datetime.now(timezone.utc) - timedelta(days=5)
     )
     assert await cleanup_old_logs() == 1
     assert await RequestLog.filter(id=old.id).exists() is False

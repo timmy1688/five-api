@@ -10,11 +10,12 @@ from tortoise.expressions import F
 
 from app.models import APIKey, Tenant
 from app.services import settlements
+from app.services.auth import key_tenant
 from app.services.billing_quotes import snapshot_quotes, estimate_quotes
 from app.services.concurrency import concurrency_limiter
 from app.services.pricing import estimate_request_tokens
 from app.services.rate_limit import rate_limiter
-from app.services.spend_windows import exceeded_window
+from app.services.spend_windows import exceeded_window, normalize_limits
 
 logger = logging.getLogger(__name__)
 
@@ -121,7 +122,7 @@ class RequestLease:
 async def begin_request_budget(api_key: APIKey, request_id: str, body: dict | None, *,
                                default_output: int | None = None, request_units: int = 0,
                                candidates: list | None = None, input_tokens_override: int | None = None) -> RequestLease:
-    tenant = await Tenant.get_or_none(id=api_key.tenant_id, is_enabled=True)
+    tenant = await key_tenant(api_key)
     if tenant is None:
         raise QuotaExceeded(api_key.id, "tenant_disabled")
     lease = RequestLease(api_key.id, request_id or str(uuid.uuid4()), api_key.tpm_limit, tenant.id)
@@ -132,8 +133,12 @@ async def begin_request_budget(api_key: APIKey, request_id: str, body: dict | No
     lease.estimated_input = input_tokens
     try:
         for scope, owner in (("key", api_key), ("tenant", tenant)):
+            limits = normalize_limits(owner.window_limits)
+            if not limits:
+                continue
+            held = await settlements.occupied(scope, owner.id)
             # Preserve the existing Redis namespace when evolving Team into Tenant.
-            window = await exceeded_window("team" if scope == "tenant" else scope, owner.id, owner.window_limits)
+            window = await exceeded_window("team" if scope == "tenant" else scope, owner.id, limits, held)
             if window:
                 raise QuotaExceeded(api_key.id, f"{scope}_window", window)
         lease.quotes = await snapshot_quotes(str((body or {}).get("model") or ""), candidates)

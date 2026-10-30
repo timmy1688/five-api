@@ -24,7 +24,6 @@ async def _setup_proxy_env():
         api_key="sk-upstream",
         models=["gpt-4o"],
         model_mapping={},
-        model_pricing={},
         is_enabled=True, timeout=60,
     )
     await ModelPrice.create(model="gpt-4o", prompt_price=Decimal("2.5"), completion_price=Decimal("10.0"))
@@ -892,6 +891,9 @@ async def test_stream_answered_with_json_error_is_an_error(client):
             json={"model": "gpt-4o", "stream": True, "messages": [{"role": "user", "content": "hi"}]},
             headers=auth_header("sk-proxytest123456"),
         )
-    assert "bad key" in resp.text
+    assert resp.status_code == 502
+    assert "bad key" not in resp.text
+    assert "Upstream credentials unavailable" in resp.text
     log = await RequestLog.get(request_id=resp.headers["x-request-id"])
-    assert log.status_code == 401
+    assert log.status_code == 502
+    assert "bad key" in log.upstream_error

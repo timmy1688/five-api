@@ -143,8 +143,10 @@ async def by_team(
     days: int = Query(7, ge=1, le=90),
     _: User = Depends(require_platform_admin),
 ):
+    internal = await Tenant.filter(is_system=True).values_list("id", flat=True)
     rows = (
         await UsageDaily.filter(day__gte=start_day(days), tenant_id__gt=0)
+        .exclude(tenant_id__in=list(internal))
         .group_by("tenant_id")
         .annotate(**_totals())
         .order_by("-cost")

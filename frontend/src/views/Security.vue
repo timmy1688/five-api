@@ -57,7 +57,7 @@
             {{ t('security.aiDesc', {
               system: limits.system_chars,
               user: limits.user_chars,
-              minutes: limits.cache_seconds / 60,
+              days: limits.cache_seconds / 86400,
               min: limits.min_chars,
             }) }}
           </p>
@@ -137,10 +137,10 @@ const limits = ref({
   system_chars: 400,
   user_chars: 1200,
   min_chars: 24,
-  cache_seconds: 600,
+  cache_seconds: 604800,
 })
-const ai = ref({ enabled: false, model: '', fail_closed: false })
-const savedAi = ref({ enabled: false, model: '', fail_closed: false })
+const ai = ref({ enabled: false, model: '' })
+const savedAi = ref({ enabled: false, model: '' })
 
 async function load() {
   loading.value = true
@@ -154,7 +154,6 @@ async function load() {
       const next = {
         enabled: !!data.ai_audit.enabled,
         model: data.ai_audit.model || '',
-        fail_closed: !!data.ai_audit.fail_closed,
       }
       ai.value = next
       savedAi.value = { ...next }
@@ -220,12 +219,10 @@ async function saveAi() {
     const data = await securityApi.setAiAudit({
       enabled: ai.value.enabled,
       model: ai.value.model.trim(),
-      fail_closed: ai.value.fail_closed,
     })
     const next = {
       enabled: !!data.enabled,
       model: data.model || '',
-      fail_closed: !!data.fail_closed,
     }
     ai.value = next
     savedAi.value = { ...next }

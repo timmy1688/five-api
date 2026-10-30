@@ -6,12 +6,14 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import ValidationError
 from tortoise.transactions import in_transaction
 
-from app.models import APIKey, ModelGroup, RequestLog, Tenant, User
+from app.models import APIKey, Channel, ModelGroup, RequestLog, Tenant, User
 from app import dependencies
 from app.schemas.api_key import (
     APIKeyCreateResponse, APIKeyResponse, APIKeyUpdate, TenantKeyCreate, TenantKeyUpdate,
 )
 from app.services.auth import PLATFORM_ADMIN, hash_api_key, require_account
+from app.services.billing_quotes import channel_override, public_selling_prices
+from app.services.channel_health import get_health_status
 from app.services.management_events import record_event
 from app.services.quota import occupied_quota
 from app.services.rate_limit import RPM_CHECK_SCRIPT
@@ -42,6 +44,7 @@ async def _to_response(key: APIKey, actor: User) -> APIKeyResponse:
         quota_total=key.quota_total, quota_used=key.quota_used, quota_occupied=occupied,
         quota_remaining=remaining, concurrent_limit=key.concurrent_limit, rpm_limit=key.rpm_limit,
         tpm_limit=key.tpm_limit, allowed_models=key.allowed_models, allowed_ips=key.allowed_ips,
+        channel_ids=key.channel_ids or [],
         tenant_id=key.tenant_id, tenant_name=tenant.name if tenant else None,
         tenant_is_system=tenant.is_system if tenant else False,
         is_enabled=key.is_enabled, is_revoked=key.is_revoked, expires_at=key.expires_at,
@@ -67,6 +70,27 @@ async def validate_models(tenant: Tenant, data: dict):
         raise HTTPException(403, "Models exceed tenant allowance")
 
 
+async def selectable_channels(tenant: Tenant) -> list[tuple[Channel, list[str]]]:
+    """Enabled channels serving at least one model the tenant may use, with those models."""
+    allowed = set(tenant.allowed_models or [])
+    result = []
+    for channel in await Channel.filter(is_enabled=True).order_by("id"):
+        models = [m for m in channel.models or [] if not allowed or m in allowed]
+        if models:
+            result.append((channel, models))
+    return result
+
+
+async def validate_channels(tenant: Tenant, data: dict):
+    if not data.get("channel_ids"):
+        return
+    data["channel_ids"] = list(dict.fromkeys(data["channel_ids"]))
+    visible = {channel.id for channel, _ in await selectable_channels(tenant)}
+    unavailable = [cid for cid in data["channel_ids"] if cid not in visible]
+    if unavailable:
+        raise HTTPException(422, f"Channels unavailable for this tenant: {unavailable}")
+
+
 async def _create(tenant_id: int, body: TenantKeyCreate, actor: User, response: Response):
     data = body.model_dump()
     redis = await dependencies.get_redis()
@@ -81,6 +105,7 @@ async def _create(tenant_id: int, body: TenantKeyCreate, actor: User, response: 
         if await APIKey.filter(tenant_id=tenant_id, is_revoked=False).count() >= tenant.max_keys:
             raise HTTPException(409, "Tenant key limit reached; revoke unused keys first")
         await validate_models(tenant, data)
+        await validate_channels(tenant, data)
         if data.get("quota_reset_day") is not None:
             data["quota_last_reset_at"] = datetime.now(timezone.utc)
         raw = generate_api_key()
@@ -110,6 +135,47 @@ async def tenant_summary(actor: User = Depends(require_account)):
     from app.routers.tenants import tenant_response
     tenant = await Tenant.get(id=actor.tenant_id)
     return await tenant_response(tenant)
+
+
+@router.get("/keys/channels")
+async def key_channels(tenant_id: int | None = None, actor: User = Depends(require_account)):
+    """Channels a key may be bound to, with customer prices. Upstream URLs and secrets stay hidden."""
+    if actor.role == PLATFORM_ADMIN:
+        tenant = await Tenant.get_or_none(id=tenant_id) if tenant_id else Tenant(allowed_models=[])
+    else:
+        if tenant_id is not None and tenant_id != actor.tenant_id:
+            raise HTTPException(403, "Tenant selection requires platform administrator")
+        tenant = await Tenant.get_or_none(id=actor.tenant_id)
+    if tenant is None:
+        raise HTTPException(404, "Tenant not found")
+    channels = await selectable_channels(tenant)
+    routes: dict[str, list[tuple]] = {}
+    for channel, models in channels:
+        for model in models:
+            routes.setdefault(model, []).append((channel, (channel.model_mapping or {}).get(model, model)))
+    prices = await public_selling_prices(routes)
+    health = await get_health_status([channel.id for channel, _ in channels])
+
+    def model_entry(channel: Channel, model: str) -> dict:
+        actual = (channel.model_mapping or {}).get(model, model)
+        channel_price = next((entry for entry in prices.get(model, {}).get("channels", [])
+                              if entry["channel_id"] == channel.id), None)
+        return {
+            "model": model,
+            "fixed_price": channel_override(channel, [model, actual]) is not None,
+            "prices": {k: v for k, v in channel_price.items() if k not in ("channel_id", "channel_name")}
+            if channel_price else None,
+        }
+
+    return [
+        {
+            "id": channel.id, "name": channel.name, "provider": channel.provider,
+            "price_multiplier": float(channel.price_multiplier),
+            "healthy": health[channel.id]["healthy"],
+            "models": [model_entry(channel, model) for model in models],
+        }
+        for channel, models in channels
+    ]
 
 
 @router.post("/keys", response_model=APIKeyCreateResponse, status_code=201)
@@ -157,6 +223,7 @@ async def update_key(key_id: int, request: Request, actor: User = Depends(requir
         if key.is_revoked:
             raise HTTPException(409, "Revoked key cannot be modified")
         await validate_models(tenant, data)
+        await validate_channels(tenant, data)
         if data.get("quota_total", -1) != -1:
             occupied = await occupied_quota("key", key_id)
             if data["quota_total"] < key.quota_used + occupied:

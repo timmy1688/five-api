@@ -20,6 +20,9 @@
           <template #default="{ row }"><code>{{ row.key_prefix }}••••••</code></template>
         </el-table-column>
         <el-table-column v-if="auth.isPlatformAdmin" :label="t('nav.tenants')" min-width="120"><template #default="{ row }">{{ row.tenant_is_system ? t('keys.platformOwn') : row.tenant_name }}</template></el-table-column>
+        <el-table-column :label="t('keys.channels')" min-width="150">
+          <template #default="{ row }">{{ channelNames(row) }}</template>
+        </el-table-column>
         <el-table-column :label="t('keys.quota')" min-width="180">
           <template #default="{ row }">
             {{ money(row.quota_used) }} / {{ row.quota_total === -1 ? t('keys.shared') : money(row.quota_total) }}
@@ -58,6 +61,29 @@
             <el-option v-for="model in availableModels" :key="model" :label="model" :value="model" />
           </el-select>
           <div>{{ t('keys.modelsHint') }}</div>
+        </el-form-item>
+        <el-form-item :label="t('keys.channels')">
+          <el-select v-model="form.channel_ids" multiple :placeholder="t('keys.channelsAll')" style="width: 100%">
+            <el-option v-for="channel in channelOptions" :key="channel.id" :label="channel.name" :value="channel.id">
+              <span>{{ channel.name }}</span>
+              <span class="channel-option-meta">
+                ×{{ channel.price_multiplier }}
+                <el-tag size="small" :type="channel.healthy ? 'success' : 'danger'" effect="plain">{{ channel.healthy ? t('keys.channelHealthy') : t('keys.channelDown') }}</el-tag>
+              </span>
+            </el-option>
+          </el-select>
+          <div class="form-hint">{{ channelHint }}</div>
+          <table v-if="selectedPrices.length" class="channel-price-table">
+            <thead><tr><th>{{ t('keys.channels') }}</th><th>{{ t('common.model') }}</th><th>{{ t('logs.input') }}</th><th>{{ t('logs.output') }}</th></tr></thead>
+            <tbody>
+              <tr v-for="row in selectedPrices" :key="row.key">
+                <td>{{ row.channel }}</td>
+                <td>{{ row.model }}<el-tag v-if="row.fixed" size="small" type="warning" effect="plain" class="fixed-tag">{{ t('models.fixedPrice') }}</el-tag></td>
+                <td>{{ row.input }}</td>
+                <td>{{ row.output }}</td>
+              </tr>
+            </tbody>
+          </table>
         </el-form-item>
         <el-form-item :label="t('keys.expires')">
           <el-date-picker v-model="form.expires_at" type="datetime" value-format="YYYY-MM-DDTHH:mm:ssZ" clearable />
@@ -103,6 +129,7 @@
           <el-descriptions-item :label="t('keys.expires')">{{ selected.expires_at || t('common.never') }}</el-descriptions-item>
           <el-descriptions-item :label="t('keys.allowedModels')">{{ selected.allowed_models.join(', ') || t('keys.modelsHint') }}</el-descriptions-item>
           <el-descriptions-item :label="t('keys.allowedIps')">{{ selected.allowed_ips.join(', ') || '-' }}</el-descriptions-item>
+          <el-descriptions-item :label="t('keys.channels')" :span="2">{{ channelNames(selected) }}</el-descriptions-item>
         </el-descriptions>
         <p>{{ t('keys.recentUsage') }}</p>
         <el-table :data="usage">
@@ -118,9 +145,9 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { keysApi } from '@/api/keys'
+import { keysApi, type KeyChannel } from '@/api/keys'
 import { modelGroupsApi } from '@/api/model_groups'
 import { modelsApi } from '@/api/models'
 import { useAuthStore } from '@/stores/auth'
@@ -138,11 +165,45 @@ const page = ref(1), total = ref(0), editingId = ref<number | null>(null)
 const loading = ref(false), saving = ref(false), dialog = ref(false), showRaw = ref(false), showDetail = ref(false)
 const raw = ref('')
 const defaults = () => ({ name: '', quota_total: -1, allowed_models: [] as string[], allowed_ips: [] as string[],
-  expires_at: null as string | null, concurrent_limit: 5, rpm_limit: -1, tpm_limit: -1 })
+  channel_ids: [] as number[], expires_at: null as string | null, concurrent_limit: 5, rpm_limit: -1, tpm_limit: -1 })
 const platformDefaults = () => ({ model_group_id: null as number | null, quota_reset_day: null as number | null,
   window_limits: {} as Record<string, number>, audit_policy: 'off' })
 const form = ref(defaults()), platform = ref(platformDefaults())
 const money = (value: any) => Number(value) === -1 ? t('common.unlimited') : '$' + Number(value || 0).toFixed(6)
+const channelOptions = ref<KeyChannel[]>([])
+const knownChannels = ref<Record<number, string>>({})
+const channelHint = computed(() => {
+  const count = form.value.channel_ids.length
+  return t(count === 0 ? 'keys.channelsHintAll' : count === 1 ? 'keys.channelsHintOne' : 'keys.channelsHintMany')
+})
+const selectedPrices = computed(() => channelOptions.value
+  .filter(channel => form.value.channel_ids.includes(channel.id))
+  .flatMap(channel => channel.models.map(entry => ({
+    key: `${channel.id}:${entry.model}`,
+    channel: channel.name,
+    model: entry.model,
+    fixed: entry.fixed_price,
+    input: entry.prices ? '$' + formatPrice(entry.prices.prompt) : '—',
+    output: entry.prices ? '$' + formatPrice(entry.prices.completion) : '—',
+  }))))
+
+function formatPrice(value: number) {
+  return value.toLocaleString(undefined, { maximumFractionDigits: 6 })
+}
+
+function channelNames(row: any) {
+  const ids: number[] = row.channel_ids || []
+  return ids.length ? ids.map(id => knownChannels.value[id] ?? `#${id}`).join(', ') : t('keys.channelsAll')
+}
+
+async function loadChannels(tenantId?: number) {
+  try {
+    channelOptions.value = await keysApi.channels(tenantId)
+    for (const channel of channelOptions.value) knownChannels.value[channel.id] = channel.name
+  } catch {
+    channelOptions.value = []
+  }
+}
 
 async function load() {
   loading.value = true
@@ -157,13 +218,16 @@ async function load() {
 }
 function openCreate() {
   editingId.value = null; form.value = defaults(); platform.value = platformDefaults(); dialog.value = true
+  loadChannels()
 }
 function edit(row: any) {
   editingId.value = row.id
   form.value = Object.fromEntries(Object.keys(defaults()).map(key => [key, row[key] ?? (defaults() as any)[key]])) as ReturnType<typeof defaults>
   platform.value = { model_group_id: row.model_group_id, quota_reset_day: row.quota_reset_day,
     window_limits: { ...row.window_limits }, audit_policy: row.audit_policy }
+  form.value.channel_ids = [...(row.channel_ids || [])]
   dialog.value = true
+  loadChannels(auth.isPlatformAdmin ? row.tenant_id : undefined)
 }
 async function save() {
   saving.value = true
@@ -195,7 +259,7 @@ async function copy() {
   catch { ElMessage.error(t('keys.copyManual')) }
 }
 onMounted(async () => {
-  await load()
+  await Promise.all([load(), loadChannels()])
   if (route.query.create === '1') openCreate()
   if (auth.isPlatformAdmin) {
     const results = await Promise.allSettled([modelGroupsApi.listAll(), modelsApi.list()])
@@ -205,3 +269,45 @@ onMounted(async () => {
 })
 onUnmounted(() => { raw.value = '' })
 </script>
+
+<style scoped>
+.form-hint {
+  width: 100%;
+  margin-top: 4px;
+  color: #86909c;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.channel-option-meta {
+  float: right;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #86909c;
+  font-size: 12px;
+}
+
+.channel-price-table {
+  width: 100%;
+  margin-top: 8px;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.channel-price-table th,
+.channel-price-table td {
+  padding: 4px 8px;
+  border-bottom: 1px solid #f0f1f3;
+  text-align: left;
+}
+
+.channel-price-table th {
+  color: #86909c;
+  font-weight: 500;
+}
+
+.fixed-tag {
+  margin-left: 4px;
+}
+</style>

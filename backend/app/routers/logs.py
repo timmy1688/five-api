@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
@@ -6,7 +7,6 @@ from pydantic import BaseModel
 from app.models import User, RequestLog, RequestLogAudit
 from app.services.auth import require_platform_admin
 from app.services.content_filter import keyword_was_hit
-from app.services.logging_service import cleanup_old_logs
 
 router = APIRouter(prefix="/api/logs", tags=["logs"])
 
@@ -29,7 +29,6 @@ class LogResponse(BaseModel):
     cached_tokens: int
     cache_write_tokens: int
     cost: float
-    upstream_cost: float = 0
     usage_source: str = "legacy"
     is_stream: bool
     status_code: int
@@ -78,7 +77,7 @@ def _to_log(r: RequestLog) -> LogResponse:
         cached_tokens=r.cached_tokens,
         cache_write_tokens=r.cache_write_tokens,
         cost=float(r.cost),
-        upstream_cost=float(r.upstream_cost), usage_source=r.usage_source,
+        usage_source=r.usage_source,
         is_stream=r.is_stream,
         status_code=r.status_code,
         latency_ms=r.latency_ms,
@@ -105,7 +104,7 @@ async def list_logs(
     client_request_id: str | None = Query(None, max_length=128),
     api_key_name: str | None = Query(None, max_length=100),
     model: str | None = None,
-    status_code: int | None = None,
+    result: Literal["success", "error"] | None = None,
     error_origin: str | None = None,
     start_date: datetime | None = None,
     end_date: datetime | None = None,
@@ -120,8 +119,10 @@ async def list_logs(
         qs = qs.filter(api_key_name__icontains=key_name)
     if model:
         qs = qs.filter(model_requested=model)
-    if status_code is not None:
-        qs = qs.filter(status_code=status_code)
+    if result == "success":
+        qs = qs.filter(status_code__lt=400)
+    elif result == "error":
+        qs = qs.filter(status_code__gte=400)
     if error_origin:
         qs = qs.filter(error_origin=error_origin)
     if start_date:
@@ -138,7 +139,7 @@ async def list_logs(
             "id", "request_id", "api_key_id", "api_key_name", "channel_id", "channel_name",
             "model_requested", "model_actual", "provider", "endpoint",
             "prompt_tokens", "completion_tokens", "total_tokens", "cached_tokens",
-            "cache_write_tokens", "cost", "upstream_cost", "usage_source", "client_request_id",
+            "cache_write_tokens", "cost", "usage_source", "client_request_id",
             "is_stream", "status_code", "latency_ms", "error_message", "error_origin",
             "upstream_status_code", "upstream_error", "ip_address", "failed_over",
             "has_audit", "ai_review", "security_hit", "session_id", "cache_savings", "created_at",
@@ -165,12 +166,3 @@ async def get_log_audit(request_id: str, _: User = Depends(require_platform_admi
     if audit is None or not audit.audit_request:
         raise HTTPException(status_code=404, detail="Audit not found")
     return LogAuditResponse(request_id=r.request_id, audit_request=audit.audit_request)
-
-
-@router.post("/cleanup")
-async def cleanup_logs(
-    days: int = Query(None, ge=1),
-    _: User = Depends(require_platform_admin),
-):
-    deleted = await cleanup_old_logs(days)
-    return {"deleted": deleted}

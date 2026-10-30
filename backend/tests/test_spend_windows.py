@@ -3,14 +3,12 @@ from decimal import Decimal
 from unittest.mock import AsyncMock, patch
 
 import httpx
-import pytest
 
 from app.models import APIKey, Channel, ModelPrice, Tenant
 from app.services.auth import hash_api_key
 from app.services.spend_windows import normalize_limits
 from tests.conftest import auth_header
 
-pytestmark = pytest.mark.asyncio
 
 RAW_KEY = "sk-window-client-key"
 OK = {"choices": [{"message": {"content": "hi"}}], "usage": {"prompt_tokens": 1, "completion_tokens": 0}}

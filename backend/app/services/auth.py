@@ -97,47 +97,55 @@ async def check_key_tenant(api_key: APIKey) -> Tenant:
     return tenant
 
 
+def cached_tenant(api_key: APIKey) -> Tenant | None:
+    """Tenant loaded when this request's key was authenticated.
+
+    Read-only checks may reuse it; spending is enforced again under row lock in settlements.reserve.
+    """
+    return getattr(api_key, "_request_tenant", None)
+
+
+async def key_tenant(api_key: APIKey) -> Tenant | None:
+    return cached_tenant(api_key) or await Tenant.get_or_none(id=api_key.tenant_id, is_enabled=True)
+
+
 def hash_api_key(raw_key: str) -> str:
     return hashlib.sha256(raw_key.encode()).hexdigest()
+
+
+def _key_rejected(status_code: int, code: str, message: str) -> HTTPException:
+    # protocol_errors renders this OpenAI shape as an Anthropic error under /v1/messages.
+    return HTTPException(status_code=status_code, detail={"error": {
+        "message": message, "type": "authentication_error", "code": code,
+    }})
+
+
+async def authenticate_api_key(request: Request, raw_key: str | None) -> APIKey:
+    if not raw_key:
+        raise _key_rejected(status.HTTP_401_UNAUTHORIZED, "invalid_api_key", "Missing API key")
+    remember_credential(raw_key)
+    api_key = await APIKey.get_or_none(key_hash=hash_api_key(raw_key))
+    if api_key is None:
+        raise _key_rejected(status.HTTP_401_UNAUTHORIZED, "invalid_api_key", "Invalid API key")
+    if not api_key.is_enabled or api_key.is_revoked:
+        raise _key_rejected(status.HTTP_401_UNAUTHORIZED, "key_disabled", "API key is disabled")
+    if api_key.expires_at:
+        exp = api_key.expires_at
+        if exp.tzinfo is None:
+            exp = exp.replace(tzinfo=timezone.utc)
+        if exp < datetime.now(timezone.utc):
+            raise _key_rejected(status.HTTP_401_UNAUTHORIZED, "key_expired", "API key has expired")
+    if not check_ip_allowed(api_key.allowed_ips, get_client_ip(request)):
+        raise _key_rejected(status.HTTP_403_FORBIDDEN, "ip_not_allowed", "IP address not allowed")
+    api_key._request_tenant = await check_key_tenant(api_key)
+    return api_key
 
 
 async def verify_api_key(
     request: Request,
     credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
 ) -> APIKey:
-    if credentials is None:
-        raise HTTPException(status_code=401, detail={"error": {"message": "Missing API key", "type": "authentication_error", "code": "invalid_api_key"}})
-    raw_key = credentials.credentials
-    remember_credential(raw_key)
-    key_hash = hash_api_key(raw_key)
-    api_key = await APIKey.get_or_none(key_hash=key_hash)
-
-    if api_key is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail={"error": {"message": "Invalid API key", "type": "authentication_error", "code": "invalid_api_key"}},
-        )
-    if not api_key.is_enabled or api_key.is_revoked:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail={"error": {"message": "API key is disabled", "type": "authentication_error", "code": "key_disabled"}},
-        )
-    if api_key.expires_at:
-        exp = api_key.expires_at
-        if exp.tzinfo is None:
-            exp = exp.replace(tzinfo=timezone.utc)
-        if exp < datetime.now(timezone.utc):
-            raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail={"error": {"message": "API key has expired", "type": "authentication_error", "code": "key_expired"}},
-        )
-    if not check_ip_allowed(api_key.allowed_ips, get_client_ip(request)):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail={"error": {"message": "IP address not allowed", "type": "authentication_error", "code": "ip_not_allowed"}},
-        )
-    await check_key_tenant(api_key)
-    return api_key
+    return await authenticate_api_key(request, credentials.credentials if credentials else None)
 
 
 async def verify_api_key_anthropic(request: Request) -> APIKey:
@@ -146,40 +154,4 @@ async def verify_api_key_anthropic(request: Request) -> APIKey:
         auth_header = request.headers.get("authorization", "")
         if auth_header.lower().startswith("bearer "):
             raw_key = auth_header[7:].strip()
-
-    if not raw_key:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail={"type": "error", "error": {"type": "authentication_error", "message": "Missing API key"}},
-        )
-
-    remember_credential(raw_key)
-    key_hash = hash_api_key(raw_key)
-    api_key = await APIKey.get_or_none(key_hash=key_hash)
-
-    if api_key is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail={"type": "error", "error": {"type": "authentication_error", "message": "Invalid API key"}},
-        )
-    if not api_key.is_enabled or api_key.is_revoked:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail={"type": "error", "error": {"type": "authentication_error", "message": "API key is disabled"}},
-        )
-    if api_key.expires_at:
-        exp = api_key.expires_at
-        if exp.tzinfo is None:
-            exp = exp.replace(tzinfo=timezone.utc)
-        if exp < datetime.now(timezone.utc):
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail={"type": "error", "error": {"type": "authentication_error", "message": "API key has expired"}},
-            )
-    if not check_ip_allowed(api_key.allowed_ips, get_client_ip(request)):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail={"type": "error", "error": {"type": "authentication_error", "message": "IP address not allowed"}},
-        )
-    await check_key_tenant(api_key)
-    return api_key
+    return await authenticate_api_key(request, raw_key)

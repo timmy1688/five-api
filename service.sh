@@ -26,7 +26,7 @@ install_deps() {
     echo "==> Installing backend dependencies..."
     (
         cd backend
-        ../.venv/bin/python -m pip install -i https://mirrors.aliyun.com/pypi/simple --require-hashes -r requirements-dev.lock
+        ../.venv/bin/python -m pip install -i https://mirrors.aliyun.com/pypi/simple -r requirements.txt
     )
 
     echo "==> Installing frontend dependencies..."
@@ -64,8 +64,44 @@ stop_apps() {
 
 }
 
+secret_from_file() {
+    # Reuse data/secrets.json so local runs and the container decrypt the same data.
+    [ -f data/secrets.json ] || return 0
+    sed -n "s/.*\"$1\": *\"\([^\"]*\)\".*/\1/p" data/secrets.json 2>/dev/null | head -n 1
+}
+
+random_secret() {
+    head -c 48 /dev/urandom | base64 | tr -d '\n/+='
+}
+
+ensure_secrets() {
+    touch .env
+    chmod 600 .env
+    if grep -q '^SECRET_KEY=.' .env && grep -q '^ENCRYPTION_KEY=.' .env; then
+        return
+    fi
+    if grep -q '^\(SECRET_KEY\|ENCRYPTION_KEY\)=' .env; then
+        echo "ERROR: .env 中的 SECRET_KEY/ENCRYPTION_KEY 不完整。请从备份恢复，不要重新生成已用于加密的密钥" >&2
+        exit 1
+    fi
+    local jwt enc
+    jwt=$(secret_from_file jwt_secret)
+    enc=$(secret_from_file encryption_key)
+    if [ -z "$jwt" ] || [ -z "$enc" ]; then
+        if [ -f data/secrets.json ]; then
+            echo "ERROR: data/secrets.json 无法读取，请修复后重试" >&2
+            exit 1
+        fi
+        jwt=$(random_secret)
+        enc=$(random_secret)
+    fi
+    printf '\n# Gateway secrets. Back up separately from the database; never regenerate.\nSECRET_KEY=%s\nENCRYPTION_KEY=%s\n' "$jwt" "$enc" >> .env
+    echo "==> 网关密钥已写入 .env，请与数据库分开备份"
+}
+
 start() {
     check_deps
+    ensure_secrets
     stop_apps
     export NO_PROXY="${NO_PROXY:-${no_proxy:-}},127.0.0.1,localhost,::1"
     export no_proxy="$NO_PROXY"
@@ -126,6 +162,14 @@ stop() {
     echo "==> Done."
 }
 
+deploy() {
+    ensure_secrets
+    mkdir -p data/mysql data/redis
+    echo "==> Building and starting gateway, MySQL & Redis..."
+    docker compose up -d --build
+    echo "==> Gateway: http://127.0.0.1:8080 (first login: admin / admin123)"
+}
+
 restart() {
     stop
     echo ""
@@ -162,9 +206,11 @@ logs() {
 
 usage() {
     cat <<EOF
-Usage: ./service.sh {install|start|stop|restart|status|logs [backend|frontend]}
+Usage: ./service.sh {deploy|install|secrets|start|stop|restart|status|logs [backend|frontend]}
 
+  deploy    生产部署：生成 .env 密钥（已有则不变），构建并启动网关容器、MySQL、Redis
   install   创建 .venv 并安装后端、前端依赖
+  secrets   在 .env 写入网关密钥（已有 data/secrets.json 时沿用），已存在则不变
   start     启动 MySQL/Redis + 后端(:${BACKEND_PORT}) + 前端(:${FRONTEND_PORT})
   stop      停止后端/前端并关闭 MySQL/Redis
   restart   先 stop 再 start
@@ -175,7 +221,9 @@ EOF
 
 cmd="${1:-}"
 case "$cmd" in
+    deploy)  deploy ;;
     install) install_deps ;;
+    secrets) ensure_secrets ;;
     start)   start ;;
     stop)    stop ;;
     restart) restart ;;

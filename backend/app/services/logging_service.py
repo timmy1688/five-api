@@ -46,7 +46,6 @@ async def save_request_log(
     cache_savings: Decimal = Decimal(0),
     cost_detail: dict | None = None,
     client_request_id: str = "",
-    upstream_cost: Decimal = Decimal(0),
     usage_source: str = "upstream",
     observed_at: str | None = None,
     observe: bool = True,
@@ -60,7 +59,7 @@ async def save_request_log(
         log = await RequestLog.create(
             request_id=request_id,
             client_request_id=client_request_id or correlation_id.get(),
-            upstream_cost=upstream_cost, usage_source=usage_source,
+            usage_source=usage_source,
             created_at=datetime.fromisoformat(observed_at) if observed_at else datetime.now(timezone.utc),
             api_key_id=api_key_id,
             tenant_id=tenant_id,
@@ -112,7 +111,7 @@ async def save_request_log(
             cached_tokens=cached_tokens,
             cache_write_tokens=cache_write_tokens,
             cache_savings=cache_savings,
-            when=log.created_at, upstream_cost=upstream_cost, realtime=False,
+            when=log.created_at, realtime=False,
         )
     if observe:
         await observe_request_log(log)
@@ -142,7 +141,7 @@ async def cleanup_old_logs(days: int | None = None) -> int:
         retention = days
     if retention <= 0:
         return 0
-    cutoff = datetime.utcnow() - timedelta(days=retention)
+    cutoff = datetime.now(timezone.utc) - timedelta(days=retention)
     total_deleted = 0
     batch_size = 10000
     while True:

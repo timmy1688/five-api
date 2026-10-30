@@ -107,7 +107,8 @@ async def test_channel_crud(client):
     # create
     resp = await client.post("/api/channels", json={
         "name": "test-ch", "provider": "openai", "base_url": "https://api.openai.com",
-        "api_key": "sk-up", "models": ["gpt-4o"], "model_pricing": {"gpt-4o": {"prompt": 2.5, "completion": 10.0}},
+        "api_key": "sk-up", "models": ["gpt-4o"], "price_multiplier": 1.5,
+        "price_overrides": {"gpt-4o": {"prompt": 2.5, "completion": 10.0}},
     }, headers=h)
     assert resp.status_code == 201
     created = resp.json()
@@ -127,7 +128,9 @@ async def test_channel_crud(client):
     resp = await client.get(f"/api/channels/{ch_id}", headers=h)
     assert resp.status_code == 200
     assert resp.json()["name"] == "test-ch"
-    assert resp.json()["model_pricing"]["gpt-4o"]["prompt"] == 2.5
+    assert resp.json()["price_overrides"]["gpt-4o"]["prompt"] == 2.5
+    assert resp.json()["price_multiplier"] == 1.5
+    assert "model_pricing" not in resp.json() and "cost_multiplier" not in resp.json()
 
     # update
     resp = await client.put(f"/api/channels/{ch_id}", json={"name": "renamed"}, headers=h)
@@ -275,7 +278,7 @@ async def test_invalid_numeric_configuration_is_rejected(client):
             "provider": "openai",
             "base_url": "https://example.test",
             "models": ["test-model"],
-            "model_pricing": {
+            "price_overrides": {
                 "test-model": {"prompt": -0.1, "completion": 1}
             },
         },
@@ -431,42 +434,28 @@ async def test_model_price_sync_preserves_all_existing_prices(client):
 async def test_models_show_channel_specific_price_variants(client):
     admin = await create_admin("modelprices", "pw")
     token = create_access_token({"sub": str(admin.id)})
-    await ModelPrice.create(
-        model="shared-model",
-        prompt_price=1,
-        completion_price=2,
-    )
-    await Channel.create(
-        name="global-price-channel",
-        provider="openai",
-        base_url="https://one.test",
-        api_key="",
-        models=["shared-model"],
-    )
-    await Channel.create(
-        name="override-price-channel",
-        provider="openai",
-        base_url="https://two.test",
-        api_key="",
-        models=["shared-model"],
-        model_pricing={
-            "shared-model": {"prompt": 3, "completion": 4, "cached": 0}
-        },
-    )
+    await ModelPrice.create(model="shared-model", prompt_price=1, completion_price=2)
+    for name, extra in (
+        ("global-price-channel", {}),
+        ("double-price-channel", {"price_multiplier": 2}),
+        ("fixed-price-channel", {"price_multiplier": 5,
+                                 "price_overrides": {"shared-model": {"prompt": 3, "completion": 4}}}),
+    ):
+        await Channel.create(name=name, provider="openai", base_url="https://one.test", api_key="",
+                             models=["shared-model"], **extra)
 
-    resp = await client.get(
-        "/api/models",
-        headers=auth_header(token),
-    )
+    resp = await client.get("/api/models", headers=auth_header(token))
     assert resp.status_code == 200
-    model = next(
-        item for item in resp.json()["items"]
-        if item["model"] == "shared-model"
-    )
-    assert model["pricing"]["prompt"] == 1
-    assert model["pricing_varies"] is False
-    assert {channel["pricing_source"] for channel in model["channels"]} == {"global"}
-    assert {channel["upstream_source"] for channel in model["channels"]} == {"selling_price_estimate", "channel"}
+    model = next(item for item in resp.json()["items"] if item["model"] == "shared-model")
+    assert model["pricing_varies"] is True and model["pricing"] is None
+    by_name = {channel["name"]: channel for channel in model["channels"]}
+    assert by_name["global-price-channel"]["pricing"]["prompt"] == 1
+    assert by_name["double-price-channel"]["pricing"]["completion"] == 4
+    assert by_name["double-price-channel"]["price_multiplier"] == 2
+    fixed = by_name["fixed-price-channel"]
+    assert fixed["pricing_source"] == "channel" and fixed["pricing"]["prompt"] == 3
+    assert fixed["pricing"]["cache_write"] == 3 and fixed["pricing"]["cached"] == 0
+    assert all("upstream_cost" not in channel for channel in model["channels"])
 
 
 # ── logs ────────────────────────────────────────────────────
@@ -522,6 +511,23 @@ async def test_logs_filter_by_partial_key_name(client):
     data = resp.json()
     assert data["total"] == 1
     assert data["items"][0]["api_key_name"] == "Production-DeepSeek"
+
+
+async def test_logs_filter_errors_and_cannot_be_deleted(client):
+    from app.models import RequestLog
+
+    admin = await create_admin("logresult", "pw")
+    h = auth_header(create_access_token({"sub": str(admin.id)}))
+    for request_id, status in (("ok", 200), ("limited", 429), ("upstream", 502)):
+        await RequestLog.create(request_id=request_id, api_key_id=1, api_key_name="k", model_requested="m",
+                                endpoint="/v1/chat/completions", status_code=status)
+
+    errors = await client.get("/api/logs", params={"result": "error"}, headers=h)
+    assert sorted(item["request_id"] for item in errors.json()["items"]) == ["limited", "upstream"]
+    success = await client.get("/api/logs", params={"result": "success"}, headers=h)
+    assert [item["request_id"] for item in success.json()["items"]] == ["ok"]
+    assert (await client.post("/api/logs/cleanup", headers=h)).status_code in (404, 405)
+    assert await RequestLog.all().count() == 3
 
 
 async def test_logs_get_by_request_id(client):
@@ -607,7 +613,6 @@ async def test_gateway_settings_round_trip(client):
         "model_fallbacks": {},
         "auto_cache_control": False,
         "budget_downgrade": {"threshold": 0.8, "rules": {}},
-        "time_pricing": [],
     }
     saved = await client.put("/api/settings", json=body, headers=headers)
     assert saved.status_code == 200

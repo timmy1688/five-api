@@ -32,7 +32,11 @@
           <div class="case-head">
             <div>
               <div class="card-title">{{ selectedPerson.api_key_name }}</div>
-              <p v-if="!loadingRequests" class="case-count">{{ t('audit.saved', { count: requests.length }) }}</p>
+              <p v-if="!loadingRequests" class="case-count">
+                {{ savedTotal > requests.length
+                  ? t('audit.savedLatest', { count: savedTotal, shown: requests.length })
+                  : t('audit.saved', { count: requests.length }) }}
+              </p>
               <p v-if="!loadingRequests && requests.length" class="case-count">{{ reportRange }}</p>
               <p v-if="!aiEnabled" class="case-count">{{ t('audit.needSwitch') }}</p>
             </div>
@@ -193,7 +197,10 @@ let clock = 0
 const aiEnabled = ref(false)
 const people = ref<any[]>([])
 const keyQuery = ref('')
+// Only the latest requests are loaded and reviewed, so a busy key cannot flood the page or the auditor.
+const MAX_LOADED = 200
 const requests = ref<any[]>([])
+const savedTotal = ref(0)
 const selectedId = ref<number | null>(null)
 const openRows = ref<Record<string, boolean>>({})
 
@@ -438,20 +445,22 @@ async function selectPerson(id: number) {
   runVerdicts.value = {}
   selectedId.value = id
   requests.value = []
+  savedTotal.value = 0
   loadingRequests.value = true
   try {
     const first = await auditApi.requests(id, 1)
     const items = [...(first.items || [])]
     const total = first.total || items.length
+    savedTotal.value = total
     let page = 2
-    while (items.length < total) {
+    while (items.length < Math.min(total, MAX_LOADED)) {
       const next = await auditApi.requests(id, page)
       const batch = next.items || []
       if (!batch.length) break
       items.push(...batch)
       page += 1
     }
-    requests.value = items
+    requests.value = items.slice(0, MAX_LOADED)
   } catch {
     ElMessage.error(t('audit.loadFailed'))
   } finally {
@@ -470,9 +479,17 @@ function downloadReport() {
   URL.revokeObjectURL(url)
 }
 
+function hasFinalVerdict(value: string) {
+  return value === 'clear' || value === 'skipped' || String(value || '').startsWith('flagged:')
+}
+
 async function reviewKey() {
-  const ids = requests.value.map(row => row.request_id)
-  if (!ids.length) return
+  const ids = requests.value.filter(row => !hasFinalVerdict(row.ai_review)).map(row => row.request_id)
+  if (!ids.length) {
+    ElMessage.info(t('audit.nothingToReview'))
+    await showReport()
+    return
+  }
   const personId = selectedId.value
   reviewing.value = true
   reviewFinished.value = false

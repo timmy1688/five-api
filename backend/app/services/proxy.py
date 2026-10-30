@@ -23,7 +23,10 @@ from app.services import alerts
 from app.services.channel_health import record_failure, record_rate_limit, record_success
 from app.services.channel_stats import begin_attempt, end_attempt, record_latency
 from app.services.concurrency import concurrency_limiter
-from app.services.failover import is_retryable_error, upstream_status
+from app.services.failover import (
+    NoReadyUpstreamKey, is_credential_error, is_retryable_error, never_reached_upstream,
+    should_switch_channel, upstream_status,
+)
 from app.services.audit import AuditBuffer, security_exempt
 from app.services.content_filter import (
     collect_response_hits,
@@ -42,7 +45,7 @@ from app.services.error_detail import (
 )
 from app.services.key_pool import KEY_STATUSES, retry_after_seconds
 from app.services.logging_service import save_request_log
-from app.services.pricing import cost_breakdown, count_text_tokens
+from app.services.pricing import count_text_tokens
 from app.services.quota import RequestLease
 from app.services import settlements
 from app.services.billing_quotes import quote_cost, selling_quote
@@ -160,6 +163,8 @@ class _OutputMeter:
 
 async def _select_key(provider: Any, session_key: str | None) -> None:
     if isinstance(provider, BaseProvider):
+        if not await provider.has_ready_key():
+            raise NoReadyUpstreamKey(provider.channel.id)
         await _quiet(provider.select_key(session_key), "key selection")
 
 
@@ -176,7 +181,7 @@ async def _record_attempt_failure(channel_id: int, exc: Exception) -> int | None
     status_code = upstream_status(exc)
     if status_code == 429:
         await _quiet(record_rate_limit(channel_id, retry_after_seconds(exc)), "rate-limit cooldown")
-    elif is_retryable_error(exc):
+    elif is_retryable_error(exc) or is_credential_error(exc):
         await _quiet(record_failure(channel_id), "failure tracking")
     return status_code
 
@@ -282,7 +287,7 @@ async def _bill_and_log(
         upstream_error=upstream_error, ip_address=ip, failed_over=failed_over,
         audit_request=audit.request_text if audit else "", security_hit=security_hit,
         session_id=session_id, usage_source=usage_source,
-        observed_at=datetime.now(timezone.utc).isoformat(), cost="0", upstream_cost="0", cache_savings="0",
+        observed_at=datetime.now(timezone.utc).isoformat(), cost="0", cache_savings="0",
     )
     payload = redact(payload)
     if uncertain and budget is not None:
@@ -307,16 +312,12 @@ async def _bill_and_log(
         if selected is None:
             if budget is not None:
                 raise ValueError("Missing immutable price snapshot")
-            selling = await selling_quote(model_actual, model_requested)
-            selected = {"selling": selling, "upstream": selling}
+            selected = {"selling": await selling_quote(model_actual, model_requested, channel)}
         customer = quote_cost(selected["selling"], prompt_tokens, completion_tokens, cached_tokens,
                               cache_write_tokens, request_units)
-        upstream = quote_cost(selected["upstream"] or selected["selling"], prompt_tokens, completion_tokens,
-                              cached_tokens, cache_write_tokens, request_units)
         cost = customer["cost"]
-        payload.update(cost=str(cost), upstream_cost=str(upstream["cost"]),
-                       cache_savings=str(customer["cache_savings"]),
-                       cost_detail={**customer["detail"], "upstream": upstream["detail"], "usage_source": usage_source})
+        payload.update(cost=str(cost), cache_savings=str(customer["cache_savings"]),
+                       cost_detail={**customer["detail"], "usage_source": usage_source})
     except Exception as exc:
         cost = None
         price_error = type(exc).__name__
@@ -330,7 +331,7 @@ async def _bill_and_log(
             })
         await settlements.persist_usage(request_id, payload, cost, price_error)
         try:
-            await settlements.apply(request_id)
+            await settlements.apply(request_id, (api_key.tenant_id, api_key.id))
         except Exception as exc:
             await settlements.note_failure(request_id, exc)
         await _quiet(alerts.record_outcome(status_code), "outcome observation")
@@ -380,12 +381,14 @@ async def execute_with_failover(
     session_id: str = "",
     security_hits: list[str] | None = None,
     budget: RequestLease | None = None,
+    idempotent: bool = True,
 ) -> Any:
     """非流式通用编排：故障转移 → 计费 → 日志。
 
     send_fn(provider, channel) -> (response, usage_dict)
       usage_dict = {"prompt_tokens": int, "completion_tokens": int, "cached_tokens": int}
     format_error(status_code, error_type, code, message) -> raises HTTPException
+    idempotent=False resends only when the upstream never started the work.
     """
     try:
         for i, (channel, provider_cls) in enumerate(candidates):
@@ -414,6 +417,7 @@ async def execute_with_failover(
                             is_retryable_error(exc)
                             and status_code != 429
                             and attempt < channel.max_retries
+                            and (idempotent or never_reached_upstream(exc))
                         )
                         if not can_retry_same:
                             raise
@@ -473,12 +477,12 @@ async def execute_with_failover(
             except HTTPException:
                 raise
             except Exception as e:
-                if is_retryable_error(e) and i < len(candidates) - 1:
+                if should_switch_channel(e) and (idempotent or never_reached_upstream(e)) and i < len(candidates) - 1:
                     continue
 
                 model_actual = provider.apply_model_mapping(model_requested)
                 status_code = client_status(e)
-                failure = describe_upstream_failure(e, channel.base_url)
+                failure = describe_upstream_failure(e)
                 await _bill_and_log(
                     model_actual, 0, 0, 0, 0,
                     channel, api_key, request_id, endpoint, model_requested,
@@ -618,7 +622,7 @@ async def stream_with_failover(
                 break
 
             except Exception as e:
-                if not data_yielded and is_retryable_error(e) and i < len(candidates) - 1:
+                if not data_yielded and should_switch_channel(e) and i < len(candidates) - 1:
                     await _quiet(prov.close(), "provider close")
                     last_error = e
                     failed_over = True
@@ -640,7 +644,7 @@ async def stream_with_failover(
         status_code = client_status(e)
         uncertain = not data_yielded and outcome_uncertain(e)
         if channel is not None:
-            failure = describe_upstream_failure(e, channel.base_url)
+            failure = describe_upstream_failure(e)
         else:
             failure = gateway_failure(str(e))
         error_msg = failure["error_message"]

@@ -63,7 +63,6 @@
             </span>
           </template>
         </el-table-column>
-        <el-table-column :label="t('prices.multiplier')" width="100" align="center"><template #default="{ row }"><el-tag type="info">×{{ row.multiplier }}</el-tag></template></el-table-column>
         <el-table-column :label="t('prices.active')" width="76" align="center">
           <template #default="{ row }">
             <el-switch v-model="row.is_active" :disabled="!auth.isPlatformAdmin" @change="toggleActive(row)" />
@@ -97,11 +96,6 @@
         <el-form-item :label="t('common.model')">
           <el-input v-model="form.model" placeholder="gpt-4o" :disabled="!!editingId" />
         </el-form-item>
-        <el-form-item :label="t('prices.multiplier')">
-          <el-input-number v-model="form.multiplier" :min="0" :max="100" :precision="4" :step="0.1" style="width: 100%" />
-          <div class="form-hint">{{ t('prices.multiplierHint') }}</div>
-        </el-form-item>
-        <div class="price-preview">{{ t('prices.preview') }} · {{ t('logs.input') }} ${{ effective(form, 'prompt_price') }} / {{ t('logs.output') }} ${{ effective(form, 'completion_price') }}</div>
         <el-form-item :label="t('prices.input')">
           <el-input-number v-model="form.prompt_price" :min="0" :precision="4" :step="0.1" style="width: 100%" />
           <div class="form-hint">{{ t('prices.inputHint') }}</div>
@@ -155,12 +149,12 @@ const unpricedModels = ref<{ model: string; channels: string[] }[]>([])
 
 const emptyForm = () => ({
   model: '', prompt_price: 0, completion_price: 0, cached_price: 0, cache_write_price: null as number | null,
-  request_price: 0, multiplier: 1,
+  request_price: 0,
 })
 const form = ref(emptyForm())
 
 function effective(row: any, field: string) {
-  return (Number(row[field] || 0) * Number(row.multiplier ?? 1)).toLocaleString(undefined, { maximumFractionDigits: 6 })
+  return Number(row[field] || 0).toLocaleString(undefined, { maximumFractionDigits: 6 })
 }
 
 async function load() {
@@ -204,7 +198,7 @@ function openEdit(row: any) {
     completion_price: row.completion_price,
     cached_price: row.cached_price,
     cache_write_price: row.cache_write_price,
-    request_price: row.request_price ?? 0, multiplier: row.multiplier ?? 1,
+    request_price: row.request_price ?? 0,
   }
   dialogVisible.value = true
 }
@@ -283,7 +277,6 @@ onMounted(() => { load(); loadUnpriced() })
 </script>
 
 <style scoped>
-.price-preview { padding: 12px 16px; background: #f3f8ff; color: #3b6a9e; border-radius: 8px; font-size: 13px; margin-bottom: 20px; }
 .form-hint {
   font-size: 12px;
   color: #94a3b8;

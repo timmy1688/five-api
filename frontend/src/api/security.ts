@@ -17,7 +17,7 @@ export const securityApi = {
     const { data } = await client.put('/security/inference-audit', { enabled })
     return data
   },
-  setAiAudit: async (payload: { enabled: boolean; model: string; fail_closed: boolean }) => {
+  setAiAudit: async (payload: { enabled: boolean; model: string }) => {
     const { data } = await client.put('/security/ai-audit', payload)
     return data
   },

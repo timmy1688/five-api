@@ -7,7 +7,7 @@ import pytest
 
 from app.models import APIKey, Channel, RequestLog, RequestLogAudit
 from app.services.auth import create_access_token, hash_api_key
-from app.services.error_detail import classify_base_url, describe_upstream_failure
+from app.services.error_detail import describe_upstream_failure
 from app.services.settings_service import set_inference_audit_enabled
 from tests.conftest import auth_header, create_admin
 
@@ -22,13 +22,6 @@ MOCK_COMPLETION_RESPONSE = {
 }
 
 
-def test_classify_official_and_reseller_hosts():
-    assert classify_base_url("https://api.openai.com/v1") == "official"
-    assert classify_base_url("https://api.deepseek.com/anthropic") == "official"
-    assert classify_base_url("https://eastus.openai.azure.com") == "official"
-    assert classify_base_url("https://relay.example.com/v1") == "reseller"
-
-
 def test_upstream_http_error_keeps_vendor_body():
     request = httpx.Request("POST", "https://api.openai.com/v1/chat/completions")
     response = httpx.Response(
@@ -37,8 +30,8 @@ def test_upstream_http_error_keeps_vendor_body():
         request=request,
     )
     exc = httpx.HTTPStatusError("401", request=request, response=response)
-    detail = describe_upstream_failure(exc, "https://api.openai.com")
-    assert detail["error_origin"] == "official"
+    detail = describe_upstream_failure(exc)
+    assert detail["error_origin"] == "channel"
     assert detail["upstream_status_code"] == 401
     assert detail["error_message"] == "Incorrect API key provided"
     assert "Incorrect API key provided" in detail["upstream_error"]
@@ -63,7 +56,7 @@ async def _key_and_channel(base_url: str):
     return channel, raw_key
 
 
-async def test_official_upstream_error_is_logged(client):
+async def test_upstream_json_error_is_logged_as_channel(client):
     channel, raw_key = await _key_and_channel("https://api.openai.com")
     request = httpx.Request("POST", "https://api.openai.com/v1/chat/completions")
     response = httpx.Response(
@@ -90,7 +83,7 @@ async def test_official_upstream_error_is_logged(client):
 
     assert resp.status_code == 429
     log = await RequestLog.get(request_id=resp.headers["x-request-id"])
-    assert log.error_origin == "official"
+    assert log.error_origin == "channel"
     assert log.status_code == 429
     assert log.upstream_status_code == 429
     assert log.error_message == "Rate limit reached"
@@ -99,7 +92,7 @@ async def test_official_upstream_error_is_logged(client):
     assert "detail" not in resp.json()
 
 
-async def test_reseller_upstream_error_is_logged(client):
+async def test_upstream_text_error_is_logged_as_channel(client):
     channel, raw_key = await _key_and_channel("https://relay.example.com/v1")
     request = httpx.Request("POST", "https://relay.example.com/v1/chat/completions")
     response = httpx.Response(502, text="bad gateway from relay", request=request)
@@ -122,7 +115,7 @@ async def test_reseller_upstream_error_is_logged(client):
 
     assert resp.status_code == 502
     log = await RequestLog.get(request_id=resp.headers["x-request-id"])
-    assert log.error_origin == "reseller"
+    assert log.error_origin == "channel"
     assert log.upstream_status_code == 502
     assert "bad gateway from relay" in log.upstream_error
     assert resp.json()["error"]["code"] == "upstream_error"

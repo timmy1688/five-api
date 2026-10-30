@@ -1,8 +1,10 @@
 """Rolling USD caps over 5 hours, a day and a week.
 
 Spend lands in hourly Redis buckets, so a window covers the current hour plus
-the previous N-1 full hours. The check uses settled spend: once a cap is
-reached new requests stop, and requests already in flight still finish.
+the previous N-1 full hours. The check adds settled spend to the amount still
+held by in-flight requests, so a burst of concurrent calls cannot all pass a
+nearly spent cap. Once a cap is reached new requests stop, and requests
+already in flight still finish.
 """
 
 import time
@@ -84,14 +86,16 @@ async def window_spend(scope: str, owner_id: int) -> dict[str, float]:
     }
 
 
-async def exceeded_window(scope: str, owner_id: int, limits: dict | None) -> str | None:
-    """The first window whose cap is already used up."""
+async def exceeded_window(scope: str, owner_id: int, limits: dict | None,
+                          in_flight: Decimal = Decimal(0)) -> str | None:
+    """The first window whose cap is already used up by settled plus in-flight spend."""
     limits = normalize_limits(limits)
     if not limits:
         return None
     spent = await window_spend(scope, owner_id)
+    held = float(in_flight)
     for window, cap in limits.items():
-        if spent[window] >= cap:
+        if spent[window] + held >= cap:
             return window
     return None
 

@@ -20,7 +20,6 @@ def _to_response(mp: ModelPrice) -> ModelPriceResponse:
         cached_price=float(mp.cached_price),
         cache_write_price=float(mp.cache_write_price),
         request_price=float(mp.request_price),
-        multiplier=float(mp.multiplier),
         currency=mp.currency,
         is_active=mp.is_active,
         created_at=mp.created_at,
@@ -49,7 +48,7 @@ async def get_defaults(_: User = Depends(require_platform_admin)):
 
 @router.get("/unpriced")
 async def get_unpriced_models(_: User = Depends(require_platform_admin)):
-    channels = await Channel.all().values("id", "name", "models", "model_mapping", "model_pricing")
+    channels = await Channel.all().values("id", "name", "models", "model_mapping", "price_overrides")
     priced_models = set()
     for mp in await ModelPrice.filter(is_active=True).values_list("model", flat=True):
         priced_models.add(mp)
@@ -59,10 +58,10 @@ async def get_unpriced_models(_: User = Depends(require_platform_admin)):
     unpriced: dict[str, list[str]] = {}
     for ch in channels:
         mapping = ch["model_mapping"] or {}
-        ch_pricing = ch["model_pricing"] or {}
+        fixed = set(ch["price_overrides"] or {})
         for model in (ch["models"] or []):
             actual = mapping.get(model, model)
-            if actual not in priced_models and model not in priced_models:
+            if not {actual, model} & (priced_models | fixed):
                 unpriced.setdefault(model, []).append(ch["name"])
 
     return [

@@ -31,7 +31,7 @@ FastAPI、Tortoise ORM、MySQL 8、Redis 7；Vue 3、Element Plus。开发使用
 
 事务锁顺序统一为 Tenant → APIKey → Settlement。Key、租户扣费、请求日志和 usage_daily 必须同时提交。结算失败不能让已完成的上游调用重放；未知结果继续占用供核对。滚动限额的 Redis team 前缀保留用于继承旧数据。
 
-客户售价按 ModelPrice 基础价 × multiplier。渠道 model_pricing、cost_multiplier 和分时规则只影响上游成本。报价缺失不静默记 0，显式零价有效。缓存读、缓存写、输入、输出分别计量；Anthropic input_tokens 不含缓存，要先补齐为 OpenAI prompt_tokens 口径。
+客户价按实际服务渠道计算：渠道 price_overrides 有该模型时用固定价，否则 ModelPrice（或参考目录）× 渠道 price_multiplier；ModelPrice 停用时即使有固定价也拒绝。Key channel_ids 非空时只在其中选路和故障切换，按候选中最贵的报价预占。不记录上游成本。报价缺失不静默记 0，显式零价有效。缓存读、缓存写、输入、输出分别计量；Anthropic input_tokens 不含缓存，要先补齐为 OpenAI prompt_tokens 口径。
 
 流式仅首包前切换；清理须保留 anyio shield，正确处理取消。显式 0 用量与缺失用量分开记录，缺失字段估算并标明 usage_source。
 
@@ -43,4 +43,4 @@ model_checks 为合成检查，model_monitor 为单进程定时循环，ModelPro
 
 ## 变更约定
 
-依赖保持 requirements.in/lock 与 requirements-dev.in/lock 同步并审计。记录用户可见变化、迁移和兼容边界，更新 CHANGELOG 与计划；发布标签需匹配 0.4.0 等实际版本。测试不得清理其他数据库或 Redis 全库，不记录秘密。详情见 CONTRIBUTING.md。
+Python 依赖只有 backend/requirements.txt 一个文件，全部 == 固定版本并审计；Docker 与本地安装均走阿里云源。记录用户可见变化、迁移和兼容边界，更新 CHANGELOG 与计划；发布标签需匹配 0.4.0 等实际版本。测试不得清理其他数据库或 Redis 全库，不记录秘密。详情见 CONTRIBUTING.md。

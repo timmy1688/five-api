@@ -6,7 +6,7 @@ Keep changes focused on the lightweight product scope in [the plan](docs/DEVELOP
 
 Run `./service.sh install` and `./service.sh start`. The frontend is localhost:5001, backend localhost:5002. Existing development databases may contain useful work; smoke scripts remove only resources they create.
 
-Python runtime dependencies are in backend/requirements.in and requirements.lock. Development/test tools use requirements-dev.in and requirements-dev.lock. Install with `pip install --require-hashes -r requirements-dev.lock`. Downloads may use `-i https://mirrors.aliyun.com/pypi/simple` or Tsinghua. Frontend installs use `npm ci --registry=https://registry.npmmirror.com`.
+All Python dependencies, including test libraries, are pinned in backend/requirements.txt. Install with `pip install -i https://mirrors.aliyun.com/pypi/simple -r requirements.txt`. Browser checks additionally need `pip install playwright`. Frontend installs use `npm ci --registry=https://registry.npmmirror.com`.
 
 ## Validation
 
@@ -29,18 +29,11 @@ Tests create/drop tables inside that database. Redis uses DB 15 with a unique na
 
 For browser checks install a matching Chromium with Playwright, or set PLAYWRIGHT_CHROMIUM_EXECUTABLE to an existing executable. Run `../.venv/bin/python -m scripts.smoke_tenants --ui` against the local development services. It exercises platform and tenant flows, self-use keys, health/capability probes and scoped settings saves. No real vendor credentials are needed for those smoke requests.
 
-Frontend: `cd frontend && npm run build`. Audit with `npm audit --omit=dev --registry=https://registry.npmjs.org`; npmmirror does not provide the audit API. Python: `pip-audit --disable-pip --no-deps -r requirements.lock`.
+Frontend: `cd frontend && npm run build`. Audit with `npm audit --omit=dev --registry=https://registry.npmjs.org`; npmmirror does not provide the audit API. Python: `pip install pip-audit && pip-audit --disable-pip --no-deps -r requirements.txt`.
 
 ## Dependencies and migrations
 
-Regenerate both locks with the pinned uv version from the development lock:
-
-```bash
-uv pip compile --generate-hashes --no-header --no-annotate --universal --python-version 3.12 -o requirements.lock requirements.in
-uv pip compile --generate-hashes --no-header --no-annotate --universal --python-version 3.12 -o requirements-dev.lock requirements-dev.in
-```
-
-Set UV_DEFAULT_INDEX to the Aliyun or Tsinghua mirror when needed. Review dependency changes and audit before merging. Runtime and development pins must match; the release check verifies this.
+Edit backend/requirements.txt directly and keep every line pinned with `==`, including transitive packages under "Transitive pins". After an upgrade, reinstall into a clean virtual environment, run the tests and pip-audit, and review the diff. The release check rejects unpinned lines or extra requirements files.
 
 Generate migrations using Aerich after changing ORM models. Keep historical migrations versioned, inspect SQL and test fresh installation plus legacy upgrades against MySQL. Do not replace a data migration with generate_schemas on an existing database.
 
@@ -52,4 +45,4 @@ Preserve tenant scope on every query and separate management credentials from in
 
 A release requires passing CI, a matching version/tag, changelog and upgrade notes. Tag publishing builds amd64/arm64 images only after quality checks. Maintainers create release tags; ordinary pushes do not publish a release.
 
-Describe the concrete behavior, validation and migration impact in PRs. Report security issues through [SECURITY.md](SECURITY.md), with secrets removed.
+Describe the concrete behavior, validation and migration impact in PRs. Do not report security issues publicly; open a non-sensitive issue to request a private channel, with secrets removed.

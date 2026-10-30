@@ -18,6 +18,8 @@ class Settings(BaseSettings):
     MYSQL_USER: str = "five"
     MYSQL_PASSWORD: str = "five_password"
     MYSQL_DATABASE: str = "five_api"
+    # Each inference request runs a few dozen statements; the driver default of 5 connections queues concurrent calls.
+    MYSQL_POOL_SIZE: int = 50
 
     REDIS_URL: str = "redis://127.0.0.1:6379/0"
 
@@ -58,7 +60,7 @@ settings = Settings()
 
 TORTOISE_ORM = {
     "connections": {
-        "default": settings.database_url,
+        "default": f"{settings.database_url}?minsize=5&maxsize={settings.MYSQL_POOL_SIZE}",
     },
     "apps": {
         "models": {

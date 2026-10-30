@@ -16,7 +16,8 @@ from fastapi import FastAPI
 from tortoise import connections
 
 from app.config import settings
-from app.models import APIKey, Channel, RequestLog, Tenant, UsageDaily, User
+from app.models import APIKey, Channel, ModelPrice, RequestLog, Tenant, UsageDaily, User
+from app.services.billing_quotes import quote_cost, selling_quote
 from app.utils.secrets import create_external, decrypt_secret, encrypt_secret, load_secret_key
 from tests.integration.conftest import serve
 
@@ -71,24 +72,58 @@ async def test_fresh_database_runs_every_aerich_migration():
     await migrate()
     db = connections.get("default")
     versions = await db.execute_query_dict("SELECT version FROM aerich ORDER BY id")
-    assert len(versions) == 23 and versions[-1]["version"].startswith("22_")
+    files = sorted(Path(__file__).parents[2].glob("migrations/models/[0-9]*_*.py"),
+                   key=lambda path: int(path.name.split("_")[0]))
+    assert [row["version"] for row in versions] == [path.name for path in files]
+    assert versions[-1]["version"].startswith("24_")
     tenant = await Tenant.create(name="fresh", quota_total=0)
     assert tenant.rpm_limit == 120 and tenant.tpm_limit == 100000 and tenant.concurrent_limit == 10
     await migrate()  # repeated startup is harmless
     assert await Tenant.filter(id=tenant.id).exists()
 
 
-async def test_legacy_upgrade_preserves_bills_and_does_not_promote_custom_roles(tmp_path):
-    await clear_tables()
+async def migrate_until(tmp_path, last: int):
     legacy_dir = tmp_path / "migrations" / "models"
     legacy_dir.mkdir(parents=True)
     for path in (ROOT / "migrations" / "models").glob("*.py"):
-        if int(path.name.split("_", 1)[0]) <= 17:
+        if int(path.name.split("_", 1)[0]) <= last:
             shutil.copyfile(path, legacy_dir / path.name)
     config = tmp_path / "aerich.toml"
     config.write_text('[tool.aerich]\ntortoise_orm="app.config.TORTOISE_ORM"\nlocation=' +
                       json.dumps(str(legacy_dir.parent)) + '\nsrc_folder="."\n')
     await migrate(config)
+
+
+async def test_channel_pricing_upgrade_keeps_every_charge_and_drops_upstream_costs(tmp_path):
+    await clear_tables()
+    await migrate_until(tmp_path, 23)
+    await insert_legacy("model_prices", model="half", prompt_price=Decimal("3"), completion_price=Decimal("15"),
+                        cached_price=Decimal("0.3"), cache_write_price=Decimal("3.75"), request_price=Decimal("0.04"),
+                        multiplier=Decimal("0.5"), currency="USD", is_active=1)
+    await insert_legacy("model_prices", model="odd", prompt_price=Decimal("0.123457"), completion_price=Decimal("1"),
+                        multiplier=Decimal("1.3333"), currency="USD", is_active=1)
+    await insert_legacy("channels", name="discounted", provider="openai", base_url="https://x.example.com",
+                        models='["half"]', model_mapping="{}", model_pricing='{"half": {"prompt": 1, "completion": 2}}',
+                        cost_multiplier=Decimal("0.6"))
+    tenant = await Tenant.create(name="pricing-upgrade", quota_total=-1)
+    await insert_legacy("api_keys", name="k", key_hash="c" * 64, key_prefix="sk-k", tenant_id=tenant.id,
+                        quota_total=-1, allowed_models="[]", allowed_ips="[]", is_enabled=1)
+    await migrate()
+    half = await ModelPrice.get(model="half")
+    assert (half.prompt_price, half.completion_price, half.cached_price, half.cache_write_price, half.request_price) == (
+        Decimal("1.5"), Decimal("7.5"), Decimal("0.15"), Decimal("1.875"), Decimal("0.02"))
+    assert (await ModelPrice.get(model="odd")).prompt_price == Decimal("0.164605")
+    channel = await Channel.get(name="discounted")
+    # Upstream cost settings must never turn into customer prices.
+    assert channel.price_multiplier == 1 and channel.price_overrides == {}
+    assert (await APIKey.get(name="k")).channel_ids == []
+    quote = await selling_quote("half", channel=channel)
+    assert quote_cost(quote, 1_000_000, 1_000_000, 0, 0, 0)["cost"] == Decimal("9")
+
+
+async def test_legacy_upgrade_preserves_bills_and_does_not_promote_custom_roles(tmp_path):
+    await clear_tables()
+    await migrate_until(tmp_path, 17)
     await insert_legacy("roles", id=1, name="Super Admin", permissions="[]", is_builtin=1)
     await insert_legacy("roles", id=2, name="Custom", permissions='["user:write","role:write"]')
     await insert_legacy("admins", id=1, username="legacy-admin", role_id=1, is_active=1)
@@ -114,7 +149,7 @@ async def test_legacy_upgrade_preserves_bills_and_does_not_promote_custom_roles(
     other = await Tenant.get(name="__legacy_unassigned__")
     assert other.quota_used == Decimal("0.125") and (await APIKey.get(id=2)).tenant_id == other.id
     log = await RequestLog.get()
-    assert log.tenant_id == 7 and log.cost == log.upstream_cost == Decimal("0.25") and log.usage_source == "legacy"
+    assert log.tenant_id == 7 and log.cost == Decimal("0.25") and log.usage_source == "legacy"
     assert (await UsageDaily.get()).tenant_id == 7
 
 

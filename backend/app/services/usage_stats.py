@@ -18,12 +18,12 @@ _COLUMNS = (
     "day", "api_key_id", "api_key_name", "tenant_id", "model", "channel_id",
     "channel_name", "request_count", "error_count", "prompt_tokens",
     "completion_tokens", "total_tokens", "cost", "cached_tokens",
-    "cache_write_tokens", "cache_savings", "upstream_cost",
+    "cache_write_tokens", "cache_savings",
 )
 _SUMMED = (
     "request_count", "error_count", "prompt_tokens",
     "completion_tokens", "total_tokens", "cost", "cached_tokens",
-    "cache_write_tokens", "cache_savings", "upstream_cost",
+    "cache_write_tokens", "cache_savings",
 )
 
 
@@ -64,7 +64,6 @@ async def record_daily_usage(
     cache_write_tokens: int = 0,
     cache_savings: Decimal = Decimal(0),
     when: datetime | None = None,
-    upstream_cost: Decimal = Decimal(0),
     realtime: bool = True,
 ) -> None:
     when = when or datetime.now(timezone.utc)
@@ -74,7 +73,7 @@ async def record_daily_usage(
         model[:64], channel_id or 0, channel_name[:128], 1,
         1 if status_code >= 400 else 0,
         prompt_tokens, completion_tokens, prompt_tokens + completion_tokens,
-        str(cost), cached_tokens, cache_write_tokens, str(cache_savings), str(upstream_cost),
+        str(cost), cached_tokens, cache_write_tokens, str(cache_savings),
     ]
     await conn.execute_query(_upsert_sql(conn.capabilities.dialect), params)
     if realtime:

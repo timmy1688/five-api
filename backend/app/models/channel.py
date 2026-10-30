@@ -11,8 +11,9 @@ class Channel(Model):
     api_key = fields.TextField()
     models = fields.JSONField(default=list)
     model_mapping = fields.JSONField(default=dict)
-    model_pricing = fields.JSONField(default=dict)
-    cost_multiplier = fields.DecimalField(max_digits=8, decimal_places=4, default=1)
+    # Customer price = model selling price x price_multiplier, unless price_overrides fixes the model's price.
+    price_multiplier = fields.DecimalField(max_digits=8, decimal_places=4, default=1)
+    price_overrides = fields.JSONField(default=dict)
     priority = fields.IntField(default=0)
     weight = fields.IntField(default=1)
     is_enabled = fields.BooleanField(default=True)

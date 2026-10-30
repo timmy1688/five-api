@@ -7,16 +7,22 @@ from pydantic import BaseModel, Field, field_validator
 from app.utils.upstream_security import validate_upstream_base_url
 
 
-def _validate_model_pricing(value):
+PRICE_OVERRIDE_FIELDS = ("prompt", "completion", "cached", "cache_write", "request")
+
+
+def _validate_price_overrides(value):
+    """Fixed customer prices per model in USD per 1M tokens; request is USD per call."""
     if value is None:
         return value
     for model, prices in value.items():
         if not model or len(model) > 64:
-            raise ValueError("model pricing keys must contain 1-64 characters")
-        for field in ("prompt", "completion", "cached", "cache_write", "request"):
-            if field not in prices:
-                continue
-            price = prices[field]
+            raise ValueError("price override keys must contain 1-64 characters")
+        unknown = set(prices) - set(PRICE_OVERRIDE_FIELDS)
+        if unknown:
+            raise ValueError(f"{model}: unknown price fields {sorted(unknown)}")
+        if "prompt" not in prices or "completion" not in prices:
+            raise ValueError(f"{model}: input and output prices are required")
+        for field, price in prices.items():
             if not isinstance(price, (int, float)) or not math.isfinite(price) or price < 0:
                 raise ValueError(f"{model}.{field} must be a non-negative number")
     return value
@@ -30,18 +36,18 @@ class ChannelCreate(BaseModel):
     api_key: str = ""
     models: list[str] = Field(default_factory=list)
     model_mapping: dict[str, str] = Field(default_factory=dict)
-    model_pricing: dict[str, dict[str, float]] = Field(default_factory=dict)
-    cost_multiplier: float = Field(1, ge=0, le=100, allow_inf_nan=False)
+    price_multiplier: float = Field(1, ge=0, le=100, allow_inf_nan=False)
+    price_overrides: dict[str, dict[str, float]] = Field(default_factory=dict)
     priority: int = Field(0, ge=0)
     weight: int = Field(1, ge=0)
     is_enabled: bool = True
     max_retries: int = Field(1, ge=0, le=5)
     timeout: int = Field(120, ge=1, le=600)
 
-    @field_validator("model_pricing")
+    @field_validator("price_overrides")
     @classmethod
-    def validate_pricing(cls, value):
-        return _validate_model_pricing(value)
+    def validate_overrides(cls, value):
+        return _validate_price_overrides(value)
 
 
 class ChannelUpdate(BaseModel):
@@ -56,18 +62,18 @@ class ChannelUpdate(BaseModel):
     api_key: str | None = None
     models: list[str] | None = None
     model_mapping: dict[str, str] | None = None
-    model_pricing: dict[str, dict[str, float]] | None = None
-    cost_multiplier: float | None = Field(None, ge=0, le=100, allow_inf_nan=False)
+    price_multiplier: float | None = Field(None, ge=0, le=100, allow_inf_nan=False)
+    price_overrides: dict[str, dict[str, float]] | None = None
     priority: int | None = Field(None, ge=0)
     weight: int | None = Field(None, ge=0)
     is_enabled: bool | None = None
     max_retries: int | None = Field(None, ge=0, le=5)
     timeout: int | None = Field(None, ge=1, le=600)
 
-    @field_validator("model_pricing")
+    @field_validator("price_overrides")
     @classmethod
-    def validate_pricing(cls, value):
-        return _validate_model_pricing(value)
+    def validate_overrides(cls, value):
+        return _validate_price_overrides(value)
 
 
 class ChannelResponse(BaseModel):
@@ -79,8 +85,8 @@ class ChannelResponse(BaseModel):
     key_count: int = 0
     models: list[str]
     model_mapping: dict[str, str]
-    model_pricing: dict[str, dict[str, float]]
-    cost_multiplier: float = 1
+    price_multiplier: float = 1
+    price_overrides: dict[str, dict[str, float]]
     priority: int
     weight: int
     is_enabled: bool

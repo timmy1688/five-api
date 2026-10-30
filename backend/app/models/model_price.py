@@ -11,7 +11,6 @@ class ModelPrice(Model):
     cache_write_price = fields.DecimalField(max_digits=16, decimal_places=6, default=0)
     # USD per image, or per speech / transcription call
     request_price = fields.DecimalField(max_digits=16, decimal_places=6, default=0)
-    multiplier = fields.DecimalField(max_digits=8, decimal_places=4, default=1)
     currency = fields.CharField(max_length=8, default="USD")
     is_active = fields.BooleanField(default=True)
     created_at = fields.DatetimeField(auto_now_add=True)

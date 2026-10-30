@@ -131,7 +131,9 @@ async def _count_tokens(request: Request, api_key: APIKey):
         anthropic_error(400, "invalid_request_error", "invalid_request", "model is required")
 
     await check_model_access(api_key, model, anthropic_error)
-    candidates = await resolve_candidates(model, preferred_protocol="anthropic")
+    candidates = await resolve_candidates(
+        model, preferred_protocol="anthropic", channel_ids=api_key.channel_ids or None,
+    )
     extra_headers = {
         k: v for k, v in request.headers.items()
         if k.startswith("anthropic-")

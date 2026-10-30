@@ -7,11 +7,10 @@ import pytest
 
 from app.models import APIKey, Channel, ModelPrice, RequestLog
 from app.services.auth import hash_api_key
-from app.services.pricing import cost_breakdown
+from app.services.billing_quotes import quote_cost, selling_quote
 from app.services.sticky_session import session_identity
 from tests.conftest import auth_header
 
-pytestmark = pytest.mark.asyncio
 
 RAW_KEY = "sk-insight-client"
 
@@ -40,11 +39,14 @@ async def test_cost_breakdown_lines_and_savings():
         model="claude-x", prompt_price=Decimal("3"), completion_price=Decimal("15"),
         cached_price=Decimal("0.3"), cache_write_price=Decimal("3.75"),
     )
-    out = await cost_breakdown("claude-x", 1_000_000, 100_000, cached_tokens=600_000, cache_write_tokens=100_000)
+    out = quote_cost(await selling_quote("claude-x"), 1_000_000, 100_000, 600_000, 100_000, 0)
     detail = out["detail"]
     assert detail["price_source"] == "global"
     assert detail["tokens"]["input"] == 300_000
-    assert detail["lines"] == {"input": 0.9, "cache_read": 0.18, "cache_write": 0.375, "output": 1.5}
+    assert {k: Decimal(v) for k, v in detail["lines"].items()} == {
+        "input": Decimal("0.9"), "cache_read": Decimal("0.18"), "cache_write": Decimal("0.375"),
+        "output": Decimal("1.5"), "request": 0,
+    }
     assert out["cost"] == Decimal("2.955")
     assert out["cache_savings"] == Decimal("1.545")
 

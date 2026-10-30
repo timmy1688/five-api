@@ -22,25 +22,16 @@ def main():
     if args.tag:
         assert args.tag == "v" + version, "Tag must match package versions"
     for name in ("README.md", "docs/README.en.md", "docs/OPERATIONS.md", "docs/COMPATIBILITY.md",
-                 "CONTRIBUTING.md", "SECURITY.md", "deploy/nginx.conf"):
+                 "CONTRIBUTING.md"):
         assert (ROOT / name).is_file(), name
-    versions = []
-    for name in ("requirements.lock", "requirements-dev.lock"):
-        content = (ROOT / "backend" / name).read_text()
-        entries = re.sub(r"\\\n\s*", " ", content).splitlines()
-        pins = {}
-        for entry in entries:
-            if not entry or entry.startswith("#"):
-                continue
-            match = re.match(r"([A-Za-z0-9_.-]+)==([^\s;]+)", entry)
-            assert match and "--hash=sha256:" in entry, f"Unpinned or unhashed dependency: {entry}"
-            pins[match.group(1).lower()] = match.group(2)
-        versions.append(pins)
-    assert all(versions[1].get(name) == value for name, value in versions[0].items()), "Runtime/development lock drift"
-    for name in ("Dockerfile", "backend/Dockerfile"):
-        content = (ROOT / name).read_text()
-        assert "@sha256:" in content and "USER 10001:10001" in content and "--require-hashes" in content
-    print(f"PASS: version {version}, dependency locks, release documents and image policy")
+    requirements = sorted((ROOT / "backend").glob("requirements*"))
+    assert [path.name for path in requirements] == ["requirements.txt"], "Keep a single requirements.txt"
+    for entry in requirements[0].read_text().splitlines():
+        if entry and not entry.startswith("#"):
+            assert re.match(r"[A-Za-z0-9_.\[\]-]+==[^\s;]+", entry), f"Unpinned dependency: {entry}"
+    content = (ROOT / "Dockerfile").read_text()
+    assert content.count("@sha256:") == 2 and "USER 10001:10001" in content and "mirrors.aliyun.com" in content
+    print(f"PASS: version {version}, pinned requirements, release documents and image policy")
 
 
 if __name__ == "__main__":

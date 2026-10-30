@@ -2,7 +2,8 @@ from app.services.management_events import audit_mutation
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 import httpx
 
-from app.models import User, Channel
+from app.models import APIKey, User, Channel
+from app.providers.registry import clear_channel_cache
 from app.schemas.channel import ChannelCreate, ChannelResponse, ChannelUpdate
 from app.services.auth import require_platform_admin
 from app.services.channel_health import force_recover, get_health_status, record_failure, record_success
@@ -26,8 +27,8 @@ def _to_response(ch: Channel) -> ChannelResponse:
         key_count=len(channel_keys(ch.api_key)),
         models=ch.models,
         model_mapping=ch.model_mapping,
-        model_pricing=ch.model_pricing or {},
-        cost_multiplier=float(ch.cost_multiplier),
+        price_multiplier=float(ch.price_multiplier),
+        price_overrides=ch.price_overrides or {},
         priority=ch.priority,
         weight=ch.weight,
         is_enabled=ch.is_enabled,
@@ -55,6 +56,7 @@ async def create_channel(body: ChannelCreate, _: User = Depends(require_platform
     data = body.model_dump()
     data["api_key"] = encrypt_secret("\n".join(split_keys(data["api_key"])))
     ch = await Channel.create(**data)
+    clear_channel_cache()
     return _to_response(ch)
 
 
@@ -105,6 +107,7 @@ async def update_channel(channel_id: int, body: ChannelUpdate, _: User = Depends
         update_data.pop("api_key", None)
     if update_data:
         await Channel.filter(id=channel_id).update(**update_data)
+        clear_channel_cache()
         ch = await Channel.get(id=channel_id)
     return _to_response(ch)
 
@@ -112,7 +115,14 @@ async def update_channel(channel_id: int, body: ChannelUpdate, _: User = Depends
 @router.delete("/{channel_id}")
 @audit_mutation("channel.delete")
 async def delete_channel(channel_id: int, _: User = Depends(require_platform_admin)):
+    bound = [
+        name for name, ids in await APIKey.filter(is_revoked=False).values_list("name", "channel_ids")
+        if channel_id in (ids or [])
+    ]
+    if bound:
+        raise HTTPException(409, f"Channel is selected by {len(bound)} API key(s): {', '.join(bound[:5])}")
     deleted = await Channel.filter(id=channel_id).delete()
+    clear_channel_cache()
     if not deleted:
         raise HTTPException(status_code=404, detail="Channel not found")
     return {"message": "Deleted"}

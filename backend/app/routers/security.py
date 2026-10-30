@@ -78,7 +78,6 @@ class SecretScanSettings(BaseModel):
 class AiAuditSettings(BaseModel):
     enabled: bool
     model: str = Field(default="", max_length=64)
-    fail_closed: bool = False
 
     @field_validator("model")
     @classmethod
@@ -110,7 +109,6 @@ def _ai_view(config: dict) -> AiAuditView:
     return AiAuditView(
         enabled=config["enabled"],
         model=config["model"],
-        fail_closed=config["fail_closed"],
         system_chars=SYSTEM_CHARS,
         user_chars=USER_CHARS,
         min_chars=MIN_CHARS,
@@ -157,11 +155,7 @@ async def update_inference_audit(
 
 @router.put("/ai-audit", response_model=AiAuditView)
 async def update_ai_audit(body: AiAuditSettings, _: User = Depends(require_platform_admin)):
-    config = await set_ai_audit_config(
-        enabled=body.enabled,
-        model=body.model,
-        fail_closed=body.fail_closed,
-    )
+    config = await set_ai_audit_config(enabled=body.enabled, model=body.model)
     return _ai_view(config)
 
 

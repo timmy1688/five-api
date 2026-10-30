@@ -4,7 +4,7 @@ from fastapi import Depends, APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from app.models import APIKey, RequestLog, RequestLogAudit, User
-from app.services.ai_audit import MIN_CHARS, _mark, _verdict, build_excerpt
+from app.services.ai_audit import MIN_CHARS, _mark, _verdict, build_excerpt, is_final
 from app.services.audit import saved_transcript
 from app.services.content_filter import keyword_was_hit
 from app.services.auth import require_platform_admin
@@ -132,6 +132,9 @@ async def review_requests(body: AuditReviewBody, _: User = Depends(require_platf
         if log is None:
             continue
         excerpt = _excerpt(audits.get(log.id, ""))
+        if is_final(log.ai_review):
+            items.append(AuditReviewItem(request_id=request_id, ai_review=log.ai_review, excerpt=excerpt))
+            continue
         if len(excerpt) < MIN_CHARS:
             await _mark(request_id, "skipped")
             items.append(AuditReviewItem(request_id=request_id, ai_review="skipped", excerpt=excerpt))

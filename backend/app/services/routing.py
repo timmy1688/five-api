@@ -37,6 +37,7 @@ async def plan_route(
         sticky_channel_id=await get_sticky_channel(session_key),
         allowed_models=allowed_models,
         serve_as=downgraded_to,
+        channel_ids=api_key.channel_ids or None,
     )
     return RoutePlan(
         candidates=candidates,

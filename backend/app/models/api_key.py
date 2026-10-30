@@ -15,6 +15,8 @@ class APIKey(Model):
     allowed_models = fields.JSONField(default=list)
     allowed_ips = fields.JSONField(default=list)
     model_group_id = fields.IntField(null=True, default=None)
+    # Channels this key may be routed to; empty means every enabled channel.
+    channel_ids = fields.JSONField(default=list)
     tenant = fields.ForeignKeyField("models.Tenant", related_name="keys", on_delete=fields.RESTRICT)
     is_enabled = fields.BooleanField(default=True)
     is_revoked = fields.BooleanField(default=False)

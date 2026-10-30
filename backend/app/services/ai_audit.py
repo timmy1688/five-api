@@ -1,15 +1,15 @@
 """AI 审计由审计页按人选中后才调用，不跟在每次请求后面。
 
 送去模型的内容是：系统提示开头最多 400 字，加上最后一条用户消息末尾最多 1200 字。
-更早的对话、图片和模型回复都不送。审计页会把这个 Key 保存过的请求全部送审。
+更早的对话、图片和模型回复都不送。审计页只加载这个 Key 最近的 200 条保存请求。
 结论只要一行 JSON。思考模式会把输出额度用完，正文变成空，所以先关掉思考。
 上游不接受这个参数时，再用更大的额度重试一次。
 等待时间用渠道自己的超时，不再单独加一个几秒的审查超时。
-相同摘录 10 分钟内不重复调用。结论写回请求日志的 ai_review。
+结论写回请求日志的 ai_review。已有结论（clear、flagged、skipped）的请求不再送审，
+只有未审和上次失败的才调用模型；相同摘录 7 天内复用结论。日志再多，token 也只花在新请求上。
 审计调用不走用户配额，失败时不改渠道健康状态。
 """
 
-import asyncio
 import hashlib
 import json
 import logging
@@ -24,7 +24,7 @@ USER_CHARS = 1200
 MIN_CHARS = 24
 MAX_OUTPUT_TOKENS = 128
 _FALLBACK_OUTPUT_TOKENS = 1024
-CACHE_TTL = 600
+CACHE_TTL = 7 * 86400
 _CACHE_PREFIX = "five:ai-audit:"
 _CATEGORIES = {"credential", "personal", "confidential"}
 
@@ -232,63 +232,18 @@ async def _complete(model: str, excerpt: str) -> str:
         await provider.close()
 
 
-_MAX_PENDING = 8
-_slots = asyncio.Semaphore(2)
-_pending = 0
-_tasks: set[asyncio.Task] = set()
+FINAL_VERDICTS = {"clear", "skipped"}
 
 
-def schedule_ai_review(request_id: str, body: dict | None) -> None:
-    """请求已经记完日志后再排队。队列满了就跳过，不让审查堆在请求后面。"""
-    from app.services.settings_service import peek_ai_audit_config
-
-    cached = peek_ai_audit_config()
-    if cached is not None and (not cached["enabled"] or not cached["model"]):
-        return
-    task = asyncio.create_task(_review(request_id, body))
-    _tasks.add(task)
-    task.add_done_callback(_tasks.discard)
-
-
-async def drain_ai_reviews() -> None:
-    if _tasks:
-        await asyncio.gather(*list(_tasks))
+def is_final(verdict: str) -> bool:
+    """A recorded verdict that another model call would not change."""
+    return verdict in FINAL_VERDICTS or verdict.startswith("flagged:")
 
 
 async def _mark(request_id: str, verdict: str) -> None:
     from app.models import RequestLog
 
     await RequestLog.filter(request_id=request_id).update(ai_review=verdict[:32])
-
-
-async def _review(request_id: str, body: dict | None) -> None:
-    global _pending
-    from app.services.settings_service import ai_audit_config
-
-    try:
-        config = await ai_audit_config()
-        if not config["enabled"] or not config["model"]:
-            return
-        excerpt = build_excerpt(body)
-        if len(excerpt) < MIN_CHARS:
-            return
-        if _pending >= _MAX_PENDING:
-            logger.warning("ai audit skipped because the review queue is full")
-            await _mark(request_id, "skipped")
-            return
-        _pending += 1
-        try:
-            async with _slots:
-                verdict = await _verdict(config["model"], excerpt)
-        finally:
-            _pending -= 1
-        await _mark(request_id, verdict)
-    except Exception:
-        logger.warning("ai audit review failed for %s", request_id)
-        try:
-            await _mark(request_id, "unavailable")
-        except Exception:
-            logger.warning("ai audit could not record a verdict for %s", request_id)
 
 
 async def _verdict(model: str, excerpt: str) -> str:

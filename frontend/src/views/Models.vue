@@ -26,6 +26,12 @@
           <div><span>{{ t('logs.cache') }}</span><strong>${{ price(model, 'cached') }}</strong></div>
         </div>
         <el-alert v-else :title="t('models.priceMissing')" type="warning" :closable="false" show-icon class="missing-price" />
+        <ul v-if="model.pricing_varies" class="channel-prices">
+          <li v-for="channel in model.channels" :key="channel.id">
+            <span class="channel-name">{{ channel.name }}<template v-if="channel.pricing_source === 'channel'"> · {{ t('models.fixedPrice') }}</template><template v-else-if="channel.price_multiplier !== 1"> · ×{{ channel.price_multiplier }}</template></span>
+            <span>{{ channel.pricing ? `$${format(channel.pricing.prompt)} / $${format(channel.pricing.completion)}` : '—' }}</span>
+          </li>
+        </ul>
         <div class="model-meta"><span v-if="requestPrice(model)">{{ t('prices.request') }} ${{ price(model, 'request') }}</span><span v-else>{{ t('models.effectivePrices') }}</span><el-tag v-if="model.pricing_varies" type="info" size="small">{{ t('models.varies') }}</el-tag></div>
         <div class="model-check-status"><span>{{ t('probe.healthCheck') }} · {{ checked(model, 'health') }}</span><span v-if="model.channels.some((c: any) => c.capability_supported)">{{ t('probe.capabilityCheck') }} · {{ checked(model, 'capability') }}</span></div>
         <div class="model-actions"><el-button text type="primary" @click="open(model)">{{ t('probe.healthCheck') }}</el-button><el-button v-if="model.channels.some((c: any) => c.capability_supported)" @click="open(model)">{{ t('probe.capabilityCheck') }}</el-button><el-button v-else @click="open(model)">{{ t('models.details') }}</el-button></div>
@@ -50,11 +56,11 @@ const search = ref(''), health = ref(''), viewMode = ref('all'), settingsOpen = 
 const states = ['healthy', 'unavailable', 'unknown'] as const
 const healthLabel = (state: typeof states[number]) => t(`probe.${state}`)
 const filtered = computed(() => items.value.filter(model => model.model.toLowerCase().includes(search.value.toLowerCase()) && (!health.value || model.health === health.value) && (viewMode.value !== 'capability' || model.channels.some((c: any) => c.capability_supported))))
+function format(value: number) { return Number(value).toLocaleString(undefined, { maximumFractionDigits: 6 }) }
 function price(model: any, name: string) {
   const values: number[] = model.channels.filter((c: any) => c.pricing).map((c: any) => Number(c.pricing[name] || 0))
   if (!values.length) return '—'
   const low = Math.min(...values), high = Math.max(...values)
-  const format = (value: number) => value.toLocaleString(undefined, { maximumFractionDigits: 6 })
   return low === high ? format(low) : format(low) + '–' + format(high)
 }
 function checked(model: any, kind: string) {
@@ -98,5 +104,8 @@ h4 { margin: 0 0 6px; font-size: 14px; overflow: hidden; text-overflow: ellipsis
 .model-meta { display: flex; align-items: center; justify-content: space-between; min-height: 24px; }
 .model-actions { display: flex; justify-content: space-between; align-items: center; border-top: 1px solid #edf0f3; padding-top: 14px; margin-top: 18px; }
 .missing-price { margin: 20px 0 14px; }
+.channel-prices { list-style: none; margin: 0 0 12px; padding: 8px 10px; background: #f7f8fa; border-radius: 6px; font-size: 12px; }
+.channel-prices li { display: flex; justify-content: space-between; gap: 8px; padding: 2px 0; color: #4e5969; }
+.channel-prices .channel-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #86909c; }
 @media (max-width: 600px) { .hub-summary { gap: 20px; padding: 16px; flex-wrap: wrap; } .hub-summary div { gap: 6px; } .hub-summary strong { font-size: 22px; } .model-search { width: 100%; } .price-unit { margin-left: 0; } .model-grid { grid-template-columns: minmax(0, 1fr); } }
 </style>

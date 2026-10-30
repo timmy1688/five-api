@@ -10,17 +10,6 @@ export interface GatewaySettings {
   model_fallbacks?: Record<string, string[]>
   auto_cache_control?: boolean
   budget_downgrade?: { threshold: number; rules: Record<string, string> }
-  time_pricing?: TimePriceRule[]
-}
-
-export interface TimePriceRule {
-  name: string
-  models: string[]
-  channel_ids: number[]
-  start: string
-  end: string
-  utc_offset: number
-  multiplier: number
 }
 
 export const settingsApi = {

@@ -24,11 +24,12 @@ async def test_channel_create():
         api_key="sk-test",
         models=["gpt-4o"],
         model_mapping={"gpt-4": "gpt-4o"},
-        model_pricing={"gpt-4o": {"prompt": 2.5, "completion": 10.0}},
+        price_overrides={"gpt-4o": {"prompt": 2.5, "completion": 10.0}},
     )
     assert ch.id is not None
     assert ch.models == ["gpt-4o"]
-    assert ch.model_pricing["gpt-4o"]["prompt"] == 2.5
+    assert ch.price_overrides["gpt-4o"]["prompt"] == 2.5
+    assert ch.price_multiplier == 1
 
 
 async def test_api_key_create():

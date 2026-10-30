@@ -3,7 +3,6 @@ from decimal import Decimal
 from unittest.mock import AsyncMock, patch
 
 import httpx
-import pytest
 
 from app.models import APIKey, Channel
 from app.services.auth import hash_api_key
@@ -12,7 +11,6 @@ from app.services.key_pool import available_keys, retry_after_seconds
 from app.utils.secrets import encrypt_secret, mask_secret, split_keys
 from tests.conftest import auth_header
 
-pytestmark = pytest.mark.asyncio
 
 RAW_KEY = "sk-pool-client-key"
 

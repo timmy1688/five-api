@@ -1,6 +1,8 @@
 import random
+import time
 
 from fastapi import HTTPException
+from tortoise.signals import post_delete, post_save
 
 from app.models import Channel
 from app.providers.base import BaseProvider
@@ -36,6 +38,37 @@ def _weighted_shuffle(channels: list[Channel]) -> list[Channel]:
     return result
 
 
+_CHANNEL_TTL = 2.0
+_channel_cache: tuple[float, list[Channel]] | None = None
+
+
+async def enabled_channels() -> list[Channel]:
+    """Enabled channels, reloaded at most every two seconds instead of on every request.
+
+    Admin writes clear the cache at once; the TTL only bounds edits made outside this process.
+    """
+    global _channel_cache
+    now = time.monotonic()
+    if _channel_cache is None or now - _channel_cache[0] >= _CHANNEL_TTL:
+        _channel_cache = (now, await Channel.filter(is_enabled=True))
+    return _channel_cache[1]
+
+
+def clear_channel_cache() -> None:
+    global _channel_cache
+    _channel_cache = None
+
+
+@post_save(Channel)
+async def _channel_saved(*_args) -> None:
+    clear_channel_cache()
+
+
+@post_delete(Channel)
+async def _channel_deleted(*_args) -> None:
+    clear_channel_cache()
+
+
 OPENAI_PROTOCOL_PROVIDERS = {"openai"}
 ANTHROPIC_PROTOCOL_PROVIDERS = {"anthropic"}
 
@@ -58,8 +91,11 @@ async def resolve_candidates(
     model: str,
     preferred_protocol: str | None = None,
     sticky_channel_id: int | None = None,
+    channel_ids: list[int] | None = None,
 ) -> list[tuple[Channel, type[BaseProvider]]]:
     """返回支持该模型、且协议匹配的候选渠道。
+
+    channel_ids 非空时只在这些渠道里选，包括故障转移，不会落到 Key 未选择的渠道。
 
     只在同一种线协议内做故障转移。跨协议转换会丢掉 thinking、tool_use 和 Beta
     字段，不作为备选。各组内按 priority 降序 + weight 加权随机。
@@ -76,7 +112,9 @@ async def resolve_candidates(
     else:
         preferred_providers = None
 
-    channels = await Channel.filter(is_enabled=True)
+    channels = await enabled_channels()
+    if channel_ids:
+        channels = [ch for ch in channels if ch.id in channel_ids]
     candidates = [ch for ch in channels if model in (ch.models or [])]
     if preferred_providers is not None:
         candidates = [ch for ch in candidates if ch.provider in preferred_providers]
@@ -96,7 +134,10 @@ async def resolve_candidates(
             status_code=404,
             detail={
                 "error": {
-                    "message": f"No channel available for model: {model}",
+                    "message": (
+                        f"No channel selected for this API key serves model: {model}" if channel_ids
+                        else f"No channel available for model: {model}"
+                    ),
                     "type": "invalid_request_error",
                     "code": "model_not_found",
                 }
@@ -158,6 +199,7 @@ async def resolve_with_fallbacks(
     sticky_channel_id: int | None = None,
     allowed_models: list[str] | None = None,
     serve_as: str | None = None,
+    channel_ids: list[int] | None = None,
 ) -> list[tuple[Channel, type[BaseProvider]]]:
     """Primary candidates first, then each configured fallback model in order.
 
@@ -177,7 +219,7 @@ async def resolve_with_fallbacks(
     for index, target in enumerate([primary, *chain]):
         try:
             found = await resolve_candidates(
-                target, preferred_protocol, sticky_channel_id if index == 0 else None
+                target, preferred_protocol, sticky_channel_id if index == 0 else None, channel_ids
             )
         except HTTPException as exc:
             first_error = first_error or exc
@@ -198,8 +240,10 @@ async def resolve_channel(model: str) -> tuple[Channel, BaseProvider]:
     return channel, provider_cls(channel)
 
 
-async def list_available_models() -> list[dict]:
-    channels = await Channel.filter(is_enabled=True)
+async def list_available_models(channel_ids: list[int] | None = None) -> list[dict]:
+    channels = await enabled_channels()
+    if channel_ids:
+        channels = [ch for ch in channels if ch.id in channel_ids]
     seen = set()
     models = []
     for ch in channels:

@@ -1,6 +1,7 @@
 from fastapi import HTTPException
 
-from app.models import APIKey, ModelGroup, Tenant
+from app.models import APIKey, ModelGroup
+from app.services.auth import key_tenant
 from app.services.quota import check_quota
 from app.services.rate_limit import RPMExceeded, rate_limiter
 
@@ -28,7 +29,7 @@ async def get_effective_allowed_models(api_key: APIKey) -> list[str] | None:
             effective = [m for m in effective if m in group.models] if effective is not None else (group.models or [])
         else:
             effective = []
-    tenant = await Tenant.get_or_none(id=api_key.tenant_id, is_enabled=True)
+    tenant = await key_tenant(api_key)
     if tenant is None:
         return []
     if tenant.allowed_models:

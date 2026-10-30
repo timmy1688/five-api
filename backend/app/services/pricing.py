@@ -1,37 +1,12 @@
 import re
-from datetime import datetime, timezone
 from decimal import Decimal
 
-from app.models import Channel, ModelPrice
-from app.services import time_pricing
-from app.services.settings_service import gateway_config
-
-MILLION = Decimal("1000000")
 USD_STEP = Decimal("0.000001")
 # Upstreams bill an inline image, audio clip or file per item, so a base64
 # payload counts as one large image instead of one token per four characters.
 BLOB_TOKENS = 1600
 _BLOB_MIN_CHARS = 1024
 _BASE64 = re.compile(r"[A-Za-z0-9+/=_-]+")
-
-
-def find_channel_pricing(
-    model: str,
-    model_pricing: dict | None,
-    model_mapping: dict | None,
-) -> dict | None:
-    """Find an explicit channel price by actual model name or its public alias."""
-    pricing_map = model_pricing or {}
-    if model in pricing_map:
-        return pricing_map[model]
-    alias = next(
-        (
-            source for source, target in (model_mapping or {}).items()
-            if target == model and source in pricing_map
-        ),
-        None,
-    )
-    return pricing_map.get(alias) if alias else None
 
 
 def catalog_prices(model: str) -> dict[str, float]:
@@ -56,96 +31,6 @@ def catalog_prices(model: str) -> dict[str, float]:
         "cache_write": write,
         "request": float(raw.get("request", 0)),
     }
-
-
-def _write_price(pricing: dict, prompt_price: Decimal) -> Decimal:
-    """Missing write price means the vendor bills writes as input. Explicit 0 is free."""
-    if "cache_write" in pricing:
-        return Decimal(str(pricing.get("cache_write", 0)))
-    return prompt_price
-
-
-async def resolve_prices(
-    model: str,
-    channel: Channel | None = None,
-) -> tuple[Decimal, Decimal, Decimal, Decimal]:
-    """Return prompt, completion, cache-read, and cache-write prices per 1M tokens."""
-    prices, _ = await _resolve_prices_with_source(model, channel)
-    return prices
-
-
-async def _resolve_prices_with_source(
-    model: str,
-    channel: Channel | None = None,
-) -> tuple[tuple[Decimal, Decimal, Decimal, Decimal], str]:
-    prompt_price = Decimal(0)
-    completion_price = Decimal(0)
-    cached_price = Decimal(0)
-    write_price = Decimal(0)
-
-    if channel:
-        pricing = find_channel_pricing(
-            model, channel.model_pricing, channel.model_mapping
-        )
-        if pricing is not None:
-            prompt_price = Decimal(str(pricing.get("prompt", 0)))
-            completion_price = Decimal(str(pricing.get("completion", 0)))
-            cached_price = Decimal(str(pricing.get("cached", 0)))
-            return (
-                prompt_price,
-                completion_price,
-                cached_price,
-                _write_price(pricing, prompt_price),
-            ), "channel"
-
-    mp = await ModelPrice.get_or_none(model=model, is_active=True)
-    if mp is None:
-        return (prompt_price, completion_price, cached_price, write_price), "none"
-    prompt_price = Decimal(str(mp.prompt_price))
-    completion_price = Decimal(str(mp.completion_price))
-    cached_price = Decimal(str(mp.cached_price))
-    write_price = Decimal(str(mp.cache_write_price))
-    return (prompt_price, completion_price, cached_price, write_price), "global"
-
-
-async def resolve_request_price(model: str, channel: Channel | None = None) -> Decimal:
-    """USD per billed unit (one image, one speech or transcription call).
-
-    A channel row with a request price wins. Rows saved before this field
-    existed fall back to the global price.
-    """
-    if channel:
-        pricing = find_channel_pricing(model, channel.model_pricing, channel.model_mapping)
-        if pricing is not None and "request" in pricing:
-            return Decimal(str(pricing.get("request", 0)))
-    mp = await ModelPrice.get_or_none(model=model, is_active=True)
-    return Decimal(str(mp.request_price)) if mp else Decimal(0)
-
-
-async def upper_request_price(model: str) -> Decimal:
-    price = await resolve_request_price(model)
-    for channel in await Channel.filter(is_enabled=True):
-        pricing = find_channel_pricing(model, channel.model_pricing, channel.model_mapping)
-        if pricing is not None and "request" in pricing:
-            price = max(price, Decimal(str(pricing.get("request", 0))))
-    return price
-
-
-async def upper_rates(model: str) -> tuple[Decimal, Decimal]:
-    """Highest input and output prices configured for a model, for a quota hold."""
-    prompt_price, completion_price, _, _ = await resolve_prices(model)
-    channels = await Channel.filter(is_enabled=True)
-    for channel in channels:
-        pricing = find_channel_pricing(
-            model, channel.model_pricing, channel.model_mapping
-        )
-        if pricing is None:
-            continue
-        prompt_price = max(prompt_price, Decimal(str(pricing.get("prompt", 0))))
-        completion_price = max(
-            completion_price, Decimal(str(pricing.get("completion", 0)))
-        )
-    return prompt_price, completion_price
 
 
 def estimate_request_tokens(
@@ -236,125 +121,10 @@ def _is_blob(text: str) -> bool:
     return head.startswith("data:") or _BASE64.fullmatch(head) is not None
 
 
-async def estimate_upper_cost(
-    model: str,
-    body: dict | None,
-    default_output: int | None = None,
-    request_units: int = 0,
-) -> Decimal:
-    """Cost hold before the upstream responds. Cache discounts are not assumed."""
-    input_tokens, output_tokens = estimate_request_tokens(body, default_output)
-    prompt_price, completion_price = await upper_rates(model)
-    cost = (
-        Decimal(input_tokens) * prompt_price
-        + Decimal(output_tokens) * completion_price
-    ) / MILLION
-    if request_units:
-        cost += Decimal(request_units) * await upper_request_price(model)
-    rules = (await gateway_config())["time_pricing"]
-    if rules:
-        cost *= Decimal(str(time_pricing.peak_multiplier(rules, model, datetime.now(timezone.utc))))
-    return cost
-
-
-async def calculate_cost(
-    model: str,
-    prompt_tokens: int,
-    completion_tokens: int,
-    channel: Channel | None = None,
-    cached_tokens: int = 0,
-    cache_write_tokens: int = 0,
-    request_units: int = 0,
-) -> Decimal:
-    """Bill fresh input, cache reads, cache writes, output, and per-unit calls.
-
-    prompt_tokens already includes cache reads and cache writes. Each bucket
-    is priced on its own. A missing write price uses the input price.
-    request_units counts images or audio calls billed per unit.
-    """
-    detail = await cost_breakdown(
-        model, prompt_tokens, completion_tokens, channel,
-        cached_tokens=cached_tokens, cache_write_tokens=cache_write_tokens,
-        request_units=request_units,
-    )
-    return detail["cost"]
-
-
-async def cost_breakdown(
-    model: str,
-    prompt_tokens: int,
-    completion_tokens: int,
-    channel: Channel | None = None,
-    cached_tokens: int = 0,
-    cache_write_tokens: int = 0,
-    request_units: int = 0,
-    at: datetime | None = None,
-) -> dict:
-    """Cost plus every number that produced it, kept on the log for later review.
-
-    cache_savings compares with billing every cached token as fresh input, minus
-    the extra paid for cache writes. It can be negative when writes dominate.
-    """
-    (prompt_price, completion_price, cached_price, write_price), source = (
-        await _resolve_prices_with_source(model, channel)
-    )
-    fresh_input = max(prompt_tokens - cached_tokens - cache_write_tokens, 0)
-    lines = {
-        "input": Decimal(fresh_input) * prompt_price / MILLION,
-        "cache_read": Decimal(cached_tokens) * cached_price / MILLION,
-        "cache_write": Decimal(cache_write_tokens) * write_price / MILLION,
-        "output": Decimal(completion_tokens) * completion_price / MILLION,
-    }
-    request_price = Decimal(0)
-    if request_units:
-        request_price = await resolve_request_price(model, channel)
-        lines["request"] = Decimal(request_units) * request_price
-    savings = (
-        Decimal(cached_tokens) * (prompt_price - cached_price)
-        - Decimal(cache_write_tokens) * (write_price - prompt_price)
-    ) / MILLION
-    rule = time_pricing.match_rule(
-        (await gateway_config())["time_pricing"], model,
-        channel.id if channel else None, at or datetime.now(timezone.utc),
-    )
-    if rule is not None:
-        factor = Decimal(str(rule["multiplier"]))
-        lines = {name: value * factor for name, value in lines.items()}
-        savings *= factor
-    cost = sum(lines.values(), Decimal(0)).quantize(USD_STEP)
-    return {
-        "cost": cost,
-        "cache_savings": savings.quantize(USD_STEP),
-        "detail": {
-            "model": model,
-            "price_source": source,
-            "prices": {
-                "input": float(prompt_price),
-                "output": float(completion_price),
-                "cache_read": float(cached_price),
-                "cache_write": float(write_price),
-                "request": float(request_price),
-            },
-            "tokens": {
-                "input": fresh_input,
-                "cache_read": cached_tokens,
-                "cache_write": cache_write_tokens,
-                "output": completion_tokens,
-                "request_units": request_units,
-            },
-            "lines": {name: float(value.quantize(USD_STEP)) for name, value in lines.items()},
-            "time_rule": (
-                {"name": rule["name"], "multiplier": rule["multiplier"]} if rule is not None else None
-            ),
-        },
-    }
-
-
 MODEL_PRICE_CATALOG_VERSION = "2026-10-18.2"
 
 # Standard USD prices per 1M tokens. For providers with regional or context-tiered
-# pricing, this catalog uses the standard short-context price; channel pricing can
-# override it when a deployment uses different rates.
+# pricing, this catalog uses the standard short-context price.
 DEFAULT_MODEL_PRICES: dict[str, dict[str, float]] = {
     # ── OpenAI GPT-5.x ──
     "gpt-5.6": {"prompt": 5.0, "completion": 30.0, "cached": 0.5},

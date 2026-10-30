@@ -47,7 +47,7 @@ def test_parse_verdict_ignores_unknown_category_text():
 
 async def test_ai_review_is_manual_and_keeps_only_the_latest_turn(client):
     await set_inference_audit_enabled(True)
-    await set_ai_audit_config(enabled=True, model="deepseek-v4-flash", fail_closed=False)
+    await set_ai_audit_config(enabled=True, model="deepseek-v4-flash")
     calls: list[tuple[str, str]] = []
 
     async def fake_complete(model, excerpt):
@@ -83,7 +83,11 @@ async def test_ai_review_is_manual_and_keeps_only_the_latest_turn(client):
             json={"request_ids": [resp.headers["x-request-id"], again.headers["x-request-id"]]},
             headers=headers,
         )
+        repeated = await client.post(
+            "/api/audit/review", json={"request_ids": [resp.headers["x-request-id"]]}, headers=headers,
+        )
 
+    assert repeated.json()["items"][0]["ai_review"] == "flagged:credential"
     assert resp.status_code == 200
     assert again.status_code == 200
     request_id = resp.headers["x-request-id"]
@@ -103,7 +107,7 @@ async def test_ai_review_is_manual_and_keeps_only_the_latest_turn(client):
 
 async def test_ai_review_failure_does_not_change_the_request(client):
     await set_inference_audit_enabled(True)
-    await set_ai_audit_config(enabled=True, model="deepseek-v4-flash", fail_closed=True)
+    await set_ai_audit_config(enabled=True, model="deepseek-v4-flash")
     channel, raw_key = await _ready_key()
     provider = AsyncMock()
     provider.send_request = AsyncMock(return_value=MOCK_COMPLETION_RESPONSE)
@@ -135,10 +139,19 @@ async def test_ai_review_failure_does_not_change_the_request(client):
     assert reviewed.json()["items"][0]["ai_review"] == "unavailable"
     provider.send_request.assert_called_once()
 
+    async def recovered(*_args):
+        return '{"block": false}'
+
+    with patch("app.services.ai_audit._complete", recovered):
+        retried = await client.post(
+            "/api/audit/review", json={"request_ids": [allowed.headers["x-request-id"]]}, headers=headers,
+        )
+    assert retried.json()["items"][0]["ai_review"] == "clear"
+
 
 async def test_ai_review_skips_short_text_and_rejects_a_large_batch(client):
     await set_inference_audit_enabled(True)
-    await set_ai_audit_config(enabled=True, model="deepseek-v4-flash", fail_closed=False)
+    await set_ai_audit_config(enabled=True, model="deepseek-v4-flash")
     channel, raw_key = await _ready_key()
     provider = AsyncMock()
     provider.send_request = AsyncMock(return_value=MOCK_COMPLETION_RESPONSE)
@@ -174,7 +187,7 @@ async def test_ai_review_skips_short_text_and_rejects_a_large_batch(client):
         headers=headers,
     )
     assert too_many.status_code == 422
-    off = await set_ai_audit_config(enabled=False, model="deepseek-v4-flash", fail_closed=False)
+    off = await set_ai_audit_config(enabled=False, model="deepseek-v4-flash")
     assert off["enabled"] is False
     denied = await client.post(
         "/api/audit/review",

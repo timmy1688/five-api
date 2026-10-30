@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from uuid import uuid4
 
+from tortoise.exceptions import IntegrityError
 from tortoise.expressions import F
 from tortoise.functions import Sum
 from tortoise.transactions import in_transaction
@@ -17,6 +18,8 @@ logger = logging.getLogger(__name__)
 OWNER_ID = str(uuid4())
 OCCUPIED_STATES = ("reserved", "pending", "failed", "uncertain")
 MAX_ATTEMPTS = 8
+# Fields that older releases wrote into pending payloads and request logs no longer have.
+LEGACY_PAYLOAD_FIELDS = frozenset({"upstream_cost"})
 _unsaved: dict[str, tuple[dict, Decimal | None, str]] = {}
 
 
@@ -35,22 +38,24 @@ async def occupied(scope: str, owner_id: int) -> Decimal:
 
 async def reserve(request_id: str, api_key: APIKey, amount: Decimal, quotes: dict) -> None:
     # Every path locks tenant -> key -> settlement. Multiple keys share the same tenant lock.
-    async with in_transaction():
-        tenant = await Tenant.filter(id=api_key.tenant_id).select_for_update().first()
-        key = await APIKey.filter(id=api_key.id).select_for_update().first()
-        if not tenant or not tenant.is_enabled:
-            raise BudgetDenied("tenant_disabled")
-        if not key or key.is_revoked or not key.is_enabled:
-            raise BudgetDenied("key_disabled")
-        if await Settlement.exists(request_id=request_id):
-            raise BudgetDenied("duplicate_request")
-        for scope, owner in (("tenant", tenant), ("key", key)):
-            if owner.quota_total != -1:
-                held = await occupied(scope, owner.id)
-                if owner.quota_used + held + amount > owner.quota_total or owner.quota_used + held >= owner.quota_total:
-                    raise BudgetDenied(scope)
-        await Settlement.create(request_id=request_id, tenant_id=tenant.id, api_key_id=key.id,
-                                occupied=amount, quotes=quotes, owner_id=OWNER_ID)
+    try:
+        async with in_transaction():
+            tenant = await Tenant.filter(id=api_key.tenant_id).select_for_update().first()
+            key = await APIKey.filter(id=api_key.id).select_for_update().first()
+            if not tenant or not tenant.is_enabled:
+                raise BudgetDenied("tenant_disabled")
+            if not key or key.is_revoked or not key.is_enabled:
+                raise BudgetDenied("key_disabled")
+            for scope, owner in (("tenant", tenant), ("key", key)):
+                if owner.quota_total != -1:
+                    held = await occupied(scope, owner.id)
+                    if owner.quota_used + held + amount > owner.quota_total or owner.quota_used + held >= owner.quota_total:
+                        raise BudgetDenied(scope)
+            # The unique request_id index rejects a replayed reservation without an extra lookup.
+            await Settlement.create(request_id=request_id, tenant_id=tenant.id, api_key_id=key.id,
+                                    occupied=amount, quotes=quotes, owner_id=OWNER_ID)
+    except IntegrityError:
+        raise BudgetDenied("duplicate_request") from None
 
 
 async def mark_pending(request_id: str, payload: dict, cost: Decimal | None, error: str = "") -> None:
@@ -89,13 +94,19 @@ async def abandon(request_id: str) -> None:
     )
 
 
-async def apply(request_id: str) -> bool:
-    record = await Settlement.get(request_id=request_id)
+async def apply(request_id: str, owners: tuple[int, int] | None = None) -> bool:
+    """owners is (tenant_id, api_key_id) when the caller already knows them, saving one read."""
+    if owners is None:
+        record = await Settlement.get(request_id=request_id)
+        owners = (record.tenant_id, record.api_key_id)
+    tenant_id, api_key_id = owners
     log = None
     async with in_transaction():
-        tenant = await Tenant.filter(id=record.tenant_id).select_for_update().first()
-        key = await APIKey.filter(id=record.api_key_id).select_for_update().first()
-        record = await Settlement.filter(id=record.id).select_for_update().get()
+        tenant = await Tenant.filter(id=tenant_id).select_for_update().first()
+        key = await APIKey.filter(id=api_key_id).select_for_update().first()
+        record = await Settlement.filter(request_id=request_id).select_for_update().get()
+        if (record.tenant_id, record.api_key_id) != owners:
+            raise RuntimeError("Settlement owner mismatch")
         if record.state == "settled":
             return False
         if record.state != "pending" or not record.payload or record.cost is None:
@@ -105,7 +116,8 @@ async def apply(request_id: str) -> bool:
         cost = record.cost
         await APIKey.filter(id=key.id).update(quota_used=F("quota_used") + cost)
         await Tenant.filter(id=tenant.id).update(quota_used=F("quota_used") + cost)
-        log = await save_request_log(**record.payload, observe=False)
+        payload = {key: value for key, value in record.payload.items() if key not in LEGACY_PAYLOAD_FIELDS}
+        log = await save_request_log(**payload, observe=False)
         await Settlement.filter(id=record.id).update(state="settled", occupied=0, last_error="",
                                                    next_retry_at=None)
     if log:

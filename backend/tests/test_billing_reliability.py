@@ -30,7 +30,6 @@ async def env(quota="100", **limits):
     channel = await Channel.create(
         name="billing-channel", provider="openai", base_url="https://billing.upstream.test",
         api_key="upstream-secret-do-not-expose", models=[MODEL], timeout=5,
-        model_pricing={MODEL: {"prompt": 10, "completion": 20}},
     )
     await ModelPrice.create(model=MODEL, prompt_price=2, completion_price=3)
     return tenant, keys, channel
@@ -50,11 +49,12 @@ def upstream(callback=None):
     return client
 
 
-async def test_selling_price_is_separate_from_upstream_cost_and_snapshotted(client):
-    tenant, keys, _ = await env()
+async def test_selling_price_is_snapshotted_before_the_upstream_call(client):
+    tenant, keys, channel = await env()
 
     async def send(*_args, **_kwargs):
         await ModelPrice.filter(model=MODEL).update(prompt_price=999, completion_price=999)
+        await Channel.filter(id=channel.id).update(price_multiplier=9, price_overrides={MODEL: {"prompt": 1, "completion": 1}})
         return response()
 
     with patch("app.providers.base._shared_http_client", return_value=upstream(send)):
@@ -62,9 +62,9 @@ async def test_selling_price_is_separate_from_upstream_cost_and_snapshotted(clie
     assert result.status_code == 200
     log = await RequestLog.get()
     assert log.cost == Decimal("0.000350")
-    assert log.upstream_cost == Decimal("0.002000")
     assert log.cost_detail["prices"]["input"] == "2"
-    assert log.cost_detail["upstream"]["price_source"] == "channel"
+    assert log.cost_detail["price_source"] == "global" and Decimal(log.cost_detail["multiplier"]) == 1
+    assert "upstream" not in log.cost_detail
     assert (await Tenant.get(id=tenant.id)).quota_used == log.cost
 
 

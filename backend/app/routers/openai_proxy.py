@@ -1,18 +1,20 @@
 import json
 import time
+from decimal import Decimal
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
 
-from app.models import APIKey, Channel, ModelPrice
-from app.providers.registry import PROVIDER_MAP, list_available_models
+from app.models import APIKey, Channel
+from app.providers.registry import PROVIDER_MAP, enabled_channels, list_available_models
 from app.schemas.openai import ChatCompletionRequest, CompletionRequest, EmbeddingRequest
 from app.services.audit import open_audit, security_exempt
 from app.services.content_filter import collect_request_hits, format_hits
-from app.services.auth import verify_api_key
+from app.services.auth import key_tenant, verify_api_key
+from app.services.billing_quotes import public_selling_prices
 from app.services.concurrency import ConcurrencyExceeded, concurrency_limiter
-from app.services.quota import QuotaExceeded, begin_request_budget
+from app.services.quota import QuotaExceeded, begin_request_budget, occupied_quota
 from app.services.rate_limit import TPMExceeded
 from app.services.pre_checks import get_effective_allowed_models, openai_error, run_pre_checks
 from app.services.proxy import (
@@ -127,8 +129,12 @@ async def _proxy(
     request_units: int = 0,
     input_tokens_override: int | None = None,
     channel_id: int | None = None,
+    idempotent: bool = True,
 ):
-    """所有 OpenAI 兼容端点共享的编排入口。channel_id 把候选限定为一条渠道。"""
+    """所有 OpenAI 兼容端点共享的编排入口。channel_id 把候选限定为一条渠道。
+
+    idempotent=False marks upstream jobs (images, videos) that must not be created twice.
+    """
     request_id = getattr(request.state, "request_id", "")
     ip = get_client_ip(request)
     start_time = time.monotonic()
@@ -210,6 +216,7 @@ async def _proxy(
         audit=audit,
         security_hits=security_hits,
         budget=budget,
+        idempotent=idempotent,
     )
     return plan.mark(response)
 
@@ -342,11 +349,12 @@ async def image_generations(request: Request, api_key: APIKey = Depends(verify_a
 
     return await _proxy(
         request, api_key, endpoint, str(body.get("model") or ""), body,
-        send_fn=_send_fn, default_output=0, request_units=units,
+        send_fn=_send_fn, default_output=0, request_units=units, idempotent=False,
     )
 
 
-async def _multipart_proxy(request: Request, api_key: APIKey, endpoint: str, *, units_field: str | None):
+async def _multipart_proxy(request: Request, api_key: APIKey, endpoint: str, *, units_field: str | None,
+                           idempotent: bool = True):
     fields, files = await _multipart_body(request)
     units = _image_count(fields.get(units_field)) if units_field else 1
 
@@ -357,18 +365,18 @@ async def _multipart_proxy(request: Request, api_key: APIKey, endpoint: str, *, 
 
     return await _proxy(
         request, api_key, endpoint, fields.get("model", ""), fields,
-        send_fn=_send_fn, default_output=0, request_units=units,
+        send_fn=_send_fn, default_output=0, request_units=units, idempotent=idempotent,
     )
 
 
 @router.post("/v1/images/edits")
 async def image_edits(request: Request, api_key: APIKey = Depends(verify_api_key)):
-    return await _multipart_proxy(request, api_key, "/v1/images/edits", units_field="n")
+    return await _multipart_proxy(request, api_key, "/v1/images/edits", units_field="n", idempotent=False)
 
 
 @router.post("/v1/images/variations")
 async def image_variations(request: Request, api_key: APIKey = Depends(verify_api_key)):
-    return await _multipart_proxy(request, api_key, "/v1/images/variations", units_field="n")
+    return await _multipart_proxy(request, api_key, "/v1/images/variations", units_field="n", idempotent=False)
 
 
 @router.post("/v1/audio/transcriptions")
@@ -435,7 +443,7 @@ async def _video_job(
     return await _proxy(
         request, api_key, endpoint, model, body,
         send_fn=_send_fn, default_output=0, request_units=seconds,
-        channel_id=job["channel_id"] if job is not None else None,
+        channel_id=job["channel_id"] if job is not None else None, idempotent=False,
     )
 
 
@@ -531,7 +539,7 @@ async def rerank(request: Request, api_key: APIKey = Depends(verify_api_key)):
 
 @router.get("/v1/models")
 async def list_models(api_key: APIKey = Depends(verify_api_key)):
-    models = await list_available_models()
+    models = await list_available_models(api_key.channel_ids or None)
     effective_models = await get_effective_allowed_models(api_key)
     if effective_models is not None:
         allowed_set = set(effective_models)
@@ -541,40 +549,39 @@ async def list_models(api_key: APIKey = Depends(verify_api_key)):
 
 @router.get("/v1/me")
 async def get_key_info(api_key: APIKey = Depends(verify_api_key)):
-    """返回当前 API Key 的配额、可用模型及模型定价信息。"""
-    total = float(api_key.quota_total)
-    used = float(api_key.quota_used)
-    remaining = -1.0 if total == -1 else max(0.0, total - used)
+    """返回当前 API Key 的配额、可用模型，以及每个可用渠道的实际计费售价。"""
+    tenant = await key_tenant(api_key)
+    key_remaining = await _remaining("key", api_key)
+    tenant_remaining = await _remaining("tenant", tenant) if tenant else Decimal(0)
+    limited = [value for value in (key_remaining, tenant_remaining) if value != -1]
 
-    models = await list_available_models()
-    effective_models = await get_effective_allowed_models(api_key)
-    if effective_models is not None:
-        models = [m for m in models if m["id"] in effective_models]
-    model_ids = [m["id"] for m in models]
-
-    all_prices = await ModelPrice.filter(is_active=True)
-    price_map = {
-        mp.model: {
-            "prompt": float(mp.prompt_price),
-            "completion": float(mp.completion_price),
-            "cached": float(mp.cached_price),
-            "cache_write": float(mp.cache_write_price),
-            "request": float(mp.request_price),
-        }
-        for mp in all_prices
-    }
-    model_prices = {mid: price_map[mid] for mid in model_ids if mid in price_map}
+    allowed = await get_effective_allowed_models(api_key)
+    routes: dict[str, list[tuple]] = {}
+    for channel in await enabled_channels():
+        if api_key.channel_ids and channel.id not in api_key.channel_ids:
+            continue
+        for model in channel.models or []:
+            if allowed is None or model in allowed:
+                routes.setdefault(model, []).append((channel, (channel.model_mapping or {}).get(model, model)))
 
     return {
         "name": api_key.name,
         "key_prefix": api_key.key_prefix,
-        "quota_total": total,
-        "quota_used": used,
-        "quota_remaining": remaining,
+        "quota_total": float(api_key.quota_total),
+        "quota_used": float(api_key.quota_used),
+        "quota_remaining": float(min(limited)) if limited else -1.0,
+        "tenant_quota_total": float(tenant.quota_total) if tenant else 0.0,
+        "tenant_quota_used": float(tenant.quota_used) if tenant else 0.0,
         "rpm_limit": api_key.rpm_limit,
         "tpm_limit": api_key.tpm_limit,
-        "models": model_ids,
-        "model_prices": model_prices,
-        "model_prices_source": "global_defaults",
-        "channel_overrides_may_apply": True,
+        "models": list(routes),
+        "model_prices": await public_selling_prices(routes),
+        "model_prices_source": "selling_price",
+        "channel_ids": api_key.channel_ids or [],
     }
+
+
+async def _remaining(scope: str, owner) -> Decimal:
+    if owner.quota_total == -1:
+        return Decimal(-1)
+    return max(Decimal(0), owner.quota_total - owner.quota_used - await occupied_quota(scope, owner.id))

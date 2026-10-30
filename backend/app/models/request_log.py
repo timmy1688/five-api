@@ -21,7 +21,6 @@ class RequestLog(Model):
     cached_tokens = fields.IntField(default=0)
     cache_write_tokens = fields.IntField(default=0)
     cost = fields.DecimalField(max_digits=16, decimal_places=6, default=0)
-    upstream_cost = fields.DecimalField(max_digits=16, decimal_places=6, default=0)
     usage_source = fields.CharField(max_length=16, default="upstream")
     is_stream = fields.BooleanField(default=False)
     status_code = fields.IntField(default=0)

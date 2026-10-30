@@ -335,12 +335,12 @@ async def test_security_writes_require_more_than_read(client):
     assert secret.json()["enabled"] is True
     audit = await client.put(
         "/api/security/ai-audit",
-        json={"enabled": False, "model": "deepseek-v4-flash", "fail_closed": True},
+        json={"enabled": False, "model": "deepseek-v4-flash"},
         headers=admin_headers,
     )
     assert audit.status_code == 200
     assert audit.json()["enabled"] is False
-    assert audit.json()["fail_closed"] is True
+    assert "fail_closed" not in audit.json()
     current = await client.get("/api/security", headers=admin_headers)
     assert current.json()["secret_scan_enabled"] is True
     assert current.json()["ai_audit"]["model"] == "deepseek-v4-flash"

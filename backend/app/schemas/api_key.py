@@ -48,6 +48,7 @@ class TenantKeyCreate(KeyValidation):
     tpm_limit: int = Field(-1, le=100_000_000)
     allowed_models: list[str] = Field(default_factory=list)
     allowed_ips: list[str] = Field(default_factory=list)
+    channel_ids: list[int] = Field(default_factory=list, max_length=100)
     expires_at: datetime | None = None
 
 
@@ -59,6 +60,7 @@ class TenantKeyUpdate(KeyValidation):
     tpm_limit: int | None = Field(None, le=100_000_000)
     allowed_models: list[str] | None = None
     allowed_ips: list[str] | None = None
+    channel_ids: list[int] | None = Field(None, max_length=100)
     expires_at: datetime | None = None
     is_enabled: bool | None = None
 
@@ -83,6 +85,7 @@ class APIKeyResponse(BaseModel):
     tpm_limit: int
     allowed_models: list[str]
     allowed_ips: list[str]
+    channel_ids: list[int] = Field(default_factory=list)
     model_group_id: int | None = None
     model_group_name: str | None = None
     tenant_id: int

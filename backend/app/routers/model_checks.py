@@ -51,9 +51,14 @@ async def check_model(body: ProbeRequest, actor: User = Depends(require_platform
 
 @router.get("/probes")
 async def history(channel_id: int = Query(gt=0), model: str = Query(min_length=1, max_length=64),
+                  kind: Literal["health", "capability"] | None = None,
+                  page: int = Query(1, ge=1, le=1000), size: int = Query(10, ge=1, le=50),
                   _: User = Depends(require_platform_admin)):
-    records = await ModelProbe.filter(channel_id=channel_id, model=model).order_by("-id").limit(20)
-    return {"items": [probe_response(record) for record in records]}
+    query = ModelProbe.filter(channel_id=channel_id, model=model)
+    if kind:
+        query = query.filter(kind=kind)
+    records = await query.order_by("-created_at", "-id").offset((page - 1) * size).limit(size)
+    return {"total": await query.count(), "items": [probe_response(record) for record in records]}
 
 
 class CheckSettings(StrictModel):

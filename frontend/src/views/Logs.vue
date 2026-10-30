@@ -5,11 +5,6 @@
         <h3>{{ t('nav.logs') }}</h3>
         <p>{{ t('logs.subtitle') }}</p>
       </div>
-      <el-popconfirm v-if="auth.isPlatformAdmin" :title="cleanupTitle" @confirm="cleanupLogs">
-        <template #reference>
-          <el-button type="warning" plain>{{ t('logs.cleanup') }}</el-button>
-        </template>
-      </el-popconfirm>
     </div>
 
     <el-card shadow="never" style="margin-bottom: 20px">
@@ -26,20 +21,16 @@
             @keyup.enter="search"
           />
         </el-form-item>
-        <el-form-item :label="t('logs.source')">
+        <el-form-item :label="t('logs.errorSource')">
           <el-select v-model="filters.error_origin" clearable :placeholder="t('common.all')" style="width: 140px">
             <el-option :label="t('origin.gateway')" value="gateway" />
-            <el-option :label="t('origin.official')" value="official" />
-            <el-option :label="t('origin.reseller')" value="reseller" />
+            <el-option :label="t('origin.channel')" value="channel" />
           </el-select>
         </el-form-item>
-        <el-form-item :label="t('common.status')">
-          <el-select v-model="filters.status_code" clearable :placeholder="t('common.all')" style="width: 100px">
-            <el-option label="200" :value="200" />
-            <el-option label="400" :value="400" />
-            <el-option label="429" :value="429" />
-            <el-option label="500" :value="500" />
-            <el-option label="502" :value="502" />
+        <el-form-item :label="t('logs.result')">
+          <el-select v-model="filters.result" clearable :placeholder="t('common.all')" style="width: 110px">
+            <el-option :label="t('logs.resultSuccess')" value="success" />
+            <el-option :label="t('logs.resultError')" value="error" />
           </el-select>
         </el-form-item>
         <el-form-item :label="t('logs.date')">
@@ -141,7 +132,6 @@
             </el-descriptions-item>
             <el-descriptions-item v-if="detail.client_request_id" :label="t('logs.clientRequestId')">{{ detail.client_request_id }}</el-descriptions-item>
             <el-descriptions-item :label="t('logs.usageSource')">{{ detail.usage_source }}</el-descriptions-item>
-            <el-descriptions-item v-if="auth.isPlatformAdmin" :label="t('logs.upstreamCost')">\${{ Number(detail.upstream_cost || 0).toFixed(6) }}</el-descriptions-item>
             <el-descriptions-item :label="t('logs.key')">{{ detail.api_key_name }} (#{{ detail.api_key_id }})</el-descriptions-item>
             <el-descriptions-item :label="t('logs.channel')">{{ detail.channel_name }}</el-descriptions-item>
             <el-descriptions-item :label="t('common.model')">{{ detail.model_requested }} &rarr; {{ detail.model_actual }}</el-descriptions-item>
@@ -214,7 +204,8 @@
             <div class="token-section-title">{{ t('logs.costBreakdown') }}</div>
             <p class="error-hint">
               {{ t('logs.priceSource') }}: {{ t(`logs.source_${detail.cost_detail.price_source}` as 'logs.source_global') }} · {{ detail.cost_detail.model }}
-              <template v-if="detail.cost_detail.time_rule"> · {{ t('logs.timeRule', { name: detail.cost_detail.time_rule.name, x: detail.cost_detail.time_rule.multiplier }) }}</template>
+              <template v-if="detail.channel_name"> · {{ detail.channel_name }}</template>
+              <template v-if="priceMultiplier !== 1"> · {{ t('logs.channelMultiplier', { x: priceMultiplier }) }}</template>
             </p>
             <table class="breakdown">
               <tbody>
@@ -265,7 +256,6 @@
 <script setup lang="ts">
 import { computed, ref, onMounted } from 'vue'
 import { logsApi } from '@/api/logs'
-import { settingsApi } from '@/api/settings'
 import { useAuthStore } from '@/stores/auth'
 import { useI18n } from '@/i18n'
 
@@ -274,13 +264,6 @@ import { ElMessage } from 'element-plus'
 import dayjs from 'dayjs'
 
 const auth = useAuthStore()
-const retentionDays = ref<number | null>(null)
-const cleanupTitle = computed(() => {
-  if (retentionDays.value === 0) return t('logs.cleanupConfirmOff')
-  if (retentionDays.value != null) return t('logs.cleanupConfirmDays', { days: retentionDays.value })
-  return t('logs.cleanupConfirm')
-})
-
 const logs = ref<any[]>([])
 const loading = ref(false)
 const total = ref(0)
@@ -288,6 +271,7 @@ const page = ref(1)
 const drawerVisible = ref(false)
 const detailLoading = ref(false)
 const detail = ref<any>(null)
+const priceMultiplier = computed(() => Number(detail.value?.cost_detail?.multiplier ?? 1))
 const costLines = computed(() => {
   const cd = detail.value?.cost_detail
   if (!cd) return []
@@ -297,7 +281,7 @@ const costLines = computed(() => {
     .map((key) => ({
       key,
       units: units[key].toLocaleString(),
-      price: (key === 'request' ? `$${cd.prices.request}` : `$${cd.prices[key]}/1M`) + (cd.time_rule ? ` ×${cd.time_rule.multiplier}` : ''),
+      price: (key === 'request' ? `$${cd.prices.request}` : `$${cd.prices[key]}/1M`) + (priceMultiplier.value !== 1 ? ` ×${priceMultiplier.value}` : ''),
       amount: Number(cd.lines[key]),
     }))
 })
@@ -309,22 +293,18 @@ const dateRange = ref<[Date, Date] | null>(null)
 const filters = ref({
   model: '',
   api_key_name: '',
-  status_code: undefined as number | undefined,
+  result: '' as '' | 'success' | 'error',
   error_origin: '',
 })
 
 function originLabel(origin: string) {
   if (origin === 'gateway') return t('origin.gateway')
-  if (origin === 'official') return t('origin.official')
-  if (origin === 'reseller') return t('origin.reseller')
+  if (origin === 'channel') return t('origin.channel')
   return origin || '-'
 }
 
 function originTag(origin: string) {
-  if (origin === 'official') return 'danger'
-  if (origin === 'reseller') return 'warning'
-  if (origin === 'gateway') return 'info'
-  return 'info'
+  return origin === 'channel' ? 'warning' : 'info'
 }
 
 function formatTime(t: string) {
@@ -337,7 +317,7 @@ async function load() {
     const params: any = { page: page.value, size: 20 }
     if (filters.value.model) params.model = filters.value.model
     if (filters.value.api_key_name.trim()) params.api_key_name = filters.value.api_key_name.trim()
-    if (filters.value.status_code != null) params.status_code = filters.value.status_code
+    if (filters.value.result) params.result = filters.value.result
     if (filters.value.error_origin) params.error_origin = filters.value.error_origin
     if (dateRange.value) {
       params.start_date = dayjs(dateRange.value[0]).format('YYYY-MM-DDTHH:mm:ss')
@@ -388,26 +368,7 @@ async function openAudit() {
   }
 }
 
-async function cleanupLogs() {
-  try {
-    const res = await logsApi.cleanup()
-    ElMessage.success(t('logs.cleaned', { count: res.deleted }))
-    await load()
-  } catch {
-    ElMessage.error(t('logs.cleanupFailed'))
-  }
-}
-
-onMounted(async () => {
-  if (auth.isPlatformAdmin) {
-    try {
-      retentionDays.value = (await settingsApi.get()).log_retention_days
-    } catch {
-      retentionDays.value = null
-    }
-  }
-  await load()
-})
+onMounted(load)
 </script>
 
 <style scoped>

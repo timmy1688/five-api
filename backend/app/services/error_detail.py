@@ -1,33 +1,14 @@
-"""把失败分成网关自己的拒绝，以及官网或渠道商返回的上游错误。"""
+"""把失败分成网关自己的拒绝，以及渠道（上游）返回的错误。"""
 
 import json
-from urllib.parse import urlparse
 
 import httpx
 
 from app.providers.base import ERROR_IN_OK
+from app.services.failover import NoReadyUpstreamKey, is_credential_error
 from app.services.redaction import redact
 
-# 这些主机是厂商自己的 API。其余地址按渠道商中转处理。
-OFFICIAL_HOSTS = {
-    "api.openai.com",
-    "api.anthropic.com",
-    "generativelanguage.googleapis.com",
-    "dashscope.aliyuncs.com",
-    "api.deepseek.com",
-    "api.mistral.ai",
-    "api.groq.com",
-    "api.x.ai",
-}
-
 MAX_ERROR_CHARS = 8_000
-
-
-def classify_base_url(base_url: str) -> str:
-    host = (urlparse(base_url).hostname or "").lower().rstrip(".")
-    if host in OFFICIAL_HOSTS or host.endswith(".openai.azure.com"):
-        return "official"
-    return "reseller"
 
 
 def _clip(text: str) -> str:
@@ -62,9 +43,8 @@ def _message_from_body(text: str, fallback: str) -> str:
     return fallback
 
 
-def describe_upstream_failure(exc: Exception, base_url: str) -> dict:
+def describe_upstream_failure(exc: Exception) -> dict:
     """上游已经发出请求之后的失败。"""
-    origin = classify_base_url(base_url)
     upstream_status = 0
     upstream_error = ""
     summary = str(exc)
@@ -81,7 +61,7 @@ def describe_upstream_failure(exc: Exception, base_url: str) -> dict:
     else:
         upstream_error = summary
     return {
-        "error_origin": origin,
+        "error_origin": "channel",
         "upstream_status_code": upstream_status,
         "upstream_error": _clip(upstream_error),
         "error_message": _clip(summary),
@@ -96,7 +76,7 @@ def upstream_json_error(exc: Exception) -> tuple[int, dict] | None:
     larger than the log clip is not forwarded, so a huge page cannot become
     the client response.
     """
-    if not isinstance(exc, httpx.HTTPStatusError):
+    if not isinstance(exc, httpx.HTTPStatusError) or is_credential_error(exc):
         return None
     status = exc.response.status_code
     if status < 400 or (status >= 500 and not exc.response.extensions.get(ERROR_IN_OK)):
@@ -114,13 +94,22 @@ def upstream_json_error(exc: Exception) -> tuple[int, dict] | None:
 
 
 def client_status(exc: Exception) -> int:
-    """Status sent downstream: upstream 4xx JSON keeps its code, the rest is 502."""
+    """Status sent downstream: upstream 4xx JSON keeps its code, the rest is 502.
+
+    Upstream 401/403 concern the platform's credentials, so the customer never sees them as its own.
+    """
+    if isinstance(exc, NoReadyUpstreamKey):
+        return 503
     passed = upstream_json_error(exc)
     return passed[0] if passed is not None else 502
 
 
 def client_message(exc: Exception) -> str:
     """Client-facing summary. httpx messages carry the upstream URL, which stays in the log."""
+    if isinstance(exc, NoReadyUpstreamKey):
+        return "Upstream capacity temporarily unavailable"
+    if is_credential_error(exc):
+        return "Upstream credentials unavailable"
     if isinstance(exc, httpx.HTTPStatusError):
         return f"Upstream error: HTTP {exc.response.status_code}"
     if isinstance(exc, httpx.TimeoutException):

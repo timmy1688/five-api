@@ -16,9 +16,10 @@ def _shared_http_client(channel: Channel) -> httpx.AsyncClient:
         client = httpx.AsyncClient(
             base_url=base_url,
             timeout=httpx.Timeout(float(channel.timeout), connect=10.0),
+            # Streams hold a connection for their whole duration, so the cap bounds concurrent calls per upstream.
             limits=httpx.Limits(
-                max_connections=200,
-                max_keepalive_connections=50,
+                max_connections=1000,
+                max_keepalive_connections=200,
                 keepalive_expiry=30,
             ),
         )
@@ -119,6 +120,9 @@ class BaseProvider:
         self.api_key = self.keys[0] if self.keys else ""
         self.client = _shared_http_client(channel)
         self.response_headers: dict[str, str] = {}
+
+    async def has_ready_key(self) -> bool:
+        return len(self.keys) <= 1 or bool(await available_keys(self.channel.id, self.keys))
 
     async def select_key(self, session_key: str | None = None) -> None:
         if len(self.keys) > 1:

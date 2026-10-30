@@ -10,7 +10,6 @@ from tortoise.exceptions import IntegrityError
 
 from app.config import settings
 from app.models import SystemSetting
-from app.services.time_pricing import normalize_rules
 
 INFERENCE_AUDIT_KEY = "inference_audit_enabled"
 KEYWORD_FILTER_KEY = "keyword_filter_enabled"
@@ -23,9 +22,6 @@ _cache: tuple[float, bool] | None = None
 _secret_cache: tuple[float, bool] | None = None
 _ai_cache: tuple[float, dict] | None = None
 _gateway_cache: tuple[float, dict] | None = None
-
-_AI_DEFAULT = {"enabled": False, "model": "", "fail_closed": False}
-
 
 async def metrics_token() -> str:
     """Bearer token for scraping /metrics remotely, created on first use."""
@@ -93,7 +89,6 @@ def _normalize_ai_audit(value) -> dict:
     return {
         "enabled": bool(raw.get("enabled")),
         "model": model,
-        "fail_closed": bool(raw.get("fail_closed")),
     }
 
 
@@ -123,13 +118,6 @@ async def set_secret_scan_enabled(enabled: bool) -> bool:
     return enabled
 
 
-def peek_ai_audit_config() -> dict | None:
-    """命中进程缓存时直接返回。请求路径用它避免为关闭的审计再挂后台任务。"""
-    if _ai_cache is None or time.monotonic() - _ai_cache[0] >= _CACHE_TTL:
-        return None
-    return _ai_cache[1]
-
-
 async def ai_audit_config() -> dict:
     global _ai_cache
     now = time.monotonic()
@@ -141,9 +129,9 @@ async def ai_audit_config() -> dict:
     return config
 
 
-async def set_ai_audit_config(*, enabled: bool, model: str, fail_closed: bool) -> dict:
+async def set_ai_audit_config(*, enabled: bool, model: str) -> dict:
     global _ai_cache
-    config = _normalize_ai_audit({"enabled": enabled, "model": model, "fail_closed": fail_closed})
+    config = _normalize_ai_audit({"enabled": enabled, "model": model})
     row = await SystemSetting.get_or_none(key=AI_AUDIT_KEY)
     if row is None:
         await SystemSetting.create(key=AI_AUDIT_KEY, value=config)
@@ -173,7 +161,6 @@ def default_gateway_config() -> dict:
         "model_fallbacks": {},
         "auto_cache_control": False,
         "budget_downgrade": {"threshold": 0.8, "rules": {}},
-        "time_pricing": [],
         "model_checks": {"health_enabled": True, "health_interval_seconds": 900,
                          "capability_enabled": True, "capability_interval_seconds": 86400},
     }
@@ -244,7 +231,6 @@ def _normalize_gateway(value) -> dict:
         "model_fallbacks": _normalize_fallbacks(raw.get("model_fallbacks")),
         "auto_cache_control": bool(raw.get("auto_cache_control", defaults["auto_cache_control"])),
         "budget_downgrade": _normalize_downgrade(raw.get("budget_downgrade")),
-        "time_pricing": normalize_rules(raw.get("time_pricing")),
         "model_checks": {
             "health_enabled": bool(checks.get("health_enabled", True)),
             "health_interval_seconds": _clamp_int(checks.get("health_interval_seconds"), 900, 60, 86400),

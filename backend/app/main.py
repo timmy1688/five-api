@@ -57,11 +57,10 @@ async def lifespan(app: FastAPI):
                 task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
             from app.services.alerts import drain_alerts
-            from app.services.ai_audit import drain_ai_reviews
             from app.services.settlements import recover_once
             try:
                 async with asyncio.timeout(10):
-                    await asyncio.gather(drain_alerts(), drain_ai_reviews())
+                    await drain_alerts()
                     await recover_once()
             except Exception:
                 import logging

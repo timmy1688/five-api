@@ -10,7 +10,9 @@ Budgets are shared across tenant keys. Requests reserve sufficient estimated cos
 
 The Model Hub shows effective selling prices, channel availability and probe history. Availability checks default to every 15 minutes. GPT/Claude degradation reference checks default to every 24 hours and evaluate instruction following, reasoning and tool use. These synthetic checks cannot authenticate model identity and incur platform upstream costs.
 
-Customer price multipliers and channel discounts are independent. Catalog imports only add missing rows and preserve existing prices, multipliers and status. The bundled catalog is a versioned reference, not live vendor pricing.
+Inference audit saves request excerpts per key (never replies) and scans them for private keys and cloud tokens without blocking calls. When someone leaves or a leak is suspected, an administrator opens the key on the Audit page; a cheap model reviews its latest saved requests one by one and produces a downloadable report. Requests that already have a verdict are not sent again.
+
+Each channel bills Selling Prices times its price multiplier, or a fixed price per model. A key can be bound to chosen channels: failover stays inside them and each request is billed at the price of the channel that served it. Catalog imports only add missing rows and preserve existing prices and status. The bundled catalog is a versioned reference, not live vendor pricing.
 
 ## Development
 
@@ -26,10 +28,10 @@ Vite runs on localhost:5001 and Uvicorn on localhost:5002. Only MySQL/Redis use 
 ## Single-machine deployment
 
 ```bash
-docker compose up -d --build
+./service.sh deploy
 ```
 
-The non-root image serves the API and UI on localhost:8080. Terminate public HTTPS with your existing Nginx using [the example](../deploy/nginx.conf). Configure production passwords and keep encryption/JWT secrets outside the database in a separately protected file or environment.
+The first run writes the gateway secrets to `.env` (existing values are kept), then builds and starts the gateway, MySQL and Redis. The stateless, non-root image serves the API and UI on localhost:8080. Configure production passwords and back up `.env` separately from the database: stored upstream keys cannot be decrypted without it.
 
 Default first-install credentials are admin/admin123, with a mandatory password change. They do not reset existing accounts. Read the operations guide before upgrading: migrations and external-secret migration are required.
 

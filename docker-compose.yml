@@ -1,13 +1,12 @@
-# 启动：docker compose up -d
-# 打开 http://127.0.0.1:8080；商用入口使用 docs/OPERATIONS.md 的 HTTPS 配置
+# 部署：./service.sh deploy（首次自动生成 .env 密钥并构建镜像），打开 http://127.0.0.1:8080。
 # 改端口或密码时，直接改下面的值。
 
 services:
   gateway:
-    # 有发布镜像时直接拉取；拉不到就用本地源码构建
-    image: ghcr.io/timmy1688/five-api:latest
+    image: five-api:latest
     build: .
     restart: always
+    # 默认只允许本机访问；需要其他机器直连时去掉 "127.0.0.1:"。
     ports:
       - "127.0.0.1:8080:8000"
     environment:
@@ -16,12 +15,13 @@ services:
       MYSQL_PASSWORD: ${MYSQL_PASSWORD:-five_password}
       MYSQL_DATABASE: five_api
       REDIS_URL: redis://redis:6379/0
-      INIT_ADMIN_USERNAME: ${INIT_ADMIN_USERNAME:-admin}
-      INIT_ADMIN_PASSWORD: ${INIT_ADMIN_PASSWORD:-admin123}
-      SECRETS_FILE: /var/lib/five-api/secrets.json
+      # 只在首次启动、还没有管理员时创建这个账号，之后改这里不生效。首次登录会强制修改密码。
+      INIT_ADMIN_USERNAME: admin
+      INIT_ADMIN_PASSWORD: admin123
+      # 网关本身不保存状态。两把密钥只放在 .env，丢失后数据库里的上游 Key 无法解密。
+      SECRET_KEY: ${SECRET_KEY:?先执行 ./service.sh secrets 生成网关密钥}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?先执行 ./service.sh secrets 生成网关密钥}
       FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-127.0.0.1}
-    volumes:
-      - gateway_secrets:/var/lib/five-api
     stop_grace_period: 40s
     depends_on:
       mysql:
@@ -62,6 +62,3 @@ services:
       timeout: 3s
       retries: 30
       start_period: 30s
-
-volumes:
-  gateway_secrets:

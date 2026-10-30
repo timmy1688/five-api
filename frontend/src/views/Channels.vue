@@ -12,7 +12,7 @@
       <div class="summary-item"><span>{{ t('channels.total') }}</span><strong>{{ total }}</strong></div>
       <div class="summary-item"><span>{{ t('common.enabled') }}</span><strong>{{ enabledCount }}</strong></div>
       <div class="summary-item"><span>{{ t('channels.healthy') }}</span><strong class="success-text">{{ healthyCount }}</strong></div>
-      <div class="summary-item"><span>{{ t('nav.models') }}</span><strong>{{ modelCount }}</strong></div>
+      <div class="summary-item"><span>{{ t('channels.models') }}</span><strong>{{ modelCount }}</strong></div>
     </div>
 
     <el-card shadow="never">
@@ -42,13 +42,21 @@
             </div>
           </template>
         </el-table-column>
-        <el-table-column :label="t('nav.models')" min-width="200">
+        <el-table-column :label="t('channels.models')" min-width="200">
           <template #default="{ row }">
             <div class="model-tags">
               <el-tag v-for="m in row.models.slice(0, 3)" :key="m" size="small">{{ m }}</el-tag>
               <el-tag v-if="row.models.length > 3" size="small" type="info">+{{ row.models.length - 3 }}</el-tag>
               <span v-if="!row.models.length" class="muted-text">{{ t('channels.notConfigured') }}</span>
             </div>
+          </template>
+        </el-table-column>
+        <el-table-column :label="t('channels.priceColumn')" width="130">
+          <template #default="{ row }">
+            <span :class="{ 'muted-text': Number(row.price_multiplier) === 1 }">×{{ Number(row.price_multiplier) }}</span>
+            <el-tag v-if="Object.keys(row.price_overrides || {}).length" size="small" type="warning" effect="plain" class="fixed-tag">
+              {{ t('channels.fixedCount', { n: Object.keys(row.price_overrides).length }) }}
+            </el-tag>
           </template>
         </el-table-column>
         <el-table-column prop="priority" :label="t('channels.priority')" width="80" align="center" />
@@ -83,139 +91,150 @@
       />
     </el-card>
 
-    <el-dialog v-model="dialogVisible" :title="editingId ? t('channels.edit') : t('channels.add')" width="760px" top="4vh">
+    <el-dialog v-model="dialogVisible" :title="editingId ? t('channels.edit') : t('channels.add')" width="820px" top="5vh" class="channel-dialog">
       <el-form ref="formRef" :model="form" :rules="rules" label-position="top" class="channel-form">
-        <el-alert
-          v-if="form.provider === 'openai'"
-          class="provider-alert"
-          :title="t('channels.modeTitle')"
-          :description="t('channels.modeDesc')"
-          type="info"
-          :closable="false"
-          show-icon
-        />
-
-        <div class="form-grid">
-        <el-form-item :label="t('common.name')" prop="name">
-          <el-input v-model="form.name" :placeholder="t('channels.namePlaceholder')" />
-          <div class="form-hint">{{ t('channels.nameHint') }}</div>
-        </el-form-item>
-
-        <el-form-item :label="t('channels.provider')">
-          <el-select v-model="form.provider" style="width: 100%">
-            <el-option :label="t('channels.openai')" value="openai">
-              <span>{{ t('channels.openai') }}</span>
-              <span class="option-hint">{{ t('channels.openaiHint') }}</span>
-            </el-option>
-            <el-option :label="t('channels.anthropic')" value="anthropic">
-              <span>{{ t('channels.anthropic') }}</span>
-              <span class="option-hint">{{ t('channels.anthropicHint') }}</span>
-            </el-option>
-          </el-select>
-          <div class="form-hint">{{ t('channels.providerHint') }}</div>
-        </el-form-item>
-
-        <el-form-item :label="t('channels.baseUrl')" prop="base_url">
-          <el-input v-model="form.base_url" :placeholder="baseUrlPlaceholder" />
-          <div class="form-hint">{{ t('channels.baseUrlHint') }}</div>
-        </el-form-item>
-
-        <el-form-item :label="t('channels.apiKey')">
-          <el-input v-model="form.api_key" type="textarea" :autosize="{ minRows: 2, maxRows: 6 }" class="secret-textarea" :placeholder="editingId ? t('channels.apiKeyKeep') : t('channels.apiKeyOptional')" />
-          <div class="form-hint">{{ t('channels.apiKeyHint') }}</div>
-        </el-form-item>
-        </div>
-
-        <el-divider content-position="left">{{ t('nav.models') }}</el-divider>
-
-        <el-form-item :label="t('nav.models')">
-          <div style="display: flex; gap: 8px; width: 100%">
-            <el-select v-model="form.models" multiple filterable allow-create style="flex: 1" :placeholder="t('channels.modelsPlaceholder')">
-            </el-select>
-            <el-button @click="fetchModels" :loading="fetchingModels" :disabled="!form.base_url">{{ t('channels.fetch') }}</el-button>
+        <section class="form-section">
+          <header class="section-head">
+            <h4>{{ t('channels.sectionBasic') }}</h4>
+          </header>
+          <div class="form-grid">
+            <el-form-item :label="t('common.name')" prop="name">
+              <el-input v-model="form.name" :placeholder="t('channels.namePlaceholder')" />
+            </el-form-item>
+            <el-form-item :label="t('channels.provider')">
+              <el-select v-model="form.provider" style="width: 100%">
+                <el-option :label="t('channels.openai')" value="openai">
+                  <span>{{ t('channels.openai') }}</span>
+                  <span class="option-hint">{{ t('channels.openaiHint') }}</span>
+                </el-option>
+                <el-option :label="t('channels.anthropic')" value="anthropic">
+                  <span>{{ t('channels.anthropic') }}</span>
+                  <span class="option-hint">{{ t('channels.anthropicHint') }}</span>
+                </el-option>
+              </el-select>
+              <div class="form-hint">{{ form.provider === 'openai' ? t('channels.openaiModeHint') : t('channels.anthropicModeHint') }}</div>
+            </el-form-item>
+            <el-form-item :label="t('channels.baseUrl')" prop="base_url" class="span-2">
+              <el-input v-model="form.base_url" :placeholder="baseUrlPlaceholder" />
+              <div class="form-hint">{{ t('channels.baseUrlHint') }}</div>
+            </el-form-item>
+            <el-form-item :label="t('channels.apiKey')" class="span-2">
+              <el-input
+                v-model="form.api_key"
+                type="textarea"
+                :autosize="{ minRows: 2, maxRows: 6 }"
+                class="secret-textarea"
+                :placeholder="editingId ? t('channels.apiKeyKeep') : t('channels.apiKeyOptional')"
+              />
+              <div class="form-hint">{{ t('channels.apiKeyHint') }}</div>
+            </el-form-item>
           </div>
-          <div class="form-hint">{{ t('channels.modelsHint') }}</div>
-        </el-form-item>
+        </section>
 
-        <el-form-item :label="t('channels.mapping')">
-          <div class="form-hint" style="margin-bottom: 8px">
-            {{ t('channels.mappingHint') }}
+        <section class="form-section">
+          <header class="section-head">
+            <h4>{{ t('channels.sectionModels') }}</h4>
+          </header>
+          <el-form-item :label="t('channels.models')">
+            <div class="inline-row">
+              <el-select
+                v-model="form.models"
+                multiple
+                filterable
+                allow-create
+                default-first-option
+                collapse-tags
+                :max-collapse-tags="8"
+                :placeholder="t('channels.modelsPlaceholder')"
+                class="grow"
+              />
+              <el-button :icon="Download" :loading="fetchingModels" :disabled="!form.base_url" @click="fetchModels">{{ t('channels.fetch') }}</el-button>
+            </div>
+            <div class="form-hint">{{ t('channels.modelsHint') }}</div>
+          </el-form-item>
+
+          <el-form-item :label="t('channels.mapping')">
+            <div class="row-table">
+              <div v-if="mappingRows.length" class="row-table-head mapping-cols">
+                <span>{{ t('channels.publicModel') }}</span>
+                <span />
+                <span>{{ t('channels.upstreamModel') }}</span>
+                <span />
+              </div>
+              <div v-for="(row, index) in mappingRows" :key="index" class="row-table-row mapping-cols">
+                <el-input v-model="row.from" placeholder="my-model" />
+                <el-icon class="row-arrow"><Right /></el-icon>
+                <el-input v-model="row.to" placeholder="local-model" />
+                <el-button text type="danger" :icon="Delete" :aria-label="t('common.delete')" @click="mappingRows.splice(index, 1)" />
+              </div>
+              <el-button text type="primary" :icon="Plus" class="row-add" @click="mappingRows.push({ from: '', to: '' })">{{ t('channels.addMapping') }}</el-button>
+            </div>
+            <div class="form-hint">{{ t('channels.mappingHint') }}</div>
+          </el-form-item>
+        </section>
+
+        <section class="form-section">
+          <header class="section-head">
+            <h4>{{ t('channels.routing') }}</h4>
+          </header>
+          <div class="routing-grid">
+            <el-form-item :label="t('channels.priority')">
+              <el-input-number v-model="form.priority" :min="0" controls-position="right" class="full" />
+              <div class="form-hint">{{ t('channels.priorityHint') }}</div>
+            </el-form-item>
+            <el-form-item :label="t('channels.weight')">
+              <el-input-number v-model="form.weight" :min="1" controls-position="right" class="full" />
+              <div class="form-hint">{{ t('channels.weightHint') }}</div>
+            </el-form-item>
+            <el-form-item :label="t('channels.timeout')">
+              <el-input-number v-model="form.timeout" :min="10" :max="600" controls-position="right" class="full" />
+              <div class="form-hint">{{ t('channels.timeoutHint') }}</div>
+            </el-form-item>
+            <el-form-item :label="t('channels.retries')">
+              <el-input-number v-model="form.max_retries" :min="0" :max="5" controls-position="right" class="full" />
+              <div class="form-hint">{{ t('channels.retriesHint') }}</div>
+            </el-form-item>
           </div>
-          <div v-for="(val, key, idx) in form.model_mapping" :key="idx" style="display: flex; gap: 8px; margin-bottom: 4px">
-            <el-input :model-value="key" disabled style="width: 45%" />
-            <span class="mapping-arrow">&rarr;</span>
-            <el-input :model-value="val" disabled style="width: 45%" />
-            <el-button text type="danger" @click="removeMapping(key as string)">X</el-button>
+        </section>
+
+        <section class="form-section">
+          <header class="section-head">
+            <h4>{{ t('channels.pricing') }}</h4>
+            <p>{{ t('channels.pricingSectionDesc') }}</p>
+          </header>
+          <div>
+            <el-form-item :label="t('channels.priceMultiplier')">
+              <el-input-number v-model="form.price_multiplier" :min="0" :max="100" :step="0.1" controls-position="right" style="width: 180px" />
+              <div class="form-hint">{{ t('channels.priceMultiplierHint') }}</div>
+            </el-form-item>
+            <el-form-item :label="t('channels.pricingTable')">
+              <div class="row-table">
+                <div v-if="pricingRows.length" class="row-table-head pricing-cols">
+                  <span>{{ t('common.model') }}</span>
+                  <span>{{ t('channels.priceInput') }}</span>
+                  <span>{{ t('channels.priceOutput') }}</span>
+                  <span>{{ t('channels.priceCacheRead') }}</span>
+                  <span>{{ t('channels.priceCacheWrite') }}</span>
+                  <span>{{ t('channels.priceRequest') }}</span>
+                  <span />
+                </div>
+                <div v-for="(row, index) in pricingRows" :key="index" class="row-table-row pricing-cols">
+                  <el-select v-model="row.model" filterable allow-create default-first-option :placeholder="t('common.model')">
+                    <el-option v-for="model in pricingModelOptions" :key="model" :label="model" :value="model" />
+                  </el-select>
+                  <el-input-number v-model="row.prompt" :min="0" :controls="false" />
+                  <el-input-number v-model="row.completion" :min="0" :controls="false" />
+                  <el-input-number v-model="row.cached" :min="0" :controls="false" />
+                  <el-input-number v-model="row.cache_write" :min="0" :controls="false" :value-on-clear="null" :placeholder="t('channels.sameAsInput')" />
+                  <el-input-number v-model="row.request" :min="0" :controls="false" :value-on-clear="null" placeholder="-" />
+                  <el-button text type="danger" :icon="Delete" :aria-label="t('common.delete')" @click="pricingRows.splice(index, 1)" />
+                </div>
+                <el-button text type="primary" :icon="Plus" class="row-add" @click="addPricingRow">{{ t('channels.addPricing') }}</el-button>
+              </div>
+              <div class="form-hint">{{ t('channels.pricingHint') }}</div>
+            </el-form-item>
           </div>
-          <div style="display: flex; gap: 8px; align-items: center">
-            <el-input v-model="newMappingKey" :placeholder="t('channels.publicModel')" style="width: 45%" />
-            <span class="mapping-arrow">&rarr;</span>
-            <el-input v-model="newMappingVal" :placeholder="t('channels.upstreamModel')" style="width: 45%" />
-            <el-button text type="primary" @click="addMapping">+</el-button>
-          </div>
-        </el-form-item>
-
-        <el-divider content-position="left">{{ t('channels.routing') }}</el-divider>
-
-        <div class="routing-grid">
-        <el-form-item :label="t('channels.priority')">
-          <el-input-number v-model="form.priority" :min="0" />
-          <div class="form-hint">{{ t('channels.priorityHint') }}</div>
-        </el-form-item>
-
-        <el-form-item :label="t('channels.weight')">
-          <el-input-number v-model="form.weight" :min="1" />
-          <div class="form-hint">{{ t('channels.weightHint') }}</div>
-        </el-form-item>
-
-        <el-form-item :label="t('channels.timeout')">
-          <el-input-number v-model="form.timeout" :min="10" :max="600" />
-          <div class="form-hint">{{ t('channels.timeoutHint') }}</div>
-        </el-form-item>
-
-        <el-form-item :label="t('channels.retries')">
-          <el-input-number v-model="form.max_retries" :min="0" :max="5" />
-          <div class="form-hint">{{ t('channels.retriesHint') }}</div>
-        </el-form-item>
-        </div>
-
-        <el-form-item :label="t('channels.costMultiplier')">
-          <el-input-number v-model="form.cost_multiplier" :min="0" :max="100" :precision="4" :step="0.1" />
-          <div class="form-hint">{{ t('channels.costMultiplierHint') }}</div>
-        </el-form-item>
-        <el-form-item :label="t('channels.pricing')">
-          <div class="form-hint" style="margin-bottom: 8px">
-            {{ t('channels.pricingHint') }}
-          </div>
-          <div v-for="(val, key) in form.model_pricing" :key="key" style="display: flex; gap: 6px; margin-bottom: 4px; align-items: center">
-            <el-input :model-value="key" disabled style="width: 20%" />
-            <span class="pricing-label">P:</span>
-            <el-input-number :model-value="val.prompt" disabled :controls="false" style="width: 15%" />
-            <span class="pricing-label">C:</span>
-            <el-input-number :model-value="val.completion" disabled :controls="false" style="width: 15%" />
-            <span class="pricing-label">R:</span>
-            <el-input-number :model-value="val.cached" disabled :controls="false" style="width: 12%" />
-            <span class="pricing-label">W:</span>
-            <el-input-number :model-value="val.cache_write ?? val.prompt" disabled :controls="false" style="width: 12%" />
-            <span class="pricing-label">Q:</span>
-            <el-input-number :model-value="val.request ?? 0" disabled :controls="false" style="width: 12%" />
-            <el-button text type="danger" @click="removePricing(key as string)">X</el-button>
-          </div>
-          <div style="display: flex; gap: 6px; align-items: center">
-            <el-input v-model="newPricingModel" :placeholder="t('common.model')" style="width: 20%" />
-            <span class="pricing-label">P:</span>
-            <el-input-number v-model="newPricingPrompt" :min="0" :precision="4" :controls="false" placeholder="2.5" style="width: 15%" />
-            <span class="pricing-label">C:</span>
-            <el-input-number v-model="newPricingCompletion" :min="0" :precision="4" :controls="false" placeholder="10.0" style="width: 15%" />
-            <span class="pricing-label">R:</span>
-            <el-input-number v-model="newPricingCached" :min="0" :precision="4" :controls="false" placeholder="0.3" style="width: 12%" />
-            <span class="pricing-label">W:</span>
-            <el-input-number v-model="newPricingWrite" :min="0" :precision="4" :controls="false" :value-on-clear="null" placeholder="W" style="width: 12%" />
-            <span class="pricing-label">Q:</span>
-            <el-input-number v-model="newPricingRequest" :min="0" :precision="4" :controls="false" :value-on-clear="null" placeholder="Q" style="width: 12%" />
-            <el-button text type="primary" @click="addPricing">+</el-button>
-          </div>
-        </el-form-item>
+        </section>
       </el-form>
       <template #footer>
         <el-button @click="dialogVisible = false">{{ t('common.cancel') }}</el-button>
@@ -234,6 +253,11 @@ import { useI18n } from '@/i18n'
 const { t } = useI18n()
 import { ElMessage } from 'element-plus'
 import type { FormInstance } from 'element-plus'
+import { Delete, Download, Plus, Right } from '@element-plus/icons-vue'
+
+type ChannelPrice = { prompt: number; completion: number; cached?: number; cache_write?: number; request?: number }
+type MappingRow = { from: string; to: string }
+type PricingRow = { model: string; prompt: number; completion: number; cached: number; cache_write: number | null; request: number | null }
 
 const auth = useAuthStore()
 
@@ -246,14 +270,8 @@ const saving = ref(false)
 const testingId = ref<number | null>(null)
 const editingId = ref<number | null>(null)
 const formRef = ref<FormInstance>()
-const newMappingKey = ref('')
-const newMappingVal = ref('')
-const newPricingModel = ref('')
-const newPricingPrompt = ref(0)
-const newPricingCompletion = ref(0)
-const newPricingCached = ref(0)
-const newPricingWrite = ref<number | null>(null)
-const newPricingRequest = ref<number | null>(null)
+const mappingRows = ref<MappingRow[]>([])
+const pricingRows = ref<PricingRow[]>([])
 const healthMap = ref<Record<number, { healthy: boolean; fail_count: number; disabled_at: number | null; keys_total?: number; keys_cooling?: number }>>({})
 const fetchingModels = ref(false)
 const providerUrlExamples: Record<string, string> = {
@@ -266,11 +284,14 @@ const baseUrlPlaceholder = computed(() => providerUrlExamples[form.value.provide
 const emptyForm = () => ({
   name: '', provider: 'openai', base_url: '', api_key: '',
   models: [] as string[], model_mapping: {} as Record<string, string>,
-  model_pricing: {} as Record<string, { prompt: number; completion: number; cached: number; cache_write?: number; request?: number }>,
-  priority: 0, weight: 1, timeout: 120, max_retries: 1, cost_multiplier: 1,
+  price_overrides: {} as Record<string, ChannelPrice>,
+  priority: 0, weight: 1, timeout: 120, max_retries: 1, price_multiplier: 1,
 })
 const form = ref(emptyForm())
 const enabledCount = computed(() => channels.value.filter(channel => channel.is_enabled).length)
+const pricingModelOptions = computed(() => [
+  ...new Set([...form.value.models, ...mappingRows.value.map(row => row.to.trim()).filter(Boolean)]),
+])
 const healthyCount = computed(() => channels.value.filter(channel => healthMap.value[channel.id]?.healthy).length)
 const modelCount = computed(() => new Set(channels.value.flatMap(channel => channel.models)).size)
 const rules = computed(() => ({
@@ -299,15 +320,46 @@ function apiError(error: any, fallback: string) {
   return typeof detail === 'string' ? detail : fallback
 }
 
-function resetDrafts() {
-  newMappingKey.value = ''
-  newMappingVal.value = ''
-  newPricingModel.value = ''
-  newPricingPrompt.value = 0
-  newPricingCompletion.value = 0
-  newPricingCached.value = 0
-  newPricingWrite.value = null
-  newPricingRequest.value = null
+function loadRows(mapping: Record<string, string>, pricing: Record<string, ChannelPrice>) {
+  mappingRows.value = Object.entries(mapping).map(([from, to]) => ({ from, to }))
+  pricingRows.value = Object.entries(pricing).map(([model, price]) => ({
+    model,
+    prompt: price.prompt,
+    completion: price.completion,
+    cached: price.cached ?? 0,
+    cache_write: price.cache_write ?? null,
+    request: price.request ?? null,
+  }))
+}
+
+function addPricingRow() {
+  pricingRows.value.push({ model: '', prompt: 0, completion: 0, cached: 0, cache_write: null, request: null })
+}
+
+/** Converts editable rows back to API objects; returns an error message for incomplete rows. */
+function collectRows(): string | null {
+  const mapping: Record<string, string> = {}
+  for (const row of mappingRows.value) {
+    const from = row.from.trim()
+    const to = row.to.trim()
+    if (!from && !to) continue
+    if (!from || !to) return t('channels.mappingIncomplete')
+    if (from in mapping) return t('channels.duplicateModel', { model: from })
+    mapping[from] = to
+  }
+  const pricing: Record<string, ChannelPrice> = {}
+  for (const row of pricingRows.value) {
+    const model = row.model.trim()
+    if (!model) return t('channels.pricingModelRequired')
+    if (model in pricing) return t('channels.duplicateModel', { model })
+    const price: ChannelPrice = { prompt: row.prompt ?? 0, completion: row.completion ?? 0, cached: row.cached ?? 0 }
+    if (row.cache_write != null) price.cache_write = row.cache_write
+    if (row.request != null) price.request = row.request
+    pricing[model] = price
+  }
+  form.value.model_mapping = mapping
+  form.value.price_overrides = pricing
+  return null
 }
 
 async function load() {
@@ -372,62 +424,32 @@ async function fetchModels() {
 function openCreate() {
   editingId.value = null
   form.value = emptyForm()
-  resetDrafts()
+  loadRows({}, {})
   dialogVisible.value = true
 }
 
 function openEdit(row: any) {
   editingId.value = row.id
-  resetDrafts()
   form.value = {
     ...row,
     api_key: '',
     models: [...row.models],
     model_mapping: { ...row.model_mapping },
-    model_pricing: { ...row.model_pricing },
+    price_overrides: { ...row.price_overrides },
   }
+  loadRows(form.value.model_mapping, form.value.price_overrides)
   dialogVisible.value = true
-}
-
-function addMapping() {
-  if (newMappingKey.value && newMappingVal.value) {
-    form.value.model_mapping[newMappingKey.value] = newMappingVal.value
-    newMappingKey.value = ''
-    newMappingVal.value = ''
-  }
-}
-
-function removeMapping(key: string) {
-  delete form.value.model_mapping[key]
-}
-
-function addPricing() {
-  if (newPricingModel.value) {
-    const price: { prompt: number; completion: number; cached: number; cache_write?: number; request?: number } = {
-      prompt: newPricingPrompt.value,
-      completion: newPricingCompletion.value,
-      cached: newPricingCached.value,
-    }
-    if (newPricingWrite.value != null) price.cache_write = newPricingWrite.value
-    if (newPricingRequest.value != null) price.request = newPricingRequest.value
-    form.value.model_pricing[newPricingModel.value] = price
-    newPricingModel.value = ''
-    newPricingPrompt.value = 0
-    newPricingCompletion.value = 0
-    newPricingCached.value = 0
-    newPricingWrite.value = null
-    newPricingRequest.value = null
-  }
-}
-
-function removePricing(key: string) {
-  delete form.value.model_pricing[key]
 }
 
 async function handleSave() {
   if (!formRef.value) return
   const valid = await formRef.value.validate().catch(() => false)
   if (!valid) return
+  const rowError = collectRows()
+  if (rowError) {
+    ElMessage.warning(rowError)
+    return
+  }
   saving.value = true
   try {
     if (editingId.value) {
@@ -586,25 +608,135 @@ onMounted(load)
   font-size: 12px;
 }
 
-.provider-alert {
-  margin-bottom: 20px;
-}
-
-.form-grid,
-.routing-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  column-gap: 18px;
-}
-
 .channel-form {
-  max-height: calc(88vh - 170px);
+  max-height: calc(90vh - 160px);
   overflow-x: hidden;
   overflow-y: auto;
-  padding: 2px 8px 8px 2px;
+  padding-right: 6px;
+}
+
+.form-section {
+  padding: 16px 18px 2px;
+  margin-bottom: 14px;
+  border: 1px solid #e8edf5;
+  border-radius: 10px;
+  background: #fff;
+}
+
+.form-section:last-child {
+  margin-bottom: 0;
+}
+
+.section-head {
+  position: relative;
+  margin-bottom: 14px;
+}
+
+.section-head h4 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  color: #1e293b;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.section-head p {
+  margin: 4px 0 0;
+  padding-right: 28px;
+  color: #94a3b8;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.fixed-tag {
+  margin-left: 6px;
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: 16px;
+}
+
+.form-grid .span-2 {
+  grid-column: span 2;
+}
+
+.routing-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  column-gap: 14px;
+}
+
+.channel-form :deep(.el-form-item) {
+  margin-bottom: 16px;
+}
+
+.channel-form :deep(.el-form-item__label) {
+  color: #475569;
+  font-weight: 500;
+}
+
+.full {
+  width: 100%;
+}
+
+.inline-row {
+  display: flex;
+  gap: 8px;
+  width: 100%;
+}
+
+.grow {
+  flex: 1;
+  min-width: 0;
+}
+
+.row-table {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+}
+
+.row-table-head {
+  color: #94a3b8;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.row-table-head,
+.row-table-row {
+  display: grid;
+  align-items: center;
+  gap: 8px;
+}
+
+.mapping-cols {
+  grid-template-columns: minmax(0, 1fr) 16px minmax(0, 1fr) 32px;
+}
+
+.pricing-cols {
+  grid-template-columns: minmax(0, 1.8fr) repeat(5, minmax(0, 1fr)) 32px;
+}
+
+.pricing-cols :deep(.el-input-number) {
+  width: 100%;
+}
+
+.row-arrow {
+  color: #94a3b8;
+}
+
+.row-add {
+  align-self: flex-start;
+  padding-left: 0;
 }
 
 .form-hint {
+  width: 100%;
   font-size: 12px;
   color: #94a3b8;
   line-height: 1.5;
@@ -625,34 +757,6 @@ onMounted(load)
   color: #94a3b8;
 }
 
-.mapping-arrow {
-  color: #94a3b8;
-  font-size: 14px;
-  line-height: 32px;
-  flex-shrink: 0;
-}
-
-.pricing-label {
-  font-size: 12px;
-  white-space: nowrap;
-  color: #64748b;
-  font-weight: 500;
-}
-
-.channel-form :deep(.el-divider__text) {
-  font-size: 13px;
-  font-weight: 600;
-  color: #64748b;
-}
-
-.channel-form :deep(.el-divider) {
-  margin: 22px 0 18px;
-}
-
-.channel-form :deep(.el-form-item) {
-  margin-bottom: 18px;
-}
-
 @media (max-width: 720px) {
   .channel-summary {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -661,6 +765,18 @@ onMounted(load)
   .form-grid,
   .routing-grid {
     grid-template-columns: 1fr;
+  }
+
+  .form-grid .span-2 {
+    grid-column: auto;
+  }
+
+  .pricing-cols {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .row-table-head.pricing-cols {
+    display: none;
   }
 
   .summary-item {

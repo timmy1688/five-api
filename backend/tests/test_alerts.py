@@ -5,15 +5,12 @@ import hmac
 from decimal import Decimal
 from unittest.mock import AsyncMock, patch
 
-import pytest
-
 from app import dependencies
 from app.models import APIKey, Channel
 from app.services import alerts, channel_health
 from app.services.auth import hash_api_key
 from tests.conftest import auth_header
 
-pytestmark = pytest.mark.asyncio
 
 HOOK_URL = "https://open.feishu.cn/open-apis/bot/v2/hook/abcdef123456"
 
