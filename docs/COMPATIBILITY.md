@@ -19,7 +19,11 @@
 | openai Python SDK | 3.37.0；真实 HTTP 的聊天、工具、流式、Responses 与认证错误 |
 | anthropic Python SDK | 2.3.0；真实 HTTP 的消息、tool_use、文本流与 final usage |
 | httpx | 0.28.1；API、断流、取消、超时、故障转移 |
-| Claude Code、Codex、Cursor | 提供配置示例；本次未完成对应 CLI/桌面版本的端到端认证，不宣称已全面兼容 |
+| Claude Code | 2.1.197；经 DeepSeek Anthropic 渠道实测多轮、工具调用、流式与缓存用量，2026-10-31 |
+| Codex CLI | 0.164.0；经 DeepSeek 官方渠道实测 Responses 多轮与工具调用，2026-10-31 |
+| Cursor | 未实测：自定义地址由 Cursor 服务器访问，需要公网 HTTPS 网关 |
+
+客户端配置见 [接入 Claude Code、Codex、Cursor](CLIENTS.md)。
 
 SDK 契约参考 [OpenAI Python](https://developers.openai.com/api/reference/python) 和 [流式响应](https://developers.openai.com/api/docs/guides/streaming-responses)。具体厂商、代理版本、Beta 或多模态扩展需要用实际部署另验。
 

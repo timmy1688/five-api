@@ -1,22 +1,44 @@
 # Five API
 
-[English](docs/README.en.md) · [运维与升级](docs/OPERATIONS.md) · [兼容矩阵](docs/COMPATIBILITY.md) · [压测报告](docs/BENCHMARK.md) · [更新记录](CHANGELOG.md)
+[English](docs/README.en.md) · [接入 Claude Code/Codex/Cursor](docs/CLIENTS.md) · [运维与升级](docs/OPERATIONS.md) · [兼容矩阵](docs/COMPATIBILITY.md) · [压测报告](docs/BENCHMARK.md) · [路线图](ROADMAP.md) · [更新记录](CHANGELOG.md)
 
 [![CI](https://github.com/timmy1688/five-api/actions/workflows/ci.yml/badge.svg)](https://github.com/timmy1688/five-api/actions/workflows/ci.yml)
 
-自托管的多租户 AI 网关。接入 OpenAI、Claude、Gemini、DeepSeek、通义千问等上游，给客户或部门开户、分配美元额度，账算得准、钱不漏、调用可审计。MIT 许可，可商用，`./service.sh deploy` 一条命令部署。
+**给客户转售 AI 接口、需要按客户精确分账的团队用的自托管网关。**
+
+接入 OpenAI、Claude、Gemini、DeepSeek、通义千问等上游，给每个客户开户、分配美元额度，客户只能花自己的钱，每一笔都能对上。MIT 许可，可商用，`./service.sh deploy` 一条命令部署。
 
 ![概览](docs/images/dashboard.png)
 
-## 为什么选 Five API
+## 钱为什么不会漏
 
-- **余额打不穿**：每个请求按输入加输出上限足额预占，在 MySQL 行锁事务里连同在途请求一起核对租户和 Key 余额。记账不可用直接拒绝，绝不先放行后补账。
-- **同一模型，渠道不同价**：每个渠道按模型售价乘以价格倍率，也可以给单个模型设固定价；客户在 Key 上选择渠道，只在所选渠道间切换，按实际服务的渠道计费。
-- **漏配价格不会白用**：模型没配售价就拒绝请求，只有显式填 0 才免费。
-- **调用可审计，泄密可追查**：按 Key 保存请求内容，自动扫描私钥、AWS、GitHub、Slack 等密钥；员工离职或怀疑泄密时，一键让便宜模型逐条审查这个 Key 最近的请求，生成可下载的审计报告；审过的不重复送审，日志再多也不浪费 token。
-- **上游掉线、Key 失效自动绕开**：5xx、超时、429、上游 Key 失效都会切换渠道，流式请求在首包前切换；连续失败自动熔断。图片、视频等不幂等请求不会被重复提交。
-- **能发现模型被降智**：定时健康检测，另外每天用合成题检查 GPT/Claude 渠道的指令遵循、推理和工具调用，留存历史作为退化信号。
-- **企业功能全部开源**：租户自管 Key、IP 白名单、内容审计、AI 审查都在 MIT 版本里，没有企业版。
+转售最怕的不是慢，而是客户用超了、漏记了、记重了。Five API 在每个环节都选择「先占住钱再放行」：
+
+- **先足额预占，再调上游**：按输入加最大输出估算费用，在 MySQL 行锁事务里连同所有在途请求一起核对 Key 和租户余额，够才放行。多个进程、多个 Key 并发打同一个租户，也不会一起越过余额。记账服务不可用时直接拒绝，不会先放行后补账。
+- **没配价格不放行**：模型没配售价时拒绝请求，不按 0 记账；只有显式填 0 才免费。
+- **价格在请求前锁定**：发出请求前记下当时的售价，请求中途调价不影响这一笔。
+- **扣费、日志一起提交**：Key 扣费、租户扣费、请求日志、日用量在同一个事务里，要么都成功，要么都不写。记账失败后台恢复且只恢复一次；上游结果未知的请求继续占着额度，等人工核对，不会悄悄放掉。
+- **断流也计费**：客户端中途断开，按已经转发的内容计费；上游没返回用量时按内容估算，并在日志里标明用量来源。
+
+实际用量超出预估时照实扣费，不会少收，余额可能出现一次请求范围内的小额负数，例如没设 `max_tokens` 却输出超过 4096 token。要把上限卡死，让客户端设置 `max_tokens`。
+
+### 自己验证
+
+每一条都有对应的自动化测试，CI 每次提交都跑：
+
+| 保证 | 测试 |
+| --- | --- |
+| 用量在预估内时，预占覆盖每一笔扣费；多进程共享余额不超卖 | `test_end_to_end_charge_never_exceeds_the_reservation`、`test_two_workers_never_overspend_a_shared_tenant_budget` |
+| 缺价不放行、不按 0 计 | `test_unpriced_model_does_not_reach_upstream`、`test_selling_quote_never_silently_prices_at_zero` |
+| 价格锁定 | `test_selling_price_is_snapshotted_before_the_upstream_call` |
+| 记账失败恰好恢复一次，结果未知继续占额度 | `test_accounting_rolls_back_and_recovers_exactly_once`、`test_timeout_keeps_unknown_work_occupied` |
+| 断流计费、不重放上游 | `test_real_http_stream_and_client_cancellation_releases_leases`、`test_disconnect_after_first_byte_does_not_replay_upstream` |
+
+```bash
+cd backend && ../.venv/bin/pytest -q tests/test_billing_invariants.py tests/test_billing_reliability.py
+```
+
+压测时会逐笔重算：用日志里的 token 数乘以售价，和实际扣费、Key 已用、租户已用三处对账。模拟环境 8 轮对账全部通过，真实 DeepSeek 渠道 320 笔请求 0 笔不一致，原始数据和重跑命令见 [压测报告](docs/BENCHMARK.md)。
 
 ## 和 new-api、LiteLLM 对比
 
@@ -35,8 +57,13 @@
 
 ## 功能一览
 
+- **同一模型，渠道不同价**：每个渠道按模型售价乘以价格倍率，也可以给单个模型设固定价；客户在 Key 上选择渠道，只在所选渠道间切换，按实际服务的渠道计费。
+- **调用可审计，泄密可追查**：按 Key 保存请求内容，自动扫描私钥、AWS、GitHub、Slack 等密钥；员工离职或怀疑泄密时，一键让便宜模型逐条审查这个 Key 最近的请求，生成可下载的审计报告；审过的不重复送审。
+- **上游掉线、Key 失效自动绕开**：5xx、超时、429、上游 Key 失效都会切换渠道，流式请求在首包前切换；连续失败自动熔断。图片、视频等不幂等请求不会被重复提交。
+- **能发现模型被降智**：定时健康检测，另外每天用合成题检查 GPT/Claude 渠道的指令遵循、推理和工具调用，留存历史作为退化信号。
+- **企业功能全部开源**：租户自管 Key、IP 白名单、内容审计、AI 审查都在 MIT 版本里，没有企业版。
 - **协议**：Anthropic SDK、Claude Code 走 `/v1/messages`，OpenAI SDK、Codex、Cursor 走 `/v1/*`，原生透传不互转。支持 chat、responses、embeddings、图片、语音、rerank、视频。
-- **计费**：输入、缓存读、缓存写、输出四档分别计价，图片、语音、视频可按次计价；Key 扣费、租户扣费、请求日志在同一事务提交。
+- **计费**：输入、缓存读、缓存写、输出四档分别计价，图片、语音、视频可按次计价。
 - **租户**：平台管理员和租户两种角色；租户只能管理自己的 Key，所有查询在服务端校验归属。
 - **路由**：优先级分层，同层按权重、最少在途或最低延迟选路；多 Key 号池、粘性会话、模型回退链。
 - **省钱**：成本洞察按天看缓存命中和节省金额；Anthropic 请求可自动加缓存标记；额度接近上限时自动降级到便宜模型。
@@ -57,7 +84,7 @@
 ## 快速部署
 
 ```bash
-./service.sh deploy   # 构建并启动全部容器
+./service.sh deploy   # 拉取发布镜像 ghcr.io/timmy1688/five-api 并启动全部容器
 ```
 
 打开 `http://服务器IP:8080`，用 `admin` / `admin123` 登录，首次登录会强制改密码。上线前改掉 `docker-compose.yml` 里的数据库密码；需要重启不掉登录、上游 Key 用自有密钥加密时，按文件里的注释填 SECRET_KEY、ENCRYPTION_KEY。**从旧版本升级先看 [运维文档](docs/OPERATIONS.md)**，不能直接替换镜像。
@@ -75,7 +102,7 @@ print(client.chat.completions.create(
 ).choices[0].message.content)
 ```
 
-Anthropic SDK 和 Claude Code 的 `base_url` 填网关根地址。端点和已验证的 SDK 版本见 [兼容矩阵](docs/COMPATIBILITY.md)。
+Anthropic SDK 和 Claude Code 的 `base_url` 填网关根地址。Claude Code、Codex 已实测，配置见 [接入教程](docs/CLIENTS.md)；端点和已验证的 SDK 版本见 [兼容矩阵](docs/COMPATIBILITY.md)。
 
 ## 性能
 
@@ -91,7 +118,7 @@ Anthropic SDK 和 Claude Code 的 `base_url` 填网关根地址。端点和已�
 ## 使用边界
 
 - 没有在线支付、SSO、组织层级和自定义角色。
-- Claude Code、Codex、Cursor 提供配置示例，未做逐版本端到端认证。
+- Claude Code、Codex 只实测了 [接入教程](docs/CLIENTS.md) 中列出的版本；Cursor 需要公网 HTTPS 网关，未实测。
 - 降智检测只是回归信号，不能证明上游真实型号；定时检测的上游费用由平台承担。
 - 计费以上游返回的用量为准，可能与厂商账单口径不同；请同时在上游账户设置预算告警。
 

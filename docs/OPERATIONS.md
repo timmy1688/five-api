@@ -21,7 +21,7 @@
 
 留意磁盘：MySQL 默认保留 30 天 binlog，高流量下增长很快，压测中数万次请求就写出了 1GB。磁盘写满时 MySQL 和 Redis 都停止写入，请求和结算会卡住。生产环境要监控磁盘，空间紧张时可执行 `PURGE BINARY LOGS BEFORE NOW() - INTERVAL 3 DAY` 清理旧 binlog。
 
-- `./service.sh deploy`：`docker compose up -d --build`，不需要预先生成任何配置。
+- `./service.sh deploy`：拉取 Compose 中的发布镜像 `ghcr.io/timmy1688/five-api:<版本>` 并启动，不需要预先生成任何配置。升级时把镜像版本号改成新版本再执行。国内拉取 ghcr.io 较慢时，可在本地 `docker build -t ghcr.io/timmy1688/five-api:<版本> .` 构建同名镜像，部署会直接使用它。
 - 网关对外开放 8080 端口，客户端直连时 Key 的 IP 白名单直接按真实来源 IP 判断。MySQL、Redis 端口只绑定本机。
 - 网关容器无状态，可随时重建。MySQL、Redis 数据位于 `data/mysql`、`data/redis`。
 - `/healthz` 检查 MySQL、Redis；镜像探针 4 秒超时。

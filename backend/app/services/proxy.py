@@ -98,6 +98,30 @@ def extract_openai_usage(data: dict) -> dict:
     }
 
 
+FINAL_EVENT_TYPES = {"message_stop", "response.completed", "response.incomplete"}
+
+
+def is_final_sse_event(line: str) -> bool:
+    """Whether an SSE event ends a successful answer in any supported protocol.
+
+    Clients such as Codex hang up right after it, before the upstream closes the stream.
+    """
+    if "[DONE]" not in line and not any(name in line for name in FINAL_EVENT_TYPES):
+        return False
+    for part in line.splitlines():
+        if not part.startswith("data:"):
+            continue
+        payload = part[5:].strip()
+        if payload == "[DONE]":
+            return True
+        try:
+            data = json.loads(payload)
+        except json.JSONDecodeError:
+            return False
+        return isinstance(data, dict) and data.get("type") in FINAL_EVENT_TYPES
+    return False
+
+
 def sse_billable_text(line: str) -> str:
     """Generated text in one SSE line, including reasoning and tool arguments.
 
@@ -551,7 +575,7 @@ async def stream_with_failover(
     provider: BaseProvider | None = None
     model_actual = model_requested
     data_yielded = False
-    completed = False
+    completed = answered = False
     reported_prompt = reported_output = False
     failed_over = False
     hits = security_hits if security_hits is not None else []
@@ -599,6 +623,7 @@ async def stream_with_failover(
                             if scanner is not None:
                                 remember_hit(hits, scanner.feed(visible_sse_text(line)))
                             yield line
+                            answered = answered or is_final_sse_event(line)
                         break
                     except HTTPException:
                         raise
@@ -671,7 +696,7 @@ async def stream_with_failover(
             )
             # A client disconnect or a missing usage event would bill nothing.
             # Fall back to what was actually forwarded.
-            if not completed and status_code == 200:
+            if not completed and not answered and status_code == 200:
                 status_code, error_origin, error_msg = 499, "client", "Client disconnected"
             if data_yielded and not reported_output:
                 completion_tokens = meter.tokens

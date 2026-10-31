@@ -9,7 +9,7 @@ import pytest
 
 from app.models import APIKey, Channel, ModelGroup, ModelPrice, RequestLog, RequestLogAudit
 from app.services.auth import hash_api_key
-from app.services.proxy import stream_with_failover
+from app.services.proxy import is_final_sse_event, stream_with_failover
 from app.services.settings_service import set_inference_audit_enabled
 from tests.conftest import auth_header
 
@@ -897,3 +897,12 @@ async def test_stream_answered_with_json_error_is_an_error(client):
     log = await RequestLog.get(request_id=resp.headers["x-request-id"])
     assert log.status_code == 502
     assert "bad key" in log.upstream_error
+
+
+async def test_final_sse_events_of_each_protocol():
+    assert is_final_sse_event("data: [DONE]\n\n")
+    assert is_final_sse_event('event: message_stop\ndata: {"type":"message_stop"}\n\n')
+    assert is_final_sse_event('event: response.completed\ndata: {"type":"response.completed","response":{}}\n\n')
+    assert is_final_sse_event('data: {"type":"response.incomplete","response":{}}\n\n')
+    assert not is_final_sse_event('event: response.failed\ndata: {"type":"response.failed"}\n\n')
+    assert not is_final_sse_event('data: {"choices":[{"delta":{"content":"message_stop [DONE]"}}]}\n\n')

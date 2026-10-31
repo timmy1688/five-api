@@ -128,8 +128,10 @@ stop() {
 
 deploy() {
     mkdir -p data/mysql data/redis
-    echo "==> Building and starting gateway, MySQL & Redis..."
-    docker compose up -d --build
+    echo "==> Pulling images and starting gateway, MySQL & Redis..."
+    # A locally built image with the same tag is kept when the registry is unreachable.
+    docker compose pull --ignore-pull-failures
+    docker compose up -d
     echo "==> Gateway: http://127.0.0.1:8080 (first login: admin / admin123)"
 }
 
@@ -171,7 +173,7 @@ usage() {
     cat <<EOF
 Usage: ./service.sh {deploy|install|start|stop|restart|status|logs [backend|frontend]}
 
-  deploy    生产部署：构建并启动网关容器、MySQL、Redis
+  deploy    生产部署：拉取发布镜像并启动网关容器、MySQL、Redis
   install   创建 .venv 并安装后端、前端依赖
   start     启动 MySQL/Redis + 后端(:${BACKEND_PORT}) + 前端(:${FRONTEND_PORT})
   stop      停止后端/前端并关闭 MySQL/Redis

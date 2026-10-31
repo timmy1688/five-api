@@ -74,6 +74,27 @@ async def test_real_http_stream_and_client_cancellation_releases_leases(gateway_
         assert await settlements.occupied("tenant", tenant.id) == 0
 
 
+async def test_hang_up_after_final_event_is_a_success(gateway_url):
+    async def chat():
+        async def events():
+            yield DATA
+            yield USAGE
+            await asyncio.sleep(60)
+        return StreamingResponse(events(), media_type="text/event-stream")
+    async with serve(app_with_chat(chat)) as origin:
+        _, raws = await ready(origin)
+        async with httpx.AsyncClient(trust_env=False, timeout=5) as client:
+            async with client.stream("POST", gateway_url + "/v1/chat/completions",
+                                     json={**BODY, "stream": True}, headers=headers(raws[0])) as stream:
+                async for line in stream.aiter_lines():
+                    if line == "data: [DONE]":
+                        break
+        await eventually(lambda: Settlement.filter(state="settled").exists())
+        log = await RequestLog.get()
+        assert log.status_code == 200 and log.usage_source == "upstream"
+        assert log.cost == Decimal("0.000035")
+
+
 async def test_first_byte_failure_fails_over_with_real_http(gateway_url):
     origin = FastAPI()
     @origin.post("/first/v1/chat/completions")

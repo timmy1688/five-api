@@ -2,6 +2,22 @@
 
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。打 `v*` tag 后，GitHub Actions 会把对应段落发成 Release，并推送镜像到 `ghcr.io/timmy1688/five-api`。
 
+## [Unreleased]
+
+### 修复
+
+- 客户端收到流式结束事件（`[DONE]`、`message_stop`、`response.completed`）后主动断开时，请求日志记为成功，不再记为 499。Codex 每次请求都会这样断开。扣费不受影响，此前也按上游用量计费。
+
+### 部署
+
+- `docker-compose.yml` 改用发布镜像 `ghcr.io/timmy1688/five-api:0.4.0`，`./service.sh deploy` 先拉取再启动，不再本地构建。升级时改镜像版本号；拉取失败时会使用本地已有的同名镜像。发布检查会核对 Compose 镜像版本与代码版本一致。
+
+### 文档
+
+- README 第一屏改为面向转售、精确分账的定位，列出计费保证、对应测试和对账数据，并写明实际用量超出预估时余额可能出现小额负数。
+- 新增 [接入 Claude Code、Codex、Cursor](docs/CLIENTS.md)：Claude Code 2.1.197、Codex 0.164.0 经真实 DeepSeek 渠道实测；Cursor 需要公网 HTTPS 网关，未实测。兼容矩阵同步更新。
+- 新增 [路线图](ROADMAP.md)（发版节奏、近期计划、不做的事、适合新贡献者的任务）、社区文章 [为什么我们的计费不会漏钱](docs/articles/why-billing-does-not-leak.md)，英文 README 补全为与中文版对应的完整内容。Issue 模板加入 Discussions 入口。
+
 ## [0.4.0] - 2026-10-31
 
 ### 功能

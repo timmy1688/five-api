@@ -29,6 +29,8 @@ def main():
     for entry in requirements[0].read_text().splitlines():
         if entry and not entry.startswith("#"):
             assert re.match(r"[A-Za-z0-9_.\[\]-]+==[^\s;]+", entry), f"Unpinned dependency: {entry}"
+    compose = (ROOT / "docker-compose.yml").read_text()
+    assert f"image: ghcr.io/timmy1688/five-api:{version}\n" in compose, "Compose must use the released image"
     content = (ROOT / "Dockerfile").read_text()
     assert content.count("@sha256:") == 2 and "USER 10001:10001" in content and "mirrors.aliyun.com" in content
     print(f"PASS: version {version}, pinned requirements, release documents and image policy")
