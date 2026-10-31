@@ -2,7 +2,7 @@
 
 FastAPI、Tortoise ORM、MySQL 8、Redis 7；Vue 3、Element Plus。开发使用本地 Uvicorn :5002、Vite :5001，只有 MySQL/Redis 为容器。不要把日常开发切换为网关容器。
 
-产品范围、批次与验收见 [开发计划](docs/DEVELOPMENT_PLAN.md)，授权见 [权限设计](docs/PERMISSIONS_DESIGN.md)，操作见 [运维文档](docs/OPERATIONS.md)。
+产品范围、权限与管理 API 见 [设计文档](docs/DESIGN.md)，操作见 [运维文档](docs/OPERATIONS.md)，兼容与压测见 [兼容矩阵](docs/COMPATIBILITY.md)。
 
 ## 常用命令
 
@@ -37,10 +37,10 @@ FastAPI、Tortoise ORM、MySQL 8、Redis 7；Vue 3、Element Plus。开发使用
 
 ## 模型巡检与界面
 
-model_checks 为合成检查，model_monitor 为单进程定时循环，ModelProbe 持久化结果。默认健康 900 秒、GPT/Claude 降智参考 86400 秒，Redis 锁与全局两个并发租约避免重复。不能把模型自报名称或小题分数当成型号证明，也不因能力题失败自动停用渠道。
+model_checks 为合成检查，model_monitor 每个 worker 都运行定时循环、按周期用 Redis 认领执行，ModelProbe 持久化结果。默认健康 900 秒、GPT/Claude 降智参考 86400 秒，Redis 锁与全局两个并发租约避免重复。不能把模型自报名称或小题分数当成型号证明，也不因能力题失败自动停用渠道。
 
 菜单统一在 frontend/src/config/navigation.ts。账号管理包含租户账号、平台管理员。设置分配置、路由、告警、监控四组；结算仅在失败/未知异常时显示处理入口。CSV 账单对账已移除。
 
 ## 变更约定
 
-Python 依赖只有 backend/requirements.txt 一个文件，全部 == 固定版本并审计；Docker 与本地安装均走阿里云源。记录用户可见变化、迁移和兼容边界，更新 CHANGELOG 与计划；发布标签需匹配 0.4.0 等实际版本。测试不得清理其他数据库或 Redis 全库，不记录秘密。详情见 CONTRIBUTING.md。
+Python 依赖只有 backend/requirements.txt 一个文件，全部 == 固定版本并审计；Docker 与本地安装均走阿里云源。记录用户可见变化、迁移和兼容边界，更新 CHANGELOG；发布标签需匹配 0.4.0 等实际版本。测试不得清理其他数据库或 Redis 全库，不记录秘密。详情见 CONTRIBUTING.md。

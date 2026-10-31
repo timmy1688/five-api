@@ -77,9 +77,13 @@ print(client.chat.completions.create(
 
 Anthropic SDK 和 Claude Code 的 `base_url` 填网关根地址。端点和已验证的 SDK 版本见 [兼容矩阵](docs/COMPATIBILITY.md)。
 
+## 性能
+
+用真实 DeepSeek 渠道测试，200 次调用全部成功：直连 DeepSeek 中位耗时 849 毫秒，经过网关 906 毫秒，网关只多约 60 毫秒；每次扣费都和 DeepSeek 返回的用量一致。一台 8 核机器每分钟约能处理 2.6 万次调用，单个租户每分钟约 9000 次。详见 [压测](docs/COMPATIBILITY.md)。
+
 ## 使用边界
 
-- 只支持单进程部署；没有在线支付、SSO、组织层级和自定义角色。
+- 没有在线支付、SSO、组织层级和自定义角色。
 - Claude Code、Codex、Cursor 提供配置示例，未做逐版本端到端认证。
 - 降智检测只是回归信号，不能证明上游真实型号；定时检测的上游费用由平台承担。
 - 计费以上游返回的用量为准，可能与厂商账单口径不同；请同时在上游账户设置预算告警。

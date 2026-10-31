@@ -1,6 +1,6 @@
 # Contributing
 
-Keep changes focused on the lightweight product scope in [the plan](docs/DEVELOPMENT_PLAN.md). Use Python 3.12, Node.js 20.19+ (CI: 24), MySQL 8 and Redis 7.
+Keep changes focused on the lightweight product scope in [the design doc](docs/DESIGN.md). Use Python 3.12, Node.js 20.19+ (CI: 24), MySQL 8 and Redis 7.
 
 ## Local setup
 
@@ -41,7 +41,7 @@ Preserve tenant scope on every query and separate management credentials from in
 
 ## Benchmarks and releases
 
-`python -m scripts.benchmark --requests 200 --concurrency 10` measures a local synthetic upstream directly and through the running gateway. Results include conditions and are not vendor/model performance claims.
+`python -m scripts.real_benchmark --channel <id> --model <model>` steps up streaming concurrency against a real channel, directly and through a multi-worker gateway, and recomputes every charge; it spends a small amount on the upstream. `python -m scripts.benchmark --workers 1,2,4,8` measures gateway capacity with a synthetic upstream. Both create and remove their own tenants and keys; pass `--output` to save the JSON report, and record results in docs/COMPATIBILITY.md.
 
 A release requires passing CI, a matching version/tag, changelog and upgrade notes. Tag publishing builds amd64/arm64 images only after quality checks. Maintainers create release tags; ordinary pushes do not publish a release.
 

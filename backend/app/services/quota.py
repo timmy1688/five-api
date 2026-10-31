@@ -188,9 +188,12 @@ async def _reset_monthly(model) -> int:
 
 
 async def quota_reset_loop():
+    from app.services.cluster import claim
     while True:
         try:
-            await reset_expired_quotas()
+            # Checked every minute so another worker resumes within a minute of the owner stopping.
+            if await claim("quota-reset", 3600):
+                await reset_expired_quotas()
         except Exception:
             logger.exception("Quota reset unavailable")
-        await asyncio.sleep(3600)
+        await asyncio.sleep(60)

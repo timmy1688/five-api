@@ -31,10 +31,11 @@ REQUEST_LATENCY = Histogram(
     buckets=[0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 120, 300],
 )
 
-# 活跃渠道和 Key 数
-ACTIVE_CHANNELS = Gauge("five_active_channels", "Number of enabled channels")
-ACTIVE_KEYS = Gauge("five_active_keys", "Number of enabled API keys")
-SETTLEMENT_WAITING = Gauge("five_settlements_waiting", "Accounting records needing recovery or review", ["state"])
+# 活跃渠道和 Key 数。多 worker 时取最近一次写入的值，结算待处理数只由执行恢复的 worker 更新。
+ACTIVE_CHANNELS = Gauge("five_active_channels", "Number of enabled channels", multiprocess_mode="mostrecent")
+ACTIVE_KEYS = Gauge("five_active_keys", "Number of enabled API keys", multiprocess_mode="mostrecent")
+SETTLEMENT_WAITING = Gauge("five_settlements_waiting", "Accounting records needing recovery or review", ["state"],
+                           multiprocess_mode="mostrecent")
 SETTLEMENT_RETRIES = Counter("five_settlement_retries_total", "Failed accounting attempts", ["error_type"])
 
 

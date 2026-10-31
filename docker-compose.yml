@@ -21,6 +21,8 @@ services:
       # 已保存渠道后再设 ENCRYPTION_KEY，先执行 python -m app.migrate_secrets --from-default 重新加密。
       # SECRET_KEY: random_string
       # ENCRYPTION_KEY: random_string
+      # 默认按 CPU 核数启动 worker（最多 8 个）；内存紧张时调小，Kubernetes 上建议 1 并增加副本。
+      # WORKERS: 4
     stop_grace_period: 40s
     depends_on:
       mysql:
@@ -45,6 +47,8 @@ services:
   mysql:
     image: mysql:8.0
     restart: always
+    # 网关每个 worker 有独立连接池，合计约 200 个连接，默认上限 151 不够。
+    command: --max-connections=500
     environment:
       MYSQL_ROOT_PASSWORD: root_password
       MYSQL_DATABASE: five_api

@@ -1,9 +1,11 @@
 import ipaddress
+import os
 import secrets
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
-from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
+from prometheus_client import CONTENT_TYPE_LATEST, CollectorRegistry, generate_latest
+from prometheus_client.multiprocess import MultiProcessCollector
 from tortoise import connections
 
 from app import dependencies
@@ -57,4 +59,9 @@ async def metrics(request: Request):
         raise HTTPException(
             status_code=403, detail="Use the metrics token from System Settings to scrape remotely"
         )
+    if os.environ.get("PROMETHEUS_MULTIPROC_DIR"):
+        # Each worker writes its own files; aggregate them so one scrape covers every worker.
+        registry = CollectorRegistry()
+        MultiProcessCollector(registry)
+        return PlainTextResponse(generate_latest(registry), media_type=CONTENT_TYPE_LATEST)
     return PlainTextResponse(generate_latest(), media_type=CONTENT_TYPE_LATEST)

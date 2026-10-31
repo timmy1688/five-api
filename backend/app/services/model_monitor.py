@@ -1,6 +1,7 @@
-"""Single-process periodic model probes; SQL history survives restarts."""
+"""Periodic model probes shared by all workers; SQL history survives restarts."""
 import asyncio
 import hashlib
+import json
 import logging
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
@@ -15,7 +16,16 @@ from app.services.model_checks import run_probe, supports_capability
 from app.services.settings_service import gateway_config
 
 logger = logging.getLogger(__name__)
-runtime = {"running": False, "last_sweep_at": None, "next_sweep_at": None}
+SWEEP_SECONDS = 30
+RUNTIME_KEY = "five:model_monitor:runtime"
+
+
+async def scheduler_status() -> dict:
+    """The worker that ran the latest sweep records it; missing for two periods means stopped."""
+    raw = await (await dependencies.get_redis()).get(RUNTIME_KEY)
+    if not raw:
+        return {"running": False, "last_sweep_at": None, "next_sweep_at": None}
+    return {"running": True, **json.loads(raw)}
 
 
 def supports_health(model):
@@ -101,17 +111,20 @@ async def run_due_once(*, now=None, limit=10):
 
 
 async def model_check_loop():
-    runtime["running"] = True
-    try:
-        await asyncio.sleep(15)
-        while True:
-            runtime["last_sweep_at"] = datetime.now(timezone.utc)
-            try:
-                await run_due_once()
-            except Exception:
-                logger.exception("Model check scheduler unavailable")
-            runtime["next_sweep_at"] = datetime.now(timezone.utc) + timedelta(seconds=30)
-            await asyncio.sleep(30)
-    finally:
-        runtime["running"] = False
-        runtime["next_sweep_at"] = None
+    from app.services.cluster import claim
+    await asyncio.sleep(15)
+    while True:
+        try:
+            # Probes also hold per-model locks; the claim keeps the due-list query to one worker.
+            if await claim("model-sweep", SWEEP_SECONDS - 5):
+                started = datetime.now(timezone.utc)
+                try:
+                    await run_due_once()
+                except Exception:
+                    logger.exception("Model check scheduler unavailable")
+                status = {"last_sweep_at": started.isoformat(),
+                          "next_sweep_at": (datetime.now(timezone.utc) + timedelta(seconds=SWEEP_SECONDS)).isoformat()}
+                await (await dependencies.get_redis()).set(RUNTIME_KEY, json.dumps(status), ex=SWEEP_SECONDS * 2 + 15)
+        except Exception:
+            logger.exception("Model check scheduler unavailable")
+        await asyncio.sleep(SWEEP_SECONDS)

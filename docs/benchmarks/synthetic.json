@@ -1,0 +1,186 @@
+{
+  "sixteen_tenants": {
+    "date_utc": "2026-10-31T07:17:33Z",
+    "version": "0.4.0",
+    "python": "3.12.8",
+    "platform": "Linux-5.4.0-216-generic-x86_64-with-glibc2.31",
+    "cpu_count": 8,
+    "tenants": 16,
+    "concurrency": 64,
+    "requests": 4000,
+    "upstream_delay_ms": 5,
+    "load_processes": 4,
+    "conditions": "Gateway, synthetic upstream, load generator, MySQL and Redis share one host; uvicorn --workers N without --reload; synthetic JSON; not production capacity",
+    "direct": {
+      "requests": 4000,
+      "errors": 0,
+      "elapsed_seconds": 0.62,
+      "requests_per_second": 6478.7,
+      "p50_ms": 8.23,
+      "p95_ms": 14.24,
+      "p99_ms": 17.71
+    },
+    "gateway": [
+      {
+        "workers": 1,
+        "requests": 4000,
+        "errors": 0,
+        "elapsed_seconds": 22.66,
+        "requests_per_second": 176.5,
+        "p50_ms": 352.33,
+        "p95_ms": 412.0,
+        "p99_ms": 455.85,
+        "billing": {
+          "settled": 4000,
+          "success_logs": 4000,
+          "open_settlements": 0,
+          "ok": true
+        },
+        "speedup": 1.0
+      },
+      {
+        "workers": 2,
+        "requests": 4000,
+        "errors": 0,
+        "elapsed_seconds": 12.17,
+        "requests_per_second": 328.6,
+        "p50_ms": 147.76,
+        "p95_ms": 292.83,
+        "p99_ms": 337.36,
+        "billing": {
+          "settled": 4000,
+          "success_logs": 4000,
+          "open_settlements": 0,
+          "ok": true
+        },
+        "speedup": 1.86
+      },
+      {
+        "workers": 4,
+        "requests": 4000,
+        "errors": 0,
+        "elapsed_seconds": 12.43,
+        "requests_per_second": 321.7,
+        "p50_ms": 187.87,
+        "p95_ms": 268.77,
+        "p99_ms": 307.96,
+        "billing": {
+          "settled": 4000,
+          "success_logs": 4000,
+          "open_settlements": 0,
+          "ok": true
+        },
+        "speedup": 1.82
+      },
+      {
+        "workers": 8,
+        "requests": 4000,
+        "errors": 0,
+        "elapsed_seconds": 9.39,
+        "requests_per_second": 425.9,
+        "p50_ms": 142.24,
+        "p95_ms": 224.97,
+        "p99_ms": 261.22,
+        "billing": {
+          "settled": 4000,
+          "success_logs": 4000,
+          "open_settlements": 0,
+          "ok": true
+        },
+        "speedup": 2.41
+      }
+    ]
+  },
+  "one_tenant": {
+    "date_utc": "2026-10-31T07:19:41Z",
+    "version": "0.4.0",
+    "python": "3.12.8",
+    "platform": "Linux-5.4.0-216-generic-x86_64-with-glibc2.31",
+    "cpu_count": 8,
+    "tenants": 1,
+    "concurrency": 64,
+    "requests": 4000,
+    "upstream_delay_ms": 5,
+    "load_processes": 4,
+    "conditions": "Gateway, synthetic upstream, load generator, MySQL and Redis share one host; uvicorn --workers N without --reload; synthetic JSON; not production capacity",
+    "direct": {
+      "requests": 4000,
+      "errors": 0,
+      "elapsed_seconds": 0.63,
+      "requests_per_second": 6340.9,
+      "p50_ms": 8.54,
+      "p95_ms": 14.64,
+      "p99_ms": 17.93
+    },
+    "gateway": [
+      {
+        "workers": 1,
+        "requests": 4000,
+        "errors": 0,
+        "elapsed_seconds": 30.37,
+        "requests_per_second": 131.7,
+        "p50_ms": 483.14,
+        "p95_ms": 528.82,
+        "p99_ms": 552.39,
+        "billing": {
+          "settled": 4000,
+          "success_logs": 4000,
+          "open_settlements": 0,
+          "ok": true
+        },
+        "speedup": 1.0
+      },
+      {
+        "workers": 2,
+        "requests": 4000,
+        "errors": 0,
+        "elapsed_seconds": 28.74,
+        "requests_per_second": 139.2,
+        "p50_ms": 460.22,
+        "p95_ms": 502.28,
+        "p99_ms": 525.86,
+        "billing": {
+          "settled": 4000,
+          "success_logs": 4000,
+          "open_settlements": 0,
+          "ok": true
+        },
+        "speedup": 1.06
+      },
+      {
+        "workers": 4,
+        "requests": 4000,
+        "errors": 0,
+        "elapsed_seconds": 27.43,
+        "requests_per_second": 145.8,
+        "p50_ms": 435.7,
+        "p95_ms": 460.3,
+        "p99_ms": 470.52,
+        "billing": {
+          "settled": 4000,
+          "success_logs": 4000,
+          "open_settlements": 0,
+          "ok": true
+        },
+        "speedup": 1.11
+      },
+      {
+        "workers": 8,
+        "requests": 4000,
+        "errors": 0,
+        "elapsed_seconds": 26.27,
+        "requests_per_second": 152.3,
+        "p50_ms": 417.74,
+        "p95_ms": 435.15,
+        "p99_ms": 444.21,
+        "billing": {
+          "settled": 4000,
+          "success_logs": 4000,
+          "open_settlements": 0,
+          "ok": true
+        },
+        "speedup": 1.16
+      }
+    ]
+  }
+}

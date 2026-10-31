@@ -122,8 +122,12 @@ async def _probe_channel(channel) -> bool:
 
 
 async def health_check_loop() -> None:
-    """后台循环：只探测已熔断/冷却的渠道，避免健康检查产生持续费用。"""
+    """后台循环：只探测已熔断/冷却的渠道，避免健康检查产生持续费用。
+
+    每个渠道每个周期只由抢到令牌的一个 worker 探测，多个 worker 自然分摊。
+    """
     from app.models import Channel
+    from app.services.cluster import claim
 
     while True:
         try:
@@ -137,6 +141,8 @@ async def health_check_loop() -> None:
             channels = await Channel.filter(is_enabled=True)
             for channel in channels:
                 if await is_channel_healthy(channel.id):
+                    continue
+                if not await claim(f"channel-probe:{channel.id}", interval * 0.9):
                     continue
                 if await _probe_channel(channel):
                     await record_success(channel.id)

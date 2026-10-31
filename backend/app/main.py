@@ -14,13 +14,19 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
 async def init_admin():
+    from tortoise.exceptions import IntegrityError
     from app.models import User
     if not await User.exists(role="platform_admin"):
-        await User.create(
-            username=settings.INIT_ADMIN_USERNAME,
-            hashed_password=pwd_context.hash(settings.INIT_ADMIN_PASSWORD),
-            role="platform_admin", must_change_password=True,
-        )
+        try:
+            await User.create(
+                username=settings.INIT_ADMIN_USERNAME,
+                hashed_password=pwd_context.hash(settings.INIT_ADMIN_PASSWORD),
+                role="platform_admin", must_change_password=True,
+            )
+        except IntegrityError:
+            # Another worker starting at the same time created it.
+            if not await User.exists(role="platform_admin"):
+                raise
 
 
 @asynccontextmanager
@@ -41,15 +47,21 @@ async def lifespan(app: FastAPI):
         from app.services.metrics import ACTIVE_CHANNELS, ACTIVE_KEYS
         from app.services.settlements import recovery_loop
         from app.services.model_monitor import model_check_loop
+        from app.services import cluster
         from app.models import Channel, APIKey
         ACTIVE_CHANNELS.set(await Channel.filter(is_enabled=True).count())
         ACTIVE_KEYS.set(await APIKey.filter(is_enabled=True).count())
-        reset_task = asyncio.create_task(quota_reset_loop())
-        health_task = asyncio.create_task(health_check_loop())
-        cleanup_task = asyncio.create_task(log_cleanup_loop())
-        settlement_task = asyncio.create_task(recovery_loop())
-        monitor_task = asyncio.create_task(model_check_loop())
-        tasks = (reset_task, health_task, cleanup_task, settlement_task, monitor_task)
+        # Announce this worker before it takes requests. Takeover also waits PROCESS_STALE_SECONDS
+        # after a reservation, so the heartbeat loop can still recover from a Redis outage here.
+        try:
+            await cluster.beat()
+        except Exception:
+            import logging
+            logging.getLogger(__name__).exception("Worker heartbeat unavailable at startup")
+        tasks = tuple(asyncio.create_task(loop()) for loop in (
+            cluster.heartbeat_loop, quota_reset_loop, health_check_loop, log_cleanup_loop,
+            recovery_loop, model_check_loop,
+        ))
         try:
             yield
         finally:
@@ -62,6 +74,7 @@ async def lifespan(app: FastAPI):
                 async with asyncio.timeout(10):
                     await drain_alerts()
                     await recover_once()
+                    await cluster.leave()
             except Exception:
                 import logging
                 logging.getLogger(__name__).exception("Shutdown recovery incomplete; durable records remain for restart")

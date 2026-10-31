@@ -18,8 +18,12 @@ class Settings(BaseSettings):
     MYSQL_USER: str = "five"
     MYSQL_PASSWORD: str = "five_password"
     MYSQL_DATABASE: str = "five_api"
-    # Each inference request runs a few dozen statements; the driver default of 5 connections queues concurrent calls.
-    MYSQL_POOL_SIZE: int = 50
+    # Uvicorn worker processes sharing this database; the image entrypoint sets it.
+    WORKERS: int = 1
+    # Per worker. Unset keeps workers x pool within about 200 connections, at most 50 each.
+    MYSQL_POOL_SIZE: int = 0
+    # A worker whose heartbeat is older than this is treated as exited.
+    PROCESS_STALE_SECONDS: int = 60
 
     REDIS_URL: str = "redis://127.0.0.1:6379/0"
 
@@ -43,6 +47,12 @@ class Settings(BaseSettings):
         return value
 
     @property
+    def mysql_pool_size(self) -> int:
+        if self.MYSQL_POOL_SIZE > 0:
+            return self.MYSQL_POOL_SIZE
+        return max(10, min(50, 200 // max(1, self.WORKERS)))
+
+    @property
     def database_url(self) -> str:
         return (
             f"mysql://{quote(self.MYSQL_USER, safe='')}:{quote(self.MYSQL_PASSWORD, safe='')}"
@@ -60,7 +70,7 @@ settings = Settings()
 
 TORTOISE_ORM = {
     "connections": {
-        "default": f"{settings.database_url}?minsize=5&maxsize={settings.MYSQL_POOL_SIZE}",
+        "default": f"{settings.database_url}?minsize=5&maxsize={settings.mysql_pool_size}",
     },
     "apps": {
         "models": {

@@ -157,11 +157,13 @@ async def cleanup_old_logs(days: int | None = None) -> int:
 
 
 async def log_cleanup_loop() -> None:
-    """后台循环：每天清理一次过期日志。"""
+    """后台循环：所有 worker 合计每天清理一次过期日志。"""
+    from app.services.cluster import claim
     while True:
-        await asyncio.sleep(86400)
+        await asyncio.sleep(600)
         try:
-            await cleanup_old_logs()
+            if await claim("log-cleanup", 86400):
+                await cleanup_old_logs()
         except asyncio.CancelledError:
             return
         except Exception:

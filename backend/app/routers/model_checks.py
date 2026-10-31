@@ -12,7 +12,7 @@ from app.services.concurrency import ConcurrencyExceeded
 from app.services.management_events import record_event
 from app.services.model_checks import run_probe, probe_response, supports_capability
 from app.services.rate_limit import RPM_CHECK_SCRIPT
-from app.services.model_monitor import probe_slot, supports_health, runtime
+from app.services.model_monitor import probe_slot, scheduler_status, supports_health
 from app.services.settings_service import gateway_config, patch_gateway_config
 
 router = APIRouter(prefix="/api/models", tags=["model checks"])
@@ -70,7 +70,7 @@ class CheckSettings(StrictModel):
 
 @router.get("/check-settings")
 async def check_settings(_: User = Depends(require_platform_admin)):
-    return {"config": (await gateway_config())["model_checks"], "scheduler": runtime}
+    return {"config": (await gateway_config())["model_checks"], "scheduler": await scheduler_status()}
 
 
 @router.put("/check-settings")
@@ -79,4 +79,4 @@ async def save_check_settings(body: CheckSettings, actor: User = Depends(require
     async with in_transaction():
         config = await patch_gateway_config({"model_checks": body.model_dump()})
         await record_event(actor, "model.check_settings", 0, 0, body.model_dump())
-    return {"config": config["model_checks"], "scheduler": runtime}
+    return {"config": config["model_checks"], "scheduler": await scheduler_status()}

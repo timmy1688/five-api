@@ -3,19 +3,21 @@ import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
-from uuid import uuid4
 
 from tortoise.exceptions import IntegrityError
 from tortoise.expressions import F
 from tortoise.functions import Sum
 from tortoise.transactions import in_transaction
 
+from app.config import settings
 from app.models import APIKey, RequestLog, Settlement, Tenant
+from app.services import cluster
+from app.services.cluster import OWNER_ID
 from app.services.logging_service import save_request_log, observe_request_log
 from app.services.redaction import redact
 
 logger = logging.getLogger(__name__)
-OWNER_ID = str(uuid4())
+RECOVERY_INTERVAL = 2
 OCCUPIED_STATES = ("reserved", "pending", "failed", "uncertain")
 MAX_ATTEMPTS = 8
 # Fields that older releases wrote into pending payloads and request logs no longer have.
@@ -63,7 +65,8 @@ async def mark_pending(request_id: str, payload: dict, cost: Decimal | None, err
                "last_error": error[:128], "next_retry_at": None}
     if cost is not None:
         updates["occupied"] = cost
-    updated = await Settlement.filter(request_id=request_id, state="reserved").update(**updates)
+    # Uncertain covers a worker presumed exited that later reports its usage; the actual usage then settles.
+    updated = await Settlement.filter(request_id=request_id, state__in=("reserved", "uncertain")).update(**updates)
     if not updated and not await Settlement.exists(request_id=request_id, state__in=("pending", "settled", "failed")):
         raise RuntimeError("Reservation missing while persisting usage")
 
@@ -153,11 +156,47 @@ async def note_failure(request_id: str, exc: Exception) -> None:
     logger.error("Settlement pending request_id=%s attempt=%d error=%s", request_id, attempts, type(exc).__name__)
 
 
-async def recover_once() -> int:
-    now = datetime.now(timezone.utc)
+async def flush_unsaved() -> None:
+    """Usage this worker failed to persist lives only in its memory, so every worker retries its own."""
     for request_id, (payload, cost, error) in list(_unsaved.items()):
         await mark_pending(request_id, payload, cost, error)
         _unsaved.pop(request_id, None)
+
+
+async def recover_orphans(now: datetime | None = None) -> int:
+    """Take over reservations of workers whose heartbeat has expired.
+
+    Undispatched work never reached the upstream and is released. Dispatched work may have
+    been charged upstream, so it stays occupied as uncertain for reconciliation.
+    """
+    now = now or datetime.now(timezone.utc)
+    cutoff = now - timedelta(seconds=settings.PROCESS_STALE_SECONDS)
+    owners = sorted(set(await Settlement.filter(state="reserved", created_at__lt=cutoff)
+                        .exclude(owner_id=OWNER_ID).values_list("owner_id", flat=True)))
+    if not owners:
+        return 0
+    try:
+        live = await cluster.live_owners(owners)
+    except Exception:
+        logger.exception("Worker heartbeats unavailable; reservations kept")
+        return 0
+    exited = [owner for owner in owners if owner not in live]
+    if not exited:
+        return 0
+    released = await Settlement.filter(state="reserved", dispatched=False, owner_id__in=exited,
+                                       created_at__lt=cutoff).update(state="released", occupied=0)
+    uncertain = await Settlement.filter(state="reserved", dispatched=True, owner_id__in=exited,
+                                        created_at__lt=cutoff).update(
+        state="uncertain", last_error="Process exited before usage was persisted")
+    if released or uncertain:
+        logger.warning("Took over %d released and %d uncertain reservations from exited workers",
+                       released, uncertain)
+    return released + uncertain
+
+
+async def recover_once() -> int:
+    now = datetime.now(timezone.utc)
+    await flush_unsaved()
     rows = await Settlement.filter(state="pending").order_by("id").limit(100)
     completed = 0
     for record in rows:
@@ -182,17 +221,13 @@ async def recover_once() -> int:
 
 
 async def recovery_loop():
-    # A previous process may have called the upstream but crashed before saving usage.
-    # Retain its estimate for manual reconciliation; do not expire it as free capacity.
-    initialized = False
     while True:
         try:
-            if not initialized:
-                await Settlement.filter(state="reserved", dispatched=False).exclude(owner_id=OWNER_ID).update(state="released", occupied=0)
-                await Settlement.filter(state="reserved", dispatched=True).exclude(owner_id=OWNER_ID).update(
-                    state="uncertain", last_error="Process exited before usage was persisted")
-                initialized = True
-            await recover_once()
+            await flush_unsaved()
+            # Settlement rows are locked, so an overlapping run only wastes work; the claim avoids it.
+            if await cluster.claim("settlement-recovery", RECOVERY_INTERVAL):
+                await recover_orphans()
+                await recover_once()
         except Exception:
             logger.exception("Settlement recovery unavailable")
-        await asyncio.sleep(2)
+        await asyncio.sleep(RECOVERY_INTERVAL)

@@ -6,7 +6,20 @@
 
 发布使用根目录 Dockerfile 与 Compose。镜像基础层固定摘要，Python 依赖全部固定在 backend/requirements.txt，pip 与 npm 分别走阿里云 PyPI 镜像和 npmmirror，运行用户为 UID/GID 10001。
 
-只运行一个 Uvicorn worker：结算恢复与定时巡检未设计为多进程调度。单进程是异步的，等待上游时不占 CPU，并发流式连接数不受进程数限制；瓶颈是每个请求约 7 毫秒的网关自身 CPU（鉴权、限额、预占与结算 SQL），实测约 120 请求/秒，即每分钟 7000 次左右。超过这个量级再考虑多进程。
+### 多进程
+
+镜像以 `uvicorn --workers N` 启动多个进程共享同一端口，worker 退出由 Uvicorn 自动拉起。N 默认为容器可用 CPU 核数，最多 8；在 Compose gateway 的 environment 填 `WORKERS` 可改。Kubernetes 等按副本扩容的环境建议 `WORKERS: 1`，多开副本。
+
+- 所有限额、预占与扣费都在 MySQL 行锁与 Redis 中完成，多个 worker、多个容器之间结果一致，不会多扣或超额。
+- 每个 worker 在 Redis 写 `five:process:<id>` 心跳（默认 60 秒过期，`PROCESS_STALE_SECONDS`）。worker 崩溃后，其他 worker 接管它留下的预占：未发往上游的释放额度；已发往上游的标为未知结果并继续占用，等待核对，迟到的用量仍按实际金额结算。Redis 不可用时不接管。
+- 结算恢复、额度重置、日志清理、模型巡检和渠道探测用 Redis `SET NX` 按周期认领，同一周期只有一个 worker 执行。
+- 所有 worker 必须使用同一个 SECRET_KEY：不填时入口脚本在容器启动时随机生成一个并传给全部 worker，重启容器后仍需重新登录。
+- 每个 worker 有独立的 MySQL 连接池，默认上限 `200 / WORKERS`（10–50 之间），可用 `MYSQL_POOL_SIZE` 指定。Compose 中的 MySQL 设为 `--max-connections=500`；使用外部 MySQL 时确保 `max_connections` ≥ 容器数 × WORKERS × 连接池上限再加余量。
+- `/metrics` 汇总全部 worker（`PROMETHEUS_MULTIPROC_DIR`，镜像已设置）。
+
+性能见 [压测](COMPATIBILITY.md)：模拟环境下 8 核机器每分钟约 2.6 万次；同一租户的扣费要排队，单个租户每分钟约 9000 次，不随 worker 数增加。真实 DeepSeek 渠道下网关让首字只慢约 20 毫秒以内。
+
+留意磁盘：MySQL 默认保留 30 天 binlog，高流量下增长很快，压测中数万次请求就写出了 1GB。磁盘写满时 MySQL 和 Redis 都停止写入，请求和结算会卡住。生产环境要监控磁盘，空间紧张时可执行 `PURGE BINARY LOGS BEFORE NOW() - INTERVAL 3 DAY` 清理旧 binlog。
 
 - `./service.sh deploy`：`docker compose up -d --build`，不需要预先生成任何配置。
 - 网关对外开放 8080 端口，客户端直连时 Key 的 IP 白名单直接按真实来源 IP 判断。MySQL、Redis 端口只绑定本机。
