@@ -2,7 +2,7 @@
 
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。打 `v*` tag 后，GitHub Actions 会把对应段落发成 Release，并推送镜像到 `ghcr.io/timmy1688/five-api`。
 
-## [0.4.0] - 未发布
+## [0.4.0] - 2026-10-31
 
 ### 功能
 
