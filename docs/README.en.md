@@ -1,6 +1,6 @@
 # Five API
 
-[中文](../README.md) · [Operations](OPERATIONS.md) · [Compatibility](COMPATIBILITY.md) · [Contributing](../CONTRIBUTING.md)
+[中文](../README.md) · [Operations](OPERATIONS.md) · [Compatibility](COMPATIBILITY.md) · [Benchmarks (Chinese)](BENCHMARK.md) · [Contributing](../CONTRIBUTING.md)
 
 A lightweight, MIT-licensed AI gateway for self-hosted commercial deployments. It forwards OpenAI and Anthropic wire protocols and includes a Vue console.
 

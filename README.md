@@ -1,6 +1,6 @@
 # Five API
 
-[English](docs/README.en.md) · [运维与升级](docs/OPERATIONS.md) · [兼容矩阵](docs/COMPATIBILITY.md) · [更新记录](CHANGELOG.md)
+[English](docs/README.en.md) · [运维与升级](docs/OPERATIONS.md) · [兼容矩阵](docs/COMPATIBILITY.md) · [压测报告](docs/BENCHMARK.md) · [更新记录](CHANGELOG.md)
 
 [![CI](https://github.com/timmy1688/five-api/actions/workflows/ci.yml/badge.svg)](https://github.com/timmy1688/five-api/actions/workflows/ci.yml)
 
@@ -79,7 +79,14 @@ Anthropic SDK 和 Claude Code 的 `base_url` 填网关根地址。端点和已�
 
 ## 性能
 
-用真实 DeepSeek 渠道测试，200 次调用全部成功：直连 DeepSeek 中位耗时 849 毫秒，经过网关 906 毫秒，网关只多约 60 毫秒；每次扣费都和 DeepSeek 返回的用量一致。一台 8 核机器每分钟约能处理 2.6 万次调用，单个租户每分钟约 9000 次。详见 [压测](docs/COMPATIBILITY.md)。
+一台 8 核 16 GB 机器上的压测结果，模拟环境与真实 DeepSeek 渠道都测过，每轮逐笔核对扣费全部一致：
+
+| 测试 | 结果 |
+|---|---|
+| 模拟环境处理上限 | 多个租户合计每分钟约 2.6 万次（8 个进程）；单个租户约 9000 次 |
+| 真实 DeepSeek，同时 10–50 个流式请求 | 全部成功，首字只比直连慢 6–19 毫秒 |
+
+测试条件、各进程数和各并发的完整数据见 [压测报告](docs/BENCHMARK.md)。
 
 ## 使用边界
 
