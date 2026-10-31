@@ -1,30 +1,49 @@
+<div align="center">
+
 # Five API
 
-[中文](../README.md) · [Clients (Chinese)](CLIENTS.md) · [Operations (Chinese)](OPERATIONS.md) · [Compatibility (Chinese)](COMPATIBILITY.md) · [Benchmarks (Chinese)](BENCHMARK.md) · [Roadmap (Chinese)](../ROADMAP.md) · [Changelog](../CHANGELOG.md) · [Contributing](../CONTRIBUTING.md)
+**A self-hosted AI gateway for handing out AI budgets to others and accounting for every charge**
+
+<a href="../README.md">简体中文</a> | <strong>English</strong>
 
 [![CI](https://github.com/timmy1688/five-api/actions/workflows/ci.yml/badge.svg)](https://github.com/timmy1688/five-api/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/timmy1688/five-api?color=brightgreen)](https://github.com/timmy1688/five-api/releases/latest)
+[![License](https://img.shields.io/github/license/timmy1688/five-api?color=brightgreen)](../LICENSE)
+[![Image](https://img.shields.io/badge/image-ghcr.io-blue)](https://github.com/timmy1688/five-api/pkgs/container/five-api)
 
-**A self-hosted AI gateway for teams that resell AI APIs to their own customers and need every customer billed exactly.**
+[Clients](CLIENTS.md) · [Operations](OPERATIONS.md) · [Compatibility](COMPATIBILITY.md) · [Benchmarks](BENCHMARK.md) · [Roadmap](../ROADMAP.md) · [Changelog](../CHANGELOG.md) (linked documents are in Chinese)
 
-Connect OpenAI, Claude, Gemini, DeepSeek, Qwen and other upstreams, open an account for each customer with a USD budget, and let each customer spend only their own money, with every charge accounted for. MIT licensed, free for commercial use, deployed with one command.
+</div>
+
+---
+
+## About
+
+Five API connects OpenAI, Claude, Gemini, DeepSeek, Qwen and other upstreams. The platform opens an account for each tenant with a USD budget; tenants manage their own keys, can spend only their own budget, and every charge is accounted for. MIT licensed with no enterprise edition, deployed with `./service.sh deploy`.
+
+| Use case | Tenants are | Mainly used |
+| --- | --- | --- |
+| Reselling | Your customers | Full reservation without overselling, no unpriced requests, per-channel prices, per-request reconciliation |
+| Inside a company | Departments, teams or projects | Department budgets and chargeback, rate limits, request audit and leak investigation, degradation checks |
+
+It is not a public relay: there is no self sign-up or online top-up, and accounts are opened by the platform. Nor does it aim to support the most providers; getting the money right comes first.
 
 ![Dashboard](images/dashboard.png)
 
 ## Why the money does not leak
 
-When you resell, the costly failures are customers spending past their budget, calls that are never billed, and calls billed twice. Five API reserves the money first and only then lets the request through:
+Whether you bill customers or charge back departments, the costly failures are budgets overspent, calls never billed and calls billed twice. Five API reserves the money first and only then lets the request through:
 
-- **Reserve in full before calling the upstream.** The cost of the input plus the maximum output is estimated and checked against the key and tenant balance, together with every in-flight request, inside a MySQL row-locked transaction. Concurrent requests from several workers and keys cannot jointly spend past a balance. If accounting is unavailable the request is refused; nothing is let through to be billed later.
+- **Reserve in full before calling the upstream.** The cost of the input plus the maximum output is checked against the key and tenant balance, together with every in-flight request, inside a MySQL row-locked transaction. Concurrent requests from several workers and keys cannot jointly spend past a balance. If accounting is unavailable the request is refused, never let through to be billed later.
 - **No price, no request.** A model without a selling price is rejected instead of billed at zero. Only an explicit zero price makes it free.
-- **The price is fixed before dispatch.** The selling price is recorded before the upstream call, so changing prices mid-request does not affect it.
-- **Charges and logs commit together.** Key debit, tenant debit, request log and daily usage commit in one transaction or not at all. Failed accounting is recovered in the background exactly once. Requests with an unknown upstream outcome keep their reservation until someone reviews them.
-- **Disconnected streams are billed.** If the client hangs up mid-stream, what was already forwarded is billed. When the upstream reports no usage, it is estimated from the content and the log records the usage source.
+- **The price is fixed before dispatch**, so changing prices mid-request does not affect it.
+- **Charges and logs commit together.** Key debit, tenant debit, request log and daily usage commit in one transaction. Failed accounting is recovered exactly once; requests with an unknown upstream outcome keep their reservation until reviewed.
+- **Disconnected streams are billed** for what was forwarded. Missing upstream usage is estimated from the content, and the log records the usage source.
 
-Actual usage above the estimate is still charged in full, never under-billed, so a balance can go slightly negative by at most one request, for example when a request sets no `max_tokens` and the reply exceeds the 4096-token default. Have clients set `max_tokens` for a hard cap.
+Usage above the estimate is still charged in full, never under-billed, so a balance can go slightly negative by at most one request, for example when a request sets no `max_tokens` and the reply exceeds the 4096-token default. Have clients set `max_tokens` for a hard cap.
 
-### Verify it yourself
-
-Each guarantee has automated tests that CI runs on every push:
+<details>
+<summary><b>Verify it yourself</b>: each guarantee has automated tests that CI runs on every push</summary>
 
 | Guarantee | Tests |
 | --- | --- |
@@ -40,11 +59,13 @@ cd backend && ../.venv/bin/pytest -q tests/test_billing_invariants.py tests/test
 
 The benchmarks recompute every charge from the logged tokens and the price and reconcile it with the charge, key usage and tenant usage. All 8 simulated rounds pass, and 320 requests through a real DeepSeek channel show 0 mismatches. Raw data and commands are in the [benchmark report](BENCHMARK.md).
 
+</details>
+
 ## Compared with new-api and LiteLLM
 
 | | Five API | [new-api](https://github.com/QuantumNous/new-api) | [LiteLLM](https://github.com/BerriAI/litellm) |
 |---|---|---|---|
-| Focus | Provisioned accounts, per-customer billing | Public relay with self sign-up and online top-up | Internal enterprise egress, 100+ providers |
+| Focus | Provisioned accounts, billing per customer or department | Public relay with self sign-up and online top-up | Internal enterprise egress, 100+ providers |
 | Reservation | Input plus output cap reserved in full, checked in a MySQL transaction | Only estimated input reserved; skipped when the balance exceeds 10 USD | Relies on Redis; hard limits need fail-closed enabled separately |
 | Unpriced model | Request refused | Price error returned | Allowed and billed at 0 |
 | Request audit | Saved per key, secret scanning, AI review report | Request content not stored; viewing prompts is [not planned](https://github.com/QuantumNous/new-api/issues/7609) | Prompt logging optional; secret detection is [enterprise](https://docs.litellm.ai/docs/enterprise) |
@@ -55,19 +76,32 @@ Based on public documentation and issues as of October 2026. For new-api's reser
 
 **When to choose something else**: for self sign-up, online payment or redeem codes, use new-api. For Bedrock, Vertex and many other providers or protocol translation, use LiteLLM. Multi-machine high availability and SSO are not supported by Five API yet.
 
-## Features
+## Capabilities
 
-- **Per-channel prices for the same model.** Each channel bills the model's selling price times its price multiplier, or a fixed price per model. A key can be bound to chosen channels: failover stays inside them and each request is billed at the channel that served it.
-- **Auditable calls.** Request excerpts are saved per key (never replies) and scanned for private keys and AWS, GitHub and Slack tokens without blocking calls. When someone leaves or a leak is suspected, a cheap model reviews the key's latest requests one by one and produces a downloadable report; reviewed requests are not sent again.
-- **Failover.** 5xx, timeouts, 429 and revoked upstream keys switch channels; streams switch only before the first byte. Repeated failures open a circuit breaker. Non-idempotent requests such as images and videos are never resubmitted.
-- **Degradation signals.** Periodic health checks, plus a daily synthetic suite for GPT/Claude channels covering instruction following, reasoning and tool use, with history kept. These checks cannot prove model identity.
-- **No enterprise edition.** Tenant-managed keys, IP allowlists, content audit and AI review are all MIT.
-- **Protocols.** Anthropic SDK and Claude Code use `/v1/messages`; OpenAI SDK, Codex and Cursor use `/v1/*`. Requests pass through natively without protocol translation. Chat, responses, embeddings, images, audio, rerank and video are supported.
-- **Billing.** Input, cache read, cache write and output are priced separately; images, audio and video can be priced per call.
-- **Tenants.** Two fixed roles, platform administrator and tenant. Tenants manage only their own keys, and every query is scoped on the server.
-- **Routing.** Priority tiers, then weight, least in-flight or lowest latency; multi-key pools, sticky sessions and model fallback chains.
-- **Security.** Upstream keys are encrypted at rest with an optional master key kept apart from the JWT key and outside the database. API keys are shown once.
-- **Console.** Vue 3 console in Chinese and English.
+| Area | What it does |
+| --- | --- |
+| Billing | Input, cache read, cache write and output priced separately; images, audio and video per call. Each channel can price the same model differently (selling price × channel multiplier, or a fixed price), billed at the channel that served the request |
+| Tenants | Two fixed roles, platform administrator and tenant. Tenants manage their own keys, IP allowlists, RPM/TPM/concurrency and budgets; every query is scoped on the server |
+| Routing | Priority tiers, then weight, least in-flight or lowest latency; multi-key pools, sticky sessions, model fallback chains; keys can be bound to chosen channels |
+| Failover | 5xx, timeouts, 429 and revoked upstream keys switch channels; streams switch only before the first byte; circuit breaker; non-idempotent requests such as images and videos are never resubmitted |
+| Audit | Request excerpts saved per key and scanned for private keys and AWS, GitHub and Slack tokens; a cheap model can review a key's requests and produce a downloadable report |
+| Model quality | Periodic health checks, plus a daily synthetic suite for GPT/Claude channels covering instruction following, reasoning and tool use |
+| Cost | Daily cache hit and savings insights; automatic Anthropic cache markers; automatic downgrade to a cheaper model near the budget |
+| Security | Upstream keys encrypted at rest with an optional master key kept apart from the JWT key and outside the database; API keys shown once |
+| Console | Vue 3, Chinese and English |
+
+### Endpoints
+
+Requests pass through natively without protocol translation, so usage matches the upstream.
+
+| Type | Endpoints |
+| --- | --- |
+| OpenAI Chat / Responses | `POST /v1/chat/completions`, `POST /v1/responses` |
+| Anthropic Messages | `POST /v1/messages`, `POST /v1/messages/count_tokens` |
+| Embeddings / rerank | `POST /v1/embeddings`, `POST /v1/rerank` |
+| Images / audio | `/v1/images/*`, `/v1/audio/speech`, `/v1/audio/transcriptions`, `/v1/audio/translations` |
+| Video | `/v1/videos` create, query, download, delete, remix; tasks isolated per tenant |
+| Models | `GET /v1/models`, returning only the models this key can use |
 
 ## Screenshots
 
@@ -79,30 +113,37 @@ Based on public documentation and issues as of October 2026. For new-api's reser
 | **Request logs** | **Audit report** |
 | ![Request logs](images/logs.png) | ![Audit](images/audit.png) |
 
-## Deploy
+## Quick start
+
+### Deploy
+
+Requires Docker and Docker Compose; the image supports amd64 and arm64:
 
 ```bash
-./service.sh deploy   # pulls ghcr.io/timmy1688/five-api and starts all containers
+git clone https://github.com/timmy1688/five-api.git && cd five-api
+./service.sh deploy   # pulls ghcr.io/timmy1688/five-api and starts the gateway, MySQL and Redis
 ```
 
-Open `http://SERVER_IP:8080` and sign in as `admin` / `admin123`; a password change is required on first login. These credentials are only used when no administrator exists yet.
+Open `http://SERVER_IP:8080` and sign in as `admin` / `admin123`; a password change is required on first login. Switch the console to English with the 中文 / EN toggle on the login page or in the header.
 
-Before production, change the database passwords in `docker-compose.yml`. SECRET_KEY and ENCRYPTION_KEY are optional: without them logins end on restart and upstream keys are encrypted with a built-in public key. Set your own, as the comments in the file describe. To upgrade, change the image version in `docker-compose.yml` and run `./service.sh deploy` again; **read the [operations guide](OPERATIONS.md) before upgrading from an older release**, because migrations may be required.
+### First request
 
-The image supports amd64 and arm64, runs as a non-root user and starts one worker per CPU core (up to 8). Set `WORKERS` to change it.
+1. Add an upstream under Channels with its key and models, then test it.
+2. Set a price under Selling Prices. Models without a price are refused.
+3. Open a tenant under Tenant accounts with a budget. The tenant signs in and creates a key under API Keys; it is shown once.
+4. Point clients at the gateway: `http://SERVER_IP:8080/v1` for OpenAI protocol, `http://SERVER_IP:8080` for Anthropic protocol.
 
-## Connect clients
+List the models the key can use, then send a request:
 
-Add channels and selling prices, then create tenant accounts. Tenants sign in and create keys; clients only change the base URL.
-
-```python
-from openai import OpenAI
-
-client = OpenAI(api_key="sk-your-gateway-key", base_url="https://ai.example.com/v1")
-print(client.chat.completions.create(
-    model="gpt-5.6", messages=[{"role": "user", "content": "Hello"}],
-).choices[0].message.content)
+```bash
+export FIVE_API_KEY=sk-...
+curl http://localhost:8080/v1/models -H "Authorization: Bearer $FIVE_API_KEY"
+curl http://localhost:8080/v1/chat/completions \
+  -H "Authorization: Bearer $FIVE_API_KEY" -H "Content-Type: application/json" \
+  -d '{"model":"deepseek-v4-flash","max_tokens":64,"messages":[{"role":"user","content":"Hello"}]}'
 ```
+
+### Claude Code and Codex
 
 **Claude Code** (tested with 2.1.197) needs an Anthropic-protocol channel. In `~/.claude/settings.json`, using the gateway root without `/v1`:
 
@@ -130,7 +171,26 @@ env_key = "FIVE_API_KEY"
 wire_api = "responses"
 ```
 
-**Cursor** calls a custom base URL from Cursor's servers, so the gateway needs a public HTTPS address. It has not been tested end to end. Details and troubleshooting are in the [client guide](CLIENTS.md).
+**Cursor** calls a custom base URL from Cursor's servers, so the gateway needs a public HTTPS address; it has not been tested end to end. See the [client guide](CLIENTS.md) for troubleshooting.
+
+## Deployment and operations
+
+All settings are written directly in `docker-compose.yml`; run `./service.sh deploy` again after changing them:
+
+| Setting | Purpose |
+| --- | --- |
+| `MYSQL_PASSWORD` and other database passwords | Change before production; keep gateway and mysql in sync |
+| `INIT_ADMIN_USERNAME`, `INIT_ADMIN_PASSWORD` | Create the first administrator only when none exists |
+| `SECRET_KEY` | Login token key; without it logins end on every restart |
+| `ENCRYPTION_KEY` | Upstream key encryption; without it a built-in public key is used. Migrate before setting it once channels exist |
+| `WORKERS` | Worker processes, default one per CPU core, up to 8 |
+| `ports` | 8080 by default |
+
+For production:
+
+- Put an HTTPS reverse proxy in front with response buffering off and a read timeout of at least 600 seconds, and list the proxy in `FORWARDED_ALLOW_IPS`; otherwise forged source addresses can bypass IP allowlists.
+- Back up the database and the encryption key separately. With your own `ENCRYPTION_KEY`, a database backup alone cannot decrypt channel keys.
+- To upgrade, change the image version in `docker-compose.yml` and deploy again; **read the [operations guide](OPERATIONS.md) before upgrading from an older release**, since migrations may be required.
 
 ## Performance
 
@@ -141,7 +201,7 @@ On one 8-core, 16 GB machine, with every charge reconciled in each run:
 | Simulated upstream capacity | About 26,000 requests per minute across many tenants (8 workers); about 9,000 for a single tenant |
 | Real DeepSeek channel, 10–50 concurrent streams | All succeeded; first token only 6–19 ms slower than calling DeepSeek directly |
 
-A single tenant is capped by its row lock, which keeps its balance exact. Full data is in the [benchmark report](BENCHMARK.md).
+A single tenant's requests pass through one row lock, the price of an exact balance. Full data is in the [benchmark report](BENCHMARK.md).
 
 ## Limits
 
@@ -152,13 +212,50 @@ A single tenant is capped by its row lock, which keeps its balance exact. Full d
 
 ## Development
 
-Use Python 3.12, Node.js 20.19+ and MySQL 8/Redis 7:
+Backend FastAPI and Tortoise ORM, frontend Vue 3 and Element Plus. Requires Python 3.12 and Node.js 20.19+; only MySQL and Redis run in containers during development:
 
 ```bash
-./service.sh install
-./service.sh start
+./service.sh install   # dependencies, Aliyun and npmmirror mirrors by default
+./service.sh start     # backend :5002, frontend :5001
+cd backend && ../.venv/bin/pytest -q
 ```
 
-Vite runs on localhost:5001 and Uvicorn on localhost:5002; only MySQL and Redis run in containers during development. Dependency downloads default to Aliyun and npmmirror mirrors. Run `cd backend && ../.venv/bin/pytest -q` for the fast suite; real-service tests are opt-in and restricted to a disposable database. See the [contribution guide](../CONTRIBUTING.md) for setup, browser checks, dependencies and benchmarks.
+| Directory | Responsibility |
+| --- | --- |
+| `backend/app/routers/` | Management API and OpenAI/Anthropic inference endpoints |
+| `backend/app/services/` | Billing, reservation and settlement, routing, rate limits, audit |
+| `backend/app/providers/` | Upstream adapters |
+| `backend/tests/` | Fast tests and integration tests against real MySQL and Redis |
+| `backend/scripts/` | Benchmarks, release checks, smoke tests |
+| `frontend/src/` | Admin console |
 
-Do not report security issues in public issues, and never attach keys, prompts or database contents.
+See the [contribution guide](../CONTRIBUTING.md) for test setup, dependencies and migrations.
+
+## Docs and community
+
+| Resource | Link |
+| --- | --- |
+| Docs (Chinese) | [Clients](CLIENTS.md) · [Operations](OPERATIONS.md) · [Design](DESIGN.md) · [Compatibility](COMPATIBILITY.md) · [Benchmarks](BENCHMARK.md) |
+| Plans | [Roadmap](../ROADMAP.md) · [Changelog](../CHANGELOG.md) |
+| Questions and ideas | [Discussions](https://github.com/timmy1688/five-api/discussions) |
+| Bugs and feature requests | [GitHub Issues](https://github.com/timmy1688/five-api/issues); newcomers can start with [good first issue](https://github.com/timmy1688/five-api/labels/good%20first%20issue) |
+| Security | Do not open public issues or attach keys, prompts or database contents; open a non-sensitive issue to request a private channel |
+
+Include the version, deployment method, reproduction steps and redacted logs when reporting problems.
+
+## Disclaimer
+
+> [!WARNING]
+> - This project is intended only for lawfully authorized AI API management, internal budget allocation, usage tracking and cost accounting. Do not use it for anything that violates laws, regulations or upstream terms of service.
+> - You must obtain upstream API keys, accounts and access lawfully and follow the upstream terms of service. You bear any account suspension, charges or other losses caused by violating them.
+> - If you offer generative AI services or resell APIs to the public, you are responsible for the registration, licensing, content safety, identity verification, log retention, tax and upstream authorization duties required where you operate.
+> - Request audit stores request content. Inform employees and comply with personal data protection laws before using it inside an organization, and handle customer data lawfully when serving others.
+> - Billing, usage and degradation-check data are for reference only. They may differ from vendor invoices and the models actually served, and are not financial, legal or compliance advice. Rely on vendor invoices and set budget alerts in your upstream accounts.
+> - The software is provided "as is" under the MIT License, without warranty of any kind. The authors and contributors are not liable for any direct or indirect loss arising from its use, including but not limited to financial loss, data loss, service interruption and third-party claims.
+> - This project is not affiliated with OpenAI, Anthropic, Google, DeepSeek, Alibaba Cloud or any other vendor. Product names and trademarks belong to their respective owners.
+>
+> By using this project you confirm that you have read and agree to the above.
+
+## License
+
+[MIT](../LICENSE), free for commercial use.

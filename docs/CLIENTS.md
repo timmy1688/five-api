@@ -1,6 +1,6 @@
 # 接入 Claude Code、Codex、Cursor
 
-下文的 `https://your-gateway` 换成网关地址（本地为 `http://127.0.0.1:8080`），`sk-...` 换成在「API Keys」页面创建的 Key。模型名必须是网关上已配置价格、且有渠道提供的模型，例子用的是 `deepseek-v4-flash`。
+下文的 `https://your-gateway` 换成网关地址（本地为 `http://127.0.0.1:8080`），`sk-...` 换成在「API Key」页面创建的 Key。模型名必须是网关上已配置价格、且有渠道提供的模型，例子用的是 `deepseek-v4-flash`。
 
 实测记录（2026-10-31，Five API 0.4.0 开发版，DeepSeek 官方渠道）：
 
