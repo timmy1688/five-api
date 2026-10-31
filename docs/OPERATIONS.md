@@ -17,7 +17,7 @@
 - 每个 worker 有独立的 MySQL 连接池，默认上限 `200 / WORKERS`（10–50 之间），可用 `MYSQL_POOL_SIZE` 指定。Compose 中的 MySQL 设为 `--max-connections=500`；使用外部 MySQL 时确保 `max_connections` ≥ 容器数 × WORKERS × 连接池上限再加余量。
 - `/metrics` 汇总全部 worker（`PROMETHEUS_MULTIPROC_DIR`，镜像已设置）。
 
-性能见 [压测](COMPATIBILITY.md)：模拟环境下 8 核机器每分钟约 2.6 万次；同一租户的扣费要排队，单个租户每分钟约 9000 次，不随 worker 数增加。真实 DeepSeek 渠道下网关让首字只慢约 20 毫秒以内。
+性能见 [压测报告](BENCHMARK.md)：模拟环境下 8 核机器每分钟约 2.6 万次；同一租户的扣费要排队，单个租户每分钟约 9000 次，不随 worker 数增加。真实 DeepSeek 渠道下网关让首字只慢约 20 毫秒以内。
 
 留意磁盘：MySQL 默认保留 30 天 binlog，高流量下增长很快，压测中数万次请求就写出了 1GB。磁盘写满时 MySQL 和 Redis 都停止写入，请求和结算会卡住。生产环境要监控磁盘，空间紧张时可执行 `PURGE BINARY LOGS BEFORE NOW() - INTERVAL 3 DAY` 清理旧 binlog。
 

@@ -50,7 +50,7 @@
 - 测试新增全路由鉴权矩阵、推理 Key 拒绝路径、计费不变量、渠道熔断与 SQL 预算护栏；删除未引用的计费上限函数，清理测试警告。删除已被真实 HTTP 冒烟脚本取代的 `tests/smoke` 及其 `smoke` 标记。
 - 支持多 worker：镜像入口改为 `docker-entrypoint.sh`，默认按 CPU 核数（最多 8）启动 `uvicorn --workers`，Compose 填 `WORKERS` 可改。worker 在 Redis 写心跳，崩溃后其他 worker 接管它的预占（未发往上游的释放，已发往上游的标为未知结果继续占用，迟到用量仍按实际结算）；结算恢复、额度重置、日志清理、模型巡检和渠道探测按周期在 Redis 认领，只由一个 worker 执行；模型巡检状态改存 Redis；`/metrics` 汇总全部 worker。MySQL 连接池默认改为每个 worker `200 / WORKERS`（10–50），Compose 中的 MySQL 设为 `max_connections=500`，外部 MySQL 需相应调大。所有 worker 共享 SECRET_KEY，不填时每次容器启动生成一个。计费规则不变。
 - 压测分模拟与真实两部分：`scripts.benchmark` 自行启动多 worker 网关、用模拟上游测处理上限，8 核机器每分钟约 2.6 万次，单个租户约 9000 次；新增 `scripts.real_benchmark`，用真实渠道以正常业务并发（默认 10/20/50，最高 200）对比直连与经过网关，并逐条核对扣费，DeepSeek 实测首字只慢约 20 毫秒以内。两个脚本默认只打印结果，`--output` 才写文件。
-- 文档合并：`docs/PERMISSIONS_DESIGN.md`、`docs/MANAGEMENT_API.md` 和开发计划中的产品范围合并为 `docs/DESIGN.md`；删除已全部完成的 `docs/DEVELOPMENT_PLAN.md`，历史记录见本文件与 git。压测数据合并为 `docs/benchmarks/real-deepseek.json` 与 `synthetic.json`。
+- 文档合并：`docs/PERMISSIONS_DESIGN.md`、`docs/MANAGEMENT_API.md` 和开发计划中的产品范围合并为 `docs/DESIGN.md`；删除已全部完成的 `docs/DEVELOPMENT_PLAN.md`，历史记录见本文件与 git。压测结果单独整理为 `docs/BENCHMARK.md`（模拟环境与真实 DeepSeek 渠道），原始数据为 `docs/benchmarks/real-deepseek.json` 与 `synthetic.json`。
 - 商用部署按多 worker 验收；小规模降智题仅供参考，不能证明真实型号。CLI/桌面客户端未在本次验收中认证。
 
 ## [0.3.0] - 2026-10-18

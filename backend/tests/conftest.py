@@ -263,8 +263,10 @@ def mock_redis():
 
 
 @pytest.fixture
-def app():
-    return create_app()
+def app(tmp_path):
+    # A locally built UI in backend/static adds a catch-all GET route; CI has none.
+    with patch("app.main._frontend_dir", return_value=tmp_path):
+        yield create_app()
 
 
 @pytest.fixture

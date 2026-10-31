@@ -234,7 +234,7 @@ async def test_key_crud(client):
 
     # Manual reset is removed; spending cannot be erased.
     resp = await client.post(f"/api/keys/{key_id}/reset-quota", headers=h)
-    assert resp.status_code == 405
+    assert resp.status_code == 404
 
     # delete
     resp = await client.delete(f"/api/keys/{key_id}", headers=h)

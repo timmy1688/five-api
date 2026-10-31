@@ -2,7 +2,7 @@
 
 FastAPI、Tortoise ORM、MySQL 8、Redis 7；Vue 3、Element Plus。开发使用本地 Uvicorn :5002、Vite :5001，只有 MySQL/Redis 为容器。不要把日常开发切换为网关容器。
 
-产品范围、权限与管理 API 见 [设计文档](docs/DESIGN.md)，操作见 [运维文档](docs/OPERATIONS.md)，兼容与压测见 [兼容矩阵](docs/COMPATIBILITY.md)。
+产品范围、权限与管理 API 见 [设计文档](docs/DESIGN.md)，操作见 [运维文档](docs/OPERATIONS.md)，兼容见 [兼容矩阵](docs/COMPATIBILITY.md)，压测见 [压测报告](docs/BENCHMARK.md)。
 
 ## 常用命令
 

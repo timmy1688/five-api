@@ -63,7 +63,7 @@ async def test_key_window_blocks_after_cap_and_reset_clears(client, admin_token)
     assert listed.json()["window_limits"] == {"5h": 0.5}
 
     response = await client.post(f"/api/keys/{key.id}/reset-quota", headers=auth_header(admin_token))
-    assert response.status_code == 405
+    assert response.status_code == 404
     with patch("app.providers.base._shared_http_client", return_value=_http()):
         assert (await _call(client)).status_code == 429
 

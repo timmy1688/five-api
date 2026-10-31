@@ -127,7 +127,7 @@ async def test_role_routes_removed_and_bindings_immutable(client, admin_token):
     assert own_key.status_code == 201 and own_key.json()["tenant_is_system"]
     assert (await Tenant.get(id=own_key.json()["tenant_id"])).is_system
     assert (await client.post(f"/api/tenants/{tenant.id}/keys", headers=platform,
-                             json={"name": "on-behalf"})).status_code == 405
+                             json={"name": "on-behalf"})).status_code == 404
     with pytest.raises(IntegrityError):
         await User.create(username="duplicate", hashed_password="hash", role="tenant", tenant_id=tenant.id)
 

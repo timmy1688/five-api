@@ -41,7 +41,7 @@ Preserve tenant scope on every query and separate management credentials from in
 
 ## Benchmarks and releases
 
-`python -m scripts.real_benchmark --channel <id> --model <model>` steps up streaming concurrency against a real channel, directly and through a multi-worker gateway, and recomputes every charge; it spends a small amount on the upstream. `python -m scripts.benchmark --workers 1,2,4,8` measures gateway capacity with a synthetic upstream. Both create and remove their own tenants and keys; pass `--output` to save the JSON report, and record results in docs/COMPATIBILITY.md.
+`python -m scripts.real_benchmark --channel <id> --model <model>` steps up streaming concurrency against a real channel, directly and through a multi-worker gateway, and recomputes every charge; it spends a small amount on the upstream. `python -m scripts.benchmark --workers 1,2,4,8` measures gateway capacity with a synthetic upstream. Both create and remove their own tenants and keys; pass `--output` to save the JSON report, and record results in docs/BENCHMARK.md.
 
 A release requires passing CI, a matching version/tag, changelog and upgrade notes. Tag publishing builds amd64/arm64 images only after quality checks. Maintainers create release tags; ordinary pushes do not publish a release.
 
