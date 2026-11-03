@@ -1,5 +1,6 @@
 import json
 import time
+from contextlib import aclosing
 from decimal import Decimal
 
 import httpx
@@ -234,14 +235,15 @@ async def _proxy_endpoint(request: Request, body, endpoint: str, api_key: APIKey
         return result, usage
 
     async def _stream_fn(provider, channel):
-        async for line in provider.send_stream(body_dict, endpoint):
-            usage = {}
-            if line.startswith("data: ") and not line.startswith("data: [DONE]"):
-                try:
-                    usage = extract_openai_usage(json.loads(line[6:]))
-                except (json.JSONDecodeError, KeyError):
-                    pass
-            yield line, usage
+        async with aclosing(provider.send_stream(body_dict, endpoint)) as events:
+            async for line in events:
+                usage = {}
+                if line.startswith("data: ") and not line.startswith("data: [DONE]"):
+                    try:
+                        usage = extract_openai_usage(json.loads(line[6:]))
+                    except (json.JSONDecodeError, KeyError):
+                        pass
+                yield line, usage
 
     return await _proxy(
         request, api_key, endpoint, body.model, body_dict,
@@ -313,12 +315,13 @@ async def responses(request: Request, api_key: APIKey = Depends(verify_api_key))
         return result, extract_responses_usage(result)
 
     async def _stream_fn(provider, channel):
-        async for event in provider.send_event_stream(body, endpoint):
-            usage = {}
-            data = _sse_data(event)
-            if data and data.get("type") in {"response.completed", "response.incomplete", "response.failed"}:
-                usage = extract_responses_usage(data.get("response") or {})
-            yield event, usage
+        async with aclosing(provider.send_event_stream(body, endpoint)) as events:
+            async for event in events:
+                usage = {}
+                data = _sse_data(event)
+                if data and data.get("type") in {"response.completed", "response.incomplete", "response.failed"}:
+                    usage = extract_responses_usage(data.get("response") or {})
+                yield event, usage
 
     return await _proxy(
         request, api_key, endpoint, str(body.get("model") or ""), body,
