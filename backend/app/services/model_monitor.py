@@ -54,7 +54,7 @@ async def probe_slot(channel_id, model, kind):
         with anyio.move_on_after(5, shield=True):
             if lease:
                 await concurrency_limiter.release(0, lease, scope="model_probe_global")
-            # The bounded probe runs for at most 60s; the 120s lock cannot be stolen by a valid run.
+            # Bounded probes and endpoint checks finish before the 120s lock expires.
             if await redis.get(name) == token:
                 await redis.delete(name)
 

@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
+from app.schemas.user import StrictModel
 from app.utils.upstream_security import validate_upstream_base_url
 
 
@@ -94,3 +95,25 @@ class ChannelResponse(BaseModel):
     timeout: int
     created_at: datetime
     updated_at: datetime
+
+
+class ChannelTestRequest(StrictModel):
+    model: str = Field(min_length=1, max_length=64)
+
+
+class ChannelCheckResult(BaseModel):
+    kind: Literal["models", "chat", "chat_stream", "responses", "responses_stream", "messages", "messages_stream"]
+    status: Literal["passed", "failed", "timeout"]
+    status_code: int | None = None
+    latency_ms: int = 0
+    first_text_ms: int | None = None
+    error: str = ""
+
+
+class ChannelTestResponse(BaseModel):
+    success: bool
+    model: str
+    actual_model: str
+    checks: list[ChannelCheckResult]
+    status_code: int | None = None
+    error: str = ""

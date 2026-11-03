@@ -69,7 +69,7 @@
         <el-table-column v-if="auth.isPlatformAdmin" :label="t('common.actions')" width="220" fixed="right">
           <template #default="{ row }">
             <el-button text type="primary" size="small" @click="openEdit(row)">{{ t('common.edit') }}</el-button>
-            <el-button text type="success" size="small" :loading="testingId === row.id" @click="testChannel(row)">{{ t('channels.test') }}</el-button>
+            <el-button text type="success" size="small" @click="testChannel(row)">{{ t('channels.test') }}</el-button>
             <el-button v-if="healthMap[row.id] && !healthMap[row.id].healthy" text type="warning" size="small" @click="recoverChannel(row)">{{ t('channels.recover') }}</el-button>
             <el-popconfirm :title="t('channels.deleteConfirm')" @confirm="handleDelete(row.id)">
               <template #reference>
@@ -90,6 +90,8 @@
         @current-change="(p: number) => { page = p; load() }"
       />
     </el-card>
+
+    <ChannelTestDialog v-model="testVisible" :channel="testTarget" />
 
     <el-dialog v-model="dialogVisible" :title="editingId ? t('channels.edit') : t('channels.add')" width="820px" top="5vh" class="channel-dialog">
       <el-form ref="formRef" :model="form" :rules="rules" label-position="top" class="channel-form">
@@ -249,6 +251,7 @@ import { ref, computed, onMounted } from 'vue'
 import { channelsApi } from '@/api/channels'
 import { useAuthStore } from '@/stores/auth'
 import { useI18n } from '@/i18n'
+import ChannelTestDialog from '@/components/ChannelTestDialog.vue'
 
 const { t } = useI18n()
 import { ElMessage } from 'element-plus'
@@ -267,7 +270,8 @@ const total = ref(0)
 const page = ref(1)
 const dialogVisible = ref(false)
 const saving = ref(false)
-const testingId = ref<number | null>(null)
+const testVisible = ref(false)
+const testTarget = ref<any>(null)
 const editingId = ref<number | null>(null)
 const formRef = ref<FormInstance>()
 const mappingRows = ref<MappingRow[]>([])
@@ -486,17 +490,9 @@ async function toggleEnabled(row: any) {
   }
 }
 
-async function testChannel(row: any) {
-  testingId.value = row.id
-  try {
-    const res = await channelsApi.test(row.id)
-    if (res.success) ElMessage.success(t('channels.testPassed', { code: res.status_code }))
-    else ElMessage.error(t('channels.testFailed', { error: res.error || res.status_code }))
-  } catch (error) {
-    ElMessage.error(apiError(error, t('channels.testRequestFailed')))
-  } finally {
-    testingId.value = null
-  }
+function testChannel(row: any) {
+  testTarget.value = row
+  testVisible.value = true
 }
 
 onMounted(load)
