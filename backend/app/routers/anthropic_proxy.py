@@ -1,6 +1,7 @@
 import json
 import time
 from collections.abc import AsyncIterator
+from contextlib import aclosing
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -65,6 +66,7 @@ def _anthropic_error_event(e: Exception) -> str:
         "type": "error",
         "error": {"type": "api_error", "message": client_message(e)},
     }
+    err.setdefault("type", "error")
     return f"event: error\ndata: {json.dumps(err)}\n\n"
 
 
@@ -80,27 +82,28 @@ async def _passthrough_stream_with_usage(
     cache_creation = 0
     reported_prompt = reported_completion = False
 
-    async for line in provider.stream_anthropic_passthrough(body, extra_headers):
-        stripped = line.strip()
-        if stripped.startswith("data:"):
-            try:
-                data = json.loads(stripped[5:].strip())
-                event_msg = data.get("message", {})
-                if event_msg:
-                    u = event_msg.get("usage", {})
-                    reported_prompt = reported_prompt or "input_tokens" in u
-                    input_tokens = u.get("input_tokens", input_tokens)
-                    cache_read = u.get("cache_read_input_tokens", cache_read)
-                    cache_creation = u.get("cache_creation_input_tokens", cache_creation)
-                delta_usage = data.get("usage", {})
-                if delta_usage:
-                    reported_completion = reported_completion or "output_tokens" in delta_usage
-                    output_tokens = delta_usage.get("output_tokens", output_tokens)
-            except (json.JSONDecodeError, ValueError):
-                pass
+    async with aclosing(provider.stream_anthropic_passthrough(body, extra_headers)) as events:
+        async for line in events:
+            stripped = line.strip()
+            if stripped.startswith("data:"):
+                try:
+                    data = json.loads(stripped[5:].strip())
+                    event_msg = data.get("message", {})
+                    if event_msg:
+                        u = event_msg.get("usage", {})
+                        reported_prompt = reported_prompt or "input_tokens" in u
+                        input_tokens = u.get("input_tokens", input_tokens)
+                        cache_read = u.get("cache_read_input_tokens", cache_read)
+                        cache_creation = u.get("cache_creation_input_tokens", cache_creation)
+                    delta_usage = data.get("usage", {})
+                    if delta_usage:
+                        reported_completion = reported_completion or "output_tokens" in delta_usage
+                        output_tokens = delta_usage.get("output_tokens", output_tokens)
+                except (json.JSONDecodeError, ValueError):
+                    pass
 
-        yield line, {**_billing_usage(input_tokens, output_tokens, cache_read, cache_creation),
-                     "reported_prompt": reported_prompt, "reported_completion": reported_completion}
+            yield line, {**_billing_usage(input_tokens, output_tokens, cache_read, cache_creation),
+                         "reported_prompt": reported_prompt, "reported_completion": reported_completion}
 
 
 @router.post("/v1/messages/count_tokens")

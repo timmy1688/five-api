@@ -36,3 +36,9 @@ SDK 契约参考 [OpenAI Python](https://developers.openai.com/api/reference/pyt
 ## 压测
 
 模拟环境与真实 DeepSeek 渠道的压测见 [压测报告](BENCHMARK.md)。
+
+## 流式错误与结束状态
+
+网关识别 Responses `response.failed`、Chat / Anthropic 流内 `error`，并把错误记录为渠道失败；SSE 已建立时客户端 HTTP 状态可能仍为 200，日志中的 `status_code` 表示请求的实际结果，`upstream_status_code` 保留上游 HTTP 200。原生错误事件脱敏后仅转发一次；认证错误沿用隐藏上游凭据细节的策略。
+
+Chat 的 `[DONE]` 或所有已出现 choice 的 `finish_reason`、Responses 的 `response.completed` / `response.incomplete`、Anthropic 的 `message_stop` 都是有效结束信号。缺少结束信号的 EOF 会记录为 `stream_incomplete`；已有输出的请求按已知用量或现有估算规则结算，不跨渠道重放；完全没有事件的未知结果继续占用额度供人工核对。已产生的输入、输出和缓存用量不会因错误被清零。

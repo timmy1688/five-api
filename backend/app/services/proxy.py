@@ -52,6 +52,7 @@ from app.services.billing_quotes import quote_cost, selling_quote
 from app.services.redaction import redact
 from app.services.request_context import client_request_id
 from app.services.sticky_session import bind_sticky_channel
+from app.services.stream_outcomes import StreamOutcome, UpstreamStreamError
 
 logger = logging.getLogger(__name__)
 
@@ -601,29 +602,47 @@ async def stream_with_failover(
                     try:
                         if budget is not None:
                             await budget.before_send()
-                        async for line, usage in stream_fn(prov, ch):
-                            if not data_yielded:
-                                channel = ch
-                                provider = prov
-                                model_actual = prov.apply_model_mapping(model_requested)
-                                data_yielded = True
-                                await record_latency(ch.id, (time.monotonic() - attempt_start) * 1000)
-                                if upstream_headers is not None:
-                                    upstream_headers.update(_provider_headers(prov))
-                            if usage:
-                                reported_prompt = reported_prompt or usage.get("reported_prompt", "prompt_tokens" in usage)
-                                reported_output = reported_output or usage.get("reported_completion", "completion_tokens" in usage)
-                                if usage.get("reported_prompt", "prompt_tokens" in usage):
-                                    prompt_tokens = usage.get("prompt_tokens", prompt_tokens)
-                                    cached_tokens = usage.get("cached_tokens", cached_tokens)
-                                    cache_write_tokens = usage.get("cache_write_tokens", cache_write_tokens)
-                                if usage.get("reported_completion", "completion_tokens" in usage):
-                                    completion_tokens = usage.get("completion_tokens", completion_tokens)
-                            meter.feed(sse_billable_text(line))
-                            if scanner is not None:
-                                remember_hit(hits, scanner.feed(visible_sse_text(line)))
-                            yield line
-                            answered = answered or is_final_sse_event(line)
+                        outcome = StreamOutcome(endpoint)
+                        stream = stream_fn(prov, ch)
+                        try:
+                            async for line, usage in stream:
+                                if not data_yielded:
+                                    channel = ch
+                                    provider = prov
+                                    model_actual = prov.apply_model_mapping(model_requested)
+                                    data_yielded = True
+                                    await record_latency(ch.id, (time.monotonic() - attempt_start) * 1000)
+                                    if upstream_headers is not None:
+                                        upstream_headers.update(_provider_headers(prov))
+                                if usage:
+                                    reported_prompt = reported_prompt or usage.get("reported_prompt", "prompt_tokens" in usage)
+                                    reported_output = reported_output or usage.get("reported_completion", "completion_tokens" in usage)
+                                    if usage.get("reported_prompt", "prompt_tokens" in usage):
+                                        prompt_tokens = usage.get("prompt_tokens", prompt_tokens)
+                                        cached_tokens = usage.get("cached_tokens", cached_tokens)
+                                        cache_write_tokens = usage.get("cache_write_tokens", cache_write_tokens)
+                                    if usage.get("reported_completion", "completion_tokens" in usage):
+                                        completion_tokens = usage.get("completion_tokens", completion_tokens)
+                                failure = outcome.feed(line, _provider_headers(prov))
+                                if failure is not None:
+                                    raise failure
+                                meter.feed(sse_billable_text(line))
+                                if scanner is not None:
+                                    remember_hit(hits, scanner.feed(visible_sse_text(line)))
+                                # Set before yielding: clients may disconnect immediately
+                                # after a terminal event without resuming this iterator.
+                                answered = outcome.finished
+                                if outcome.terminal:
+                                    line = line.rstrip("\r\n") + "\n\n"
+                                yield line
+                                if outcome.terminal:
+                                    break
+                            failure = outcome.eof_error(_provider_headers(prov))
+                            if failure is not None:
+                                raise failure
+                        finally:
+                            with anyio.move_on_after(5, shield=True):
+                                await stream.aclose()
                         break
                     except HTTPException:
                         raise
@@ -683,7 +702,10 @@ async def stream_with_failover(
             detail = passed[1] if passed else {"error": {"type": "api_error", "message": client_message(e), "code": "upstream_error"}}
             raise HTTPException(status_code=status_code, detail=detail,
                                 headers=forwardable_headers(e.response) if isinstance(e, httpx.HTTPStatusError) else {})
-        yield format_error_event(e)
+        if isinstance(e, UpstreamStreamError) and e.event and not is_credential_error(e):
+            yield redact(e.event)
+        else:
+            yield format_error_event(e)
     finally:
         # A client disconnect cancels this generator mid-await, and anyio then
         # cancels every later await too, so cleanup runs shielded.
