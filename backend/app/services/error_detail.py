@@ -7,6 +7,7 @@ import httpx
 from app.providers.base import ERROR_IN_OK
 from app.services.failover import NoReadyUpstreamKey, is_credential_error
 from app.services.redaction import redact
+from app.services.stream_outcomes import UpstreamStreamError
 
 MAX_ERROR_CHARS = 8_000
 
@@ -120,6 +121,8 @@ def client_message(exc: Exception) -> str:
 
 
 def outcome_uncertain(exc: Exception) -> bool:
+    if isinstance(exc, UpstreamStreamError):
+        return exc.unfinished
     return isinstance(exc, (httpx.ReadTimeout, httpx.WriteTimeout, httpx.ReadError,
                             httpx.WriteError, httpx.RemoteProtocolError))
 
