@@ -135,7 +135,7 @@ def _mount_frontend(app: FastAPI) -> None:
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="Five API Gateway", version="0.4.0", lifespan=lifespan)
+    app = FastAPI(title="Five API Gateway", version="0.4.1", lifespan=lifespan)
     from app.services.protocol_errors import install_error_handlers
     from app.services.redaction import configure_safe_logging
     install_error_handlers(app)

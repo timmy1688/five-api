@@ -4,8 +4,8 @@
 services:
   gateway:
     # 发布镜像，支持 amd64/arm64。升级时改成新版本号再 ./service.sh deploy。
-    # 用自己修改过的代码：docker build -t ghcr.io/timmy1688/five-api:0.4.0 . 后再部署。
-    image: ghcr.io/timmy1688/five-api:0.4.0
+    # 用自己修改过的代码：docker build -t ghcr.io/timmy1688/five-api:0.4.1 . 后再部署。
+    image: ghcr.io/timmy1688/five-api:0.4.1
     restart: always
     ports:
       - "8080:8000"

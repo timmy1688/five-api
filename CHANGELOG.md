@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-11-04
+
 ### 修复
 
 
@@ -15,7 +17,7 @@
 
 ### 部署
 
-- `docker-compose.yml` 改用发布镜像 `ghcr.io/timmy1688/five-api:0.4.0`，`./service.sh deploy` 先拉取再启动，不再本地构建。升级时改镜像版本号；拉取失败时会使用本地已有的同名镜像。发布检查会核对 Compose 镜像版本与代码版本一致。
+- `docker-compose.yml` 改用发布镜像 `ghcr.io/timmy1688/five-api:0.4.1`，`./service.sh deploy` 先拉取再启动，不再本地构建。升级时改镜像版本号；拉取失败时会使用本地已有的同名镜像。发布检查会核对 Compose 镜像版本与代码版本一致。
 
 ### 文档
 
