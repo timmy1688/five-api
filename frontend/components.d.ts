@@ -12,6 +12,7 @@ export {}
 declare module 'vue' {
   export interface GlobalComponents {
     AlertSettings: typeof import('./src/components/AlertSettings.vue')['default']
+    ChannelTestDialog: typeof import('./src/components/ChannelTestDialog.vue')['default']
     ElAlert: typeof import('element-plus/es')['ElAlert']
     ElAside: typeof import('element-plus/es')['ElAside']
     ElButton: typeof import('element-plus/es')['ElButton']

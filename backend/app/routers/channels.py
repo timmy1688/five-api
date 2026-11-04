@@ -2,11 +2,16 @@ from app.services.management_events import audit_mutation
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 import httpx
 
+from app import dependencies
 from app.models import APIKey, User, Channel
 from app.providers.registry import clear_channel_cache
-from app.schemas.channel import ChannelCreate, ChannelResponse, ChannelUpdate
+from app.schemas.channel import ChannelCreate, ChannelResponse, ChannelUpdate, ChannelTestRequest, ChannelTestResponse
 from app.services.auth import require_platform_admin
-from app.services.channel_health import force_recover, get_health_status, record_failure, record_success
+from app.services.channel_health import force_recover, get_health_status
+from app.services.channel_checks import run_channel_checks
+from app.services.concurrency import ConcurrencyExceeded
+from app.services.model_monitor import probe_slot, supports_health
+from app.services.rate_limit import RPM_CHECK_SCRIPT
 from app.services.key_pool import pool_status
 from app.utils.secrets import channel_keys, encrypt_secret, mask_secret, split_keys
 from app.utils.upstream_url import upstream_url
@@ -128,48 +133,33 @@ async def delete_channel(channel_id: int, _: User = Depends(require_platform_adm
     return {"message": "Deleted"}
 
 
-@router.post("/{channel_id}/test")
-async def test_channel(channel_id: int, _: User = Depends(require_platform_admin)):
+@router.post("/{channel_id}/test", response_model=ChannelTestResponse)
+async def test_channel(channel_id: int, body: ChannelTestRequest | None = None,
+                       actor: User = Depends(require_platform_admin)):
     ch = await Channel.get_or_none(id=channel_id)
     if ch is None:
         raise HTTPException(status_code=404, detail="Channel not found")
+    model = body.model if body else next(iter(ch.models or []), "")
+    if model not in (ch.models or []):
+        raise HTTPException(422, "Choose a model configured on this channel")
+    actual = (ch.model_mapping or {}).get(model, model)
+    if not supports_health(actual):
+        raise HTTPException(422, "Connection checks currently support text generation models")
+    redis = await dependencies.get_redis()
+    if not await redis.eval(RPM_CHECK_SCRIPT, 1, f"five:model_probe:actor:{actor.id}", 6, 60):
+        raise HTTPException(429, "Probe rate limit reached", headers={"Retry-After": "60"})
     try:
-        validate_upstream_base_url(ch.base_url)
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            if ch.provider == "anthropic":
-                url = upstream_url(ch.base_url, "/v1/messages")
-                api_key = (channel_keys(ch.api_key) or [""])[0]
-                headers = {
-                    "anthropic-version": "2023-06-01",
-                    "Content-Type": "application/json",
-                }
-                if api_key:
-                    headers["x-api-key"] = api_key
-                resp = await client.post(
-                    url,
-                    headers=headers,
-                    json={
-                        "model": ch.model_mapping.get(
-                            (ch.models or [""])[0], (ch.models or [""])[0]
-                        ),
-                        "max_tokens": 1,
-                        "messages": [{"role": "user", "content": "hi"}],
-                    },
-                )
-            else:
-                url = upstream_url(ch.base_url, "/v1/models")
-                api_key = (channel_keys(ch.api_key) or [""])[0]
-                headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
-                resp = await client.get(url, headers=headers)
-        success = resp.status_code < 400
-        if success:
-            await record_success(ch.id)
-        else:
-            await record_failure(ch.id)
-        return {"success": success, "status_code": resp.status_code}
-    except Exception as e:
-        await record_failure(ch.id)
-        return {"success": False, "error": redact(str(e))}
+        async with probe_slot(ch.id, model, "connection") as acquired:
+            if not acquired:
+                raise HTTPException(409, "This channel model is already being checked")
+            checks = await run_channel_checks(ch, model)
+    except ConcurrencyExceeded:
+        raise HTTPException(429, "Two model checks are already running", headers={"Retry-After": "10"})
+    failed = next((check for check in checks if check.status != "passed"), None)
+    return ChannelTestResponse(
+        success=failed is None, model=model, actual_model=actual, checks=checks,
+        status_code=failed.status_code if failed else 200, error=failed.error if failed else "",
+    )
 
 
 @router.post("/{channel_id}/recover")

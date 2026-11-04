@@ -53,6 +53,11 @@
 | `PUT /api/keys/{id}` | 租户可改 name、quota_total、allowed_models、expires_at、allowed_ips、rpm/tpm/并发限制、channel_ids、is_enabled |
 | `DELETE /api/keys/{id}` | 永久撤销，保留费用历史，不能再启用 |
 | `GET /api/keys/{id}/usage` | 最近 50 条请求元数据，不含正文和凭据 |
+| `POST /api/channels/{id}/test` | 仅平台；传 `{"model":"渠道内模型名"}`，分别检测模型列表、原生生成和流式接口；不传请求体时检测第一个配置模型 |
+
+渠道检测返回 `model`、`actual_model` 和 `checks`：每项含 `kind`、`status`（passed / failed / timeout）、`status_code`、`latency_ms`、`first_text_ms`、脱敏 `error`。OpenAI 渠道检测 models、chat、chat_stream、responses、responses_stream；Anthropic 渠道检测 models、messages、messages_stream。顶层 `success` 仅在所有项目通过时为 true，某一接口失败不代表其他接口不可用。
+
+检测使用渠道内一个可用上游 Key，发起少量真实文本请求，会产生上游费用；不做跨渠道重试，不计入客户账单，也不修改熔断状态。每项最多 15 秒，共享巡检的全局两个并发、管理员每分钟 6 次限制；同一渠道模型的连接检测不能重复运行（409）。暂不检测图片、音频、视频和向量模型。
 
 - 新密码 8 个字符到 72 个 UTF-8 字节；临时密码改密前只能访问本人资料和改密。
 - 建 Key 超时不要自动重发：先查列表确认，找不回明文就撤销后重建。

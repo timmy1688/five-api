@@ -1,5 +1,23 @@
 import client from './client'
 
+export type ChannelCheckKind = 'models' | 'chat' | 'chat_stream' | 'responses' | 'responses_stream' | 'messages' | 'messages_stream'
+
+export interface ChannelCheckResult {
+  kind: ChannelCheckKind
+  status: 'passed' | 'failed' | 'timeout'
+  status_code: number | null
+  latency_ms: number
+  first_text_ms: number | null
+  error: string
+}
+
+export interface ChannelTestResult {
+  success: boolean
+  model: string
+  actual_model: string
+  checks: ChannelCheckResult[]
+}
+
 export const channelsApi = {
   list: async (page = 1, size = 20) => {
     const { data } = await client.get('/channels', { params: { page, size } })
@@ -17,8 +35,8 @@ export const channelsApi = {
     const { data } = await client.delete(`/channels/${id}`)
     return data
   },
-  test: async (id: number) => {
-    const { data } = await client.post(`/channels/${id}/test`)
+  test: async (id: number, model: string): Promise<ChannelTestResult> => {
+    const { data } = await client.post(`/channels/${id}/test`, { model })
     return data
   },
   healthStatus: async () => {
