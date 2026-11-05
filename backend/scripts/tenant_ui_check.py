@@ -51,7 +51,9 @@ async def verify_ui(username: str, password: str, tenant_token: str, tenant_ids:
             assert await issued.locator("input").input_value() == created["temporary_password"], "one-time password display"
             await issued.get_by_role("button", name="I have copied it", exact=True).click()
             await expect(issued).not_to_be_visible()
-            await expect(issued.locator("input")).to_have_value("")
+            # The closed dialog stays in the DOM but hidden; the password must be gone from it.
+            closed = page.get_by_role("dialog", name="Account created", exact=True, include_hidden=True)
+            await expect(closed.locator("input")).to_have_value("")
             await expect(page.get_by_text(customer, exact=True).first).to_be_visible()
 
             from scripts.settings_ui_check import verify_settings

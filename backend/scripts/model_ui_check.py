@@ -24,7 +24,8 @@ async def verify_models(page, base, model, probe_model):
         await drawer.get_by_role("button", name="Degradation check (reference)", exact=True).click()
     result = await pending.value
     assert result.status == 200 and (await result.json())["score"] == 100
-    await expect(drawer.get_by_text("100/100", exact=False)).to_be_visible()
+    # The history table shows the bare score in its own column.
+    await expect(drawer.get_by_text("100", exact=True)).to_be_visible()
     await drawer.locator(".el-drawer__close-btn").click()
     await page.get_by_role("button", name="Scheduled checks", exact=True).click()
     dialog = page.get_by_role("dialog", name="Scheduled checks", exact=True)
