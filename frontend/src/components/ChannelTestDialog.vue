@@ -18,7 +18,7 @@
       {{ t('channels.checkProgress', { model: runningModel, current: currentIndex, total: batchSize }) }}
     </p>
     <p v-else-if="results.length" role="status">
-      {{ t('channels.checkSummary', { passed: passedCount, total: checkedCount }) }}
+      {{ t(skippedCount ? 'channels.checkSummarySkipped' : 'channels.checkSummary', { passed: passedCount, total: checkedCount, skipped: skippedCount }) }}
     </p>
     <el-table v-if="results.length" :data="results" max-height="480" stripe class="check-table">
       <el-table-column :label="t('common.model')" min-width="145" show-overflow-tooltip>
@@ -44,6 +44,7 @@
       <el-table-column :label="t('channels.checkDetails')" min-width="240">
         <template #default="{ row }">
           <span v-if="row.error" class="check-error">{{ row.error }}</span>
+          <span v-else-if="row.skip_reason === 'models_endpoint_unavailable'" class="check-skipped">{{ t('channels.checkModelsUnavailable', { code: row.status_code }) }}</span>
           <span v-else-if="row.first_text_ms != null">{{ t('channels.checkFirstText', { ms: row.first_text_ms }) }}</span>
           <span v-else-if="row.status === 'passed'">{{ t('channels.checkValidResponse') }}</span>
           <span v-else>—</span>
@@ -61,6 +62,7 @@
           <template v-if="row.first_text_ms != null"> · {{ t('channels.checkFirstText', { ms: row.first_text_ms }) }}</template>
         </div>
         <div v-if="row.error" class="check-error">{{ row.error }}</div>
+        <div v-else-if="row.skip_reason === 'models_endpoint_unavailable'" class="check-skipped">{{ t('channels.checkModelsUnavailable', { code: row.status_code ?? '—' }) }}</div>
         <small v-if="row.actualModel !== row.model" class="muted">→ {{ row.actualModel }}</small>
       </article>
     </div>
@@ -107,7 +109,8 @@ const availableModels = computed(() => (props.channel?.models || []).filter((mod
   return !['embedding', 'whisper', 'tts', 'sora', 'dall-e', 'image', 'rerank'].some(word => actual.includes(word))
 }))
 const passedCount = computed(() => results.value.filter(row => row.status === 'passed').length)
-const checkedCount = computed(() => results.value.filter(row => finished(row.status)).length)
+const checkedCount = computed(() => results.value.filter(row => finished(row.status) && row.status !== 'skipped').length)
+const skippedCount = computed(() => results.value.filter(row => row.status === 'skipped').length)
 
 const kindLabels: Record<ChannelCheckKind, MessageKey> = {
   models: 'channels.checkModelsList', chat: 'channels.checkChat', chat_stream: 'channels.checkChatStream',
@@ -117,12 +120,13 @@ const kindLabels: Record<ChannelCheckKind, MessageKey> = {
 const statusLabels: Record<CheckStatus, MessageKey> = {
   passed: 'channels.checkPassed', failed: 'channels.checkFailed', timeout: 'channels.checkTimeout',
   pending: 'channels.checkPending', running: 'channels.checkRunning', not_run: 'channels.checkNotRun',
+  skipped: 'channels.checkSkipped',
 }
 function statusType(status: CheckStatus) {
-  return status === 'passed' ? 'success' : status === 'failed' ? 'danger' : status === 'timeout' ? 'warning' : 'info'
+  return status === 'passed' ? 'success' : status === 'failed' ? 'danger' : ['timeout', 'skipped'].includes(status) ? 'warning' : 'info'
 }
 function finished(status: CheckStatus) {
-  return status === 'passed' || status === 'failed' || status === 'timeout'
+  return status === 'passed' || status === 'failed' || status === 'timeout' || status === 'skipped'
 }
 
 watch(() => props.modelValue, (visible) => {
@@ -178,6 +182,7 @@ async function runChecks() {
 <style scoped>
 .check-hint { color: #606266; line-height: 1.6; margin: 0 0 18px; }
 .check-error { color: #c45656; overflow-wrap: anywhere; white-space: pre-wrap; }
+.check-skipped { color: #8a6500; }
 .muted { color: #86909c; }
 .check-cards { display: none; }
 @media (max-width: 600px) {

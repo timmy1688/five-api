@@ -103,11 +103,12 @@ class ChannelTestRequest(StrictModel):
 
 class ChannelCheckResult(BaseModel):
     kind: Literal["models", "chat", "chat_stream", "responses", "responses_stream", "messages", "messages_stream"]
-    status: Literal["passed", "failed", "timeout"]
+    status: Literal["passed", "failed", "timeout", "skipped"]
     status_code: int | None = None
     latency_ms: int = 0
     first_text_ms: int | None = None
     error: str = ""
+    skip_reason: Literal["models_endpoint_unavailable"] | None = None
 
 
 class ChannelTestResponse(BaseModel):

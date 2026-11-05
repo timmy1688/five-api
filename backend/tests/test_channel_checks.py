@@ -85,21 +85,83 @@ async def test_all_endpoints_pass_and_default_model_remains_supported(client, ad
 
 
 @respx.mock
-async def test_anthropic_checks_native_messages_even_when_discovery_is_unavailable(client, admin_token):
+@pytest.mark.parametrize("list_status", [404, 405])
+async def test_anthropic_checks_native_messages_even_when_discovery_is_unavailable(client, admin_token, list_status):
     channel = await Channel.create(name="native", provider="anthropic", base_url="https://native.test/v1",
                                    api_key="anthropic-secret", models=["alias"], model_mapping={"alias": "claude-real"})
-    respx.get("https://native.test/v1/models").respond(404)
+    respx.get("https://native.test/v1/models").respond(list_status)
     messages = respx.post("https://native.test/v1/messages").mock(side_effect=lambda request:
         stream(MESSAGES_STREAM) if json.loads(request.content)["stream"] else httpx.Response(200, json=MESSAGES))
     result = await client.post(f"/api/channels/{channel.id}/test", json={"model": "alias"},
                                headers=auth_header(admin_token))
     checks = {item["kind"]: item for item in result.json()["checks"]}
     assert set(checks) == set(channel_checks.ANTHROPIC_CHECKS)
-    assert checks["models"]["status"] == "failed"
+    assert result.json()["success"] is True
+    assert result.json()["status_code"] == 200 and result.json()["error"] == ""
+    assert checks["models"]["status"] == "skipped"
+    assert checks["models"]["status_code"] == list_status
+    assert checks["models"]["skip_reason"] == "models_endpoint_unavailable"
+    assert checks["models"]["error"] == ""
     assert checks["messages"]["status"] == checks["messages_stream"]["status"] == "passed"
     for call in messages.calls:
         assert call.request.headers["x-api-key"] == "anthropic-secret"
         assert json.loads(call.request.content)["model"] == "claude-real"
+
+
+@respx.mock
+@pytest.mark.parametrize("list_status", [401, 403, 429, 500, 502])
+async def test_anthropic_discovery_operational_errors_still_fail_the_result(client, admin_token, list_status):
+    channel = await Channel.create(name="native-errors", provider="anthropic", base_url="https://native.test/anthropic",
+                                   api_key="secret", models=["model"])
+    respx.get("https://native.test/anthropic/v1/models").respond(list_status)
+    respx.post("https://native.test/anthropic/v1/messages").mock(side_effect=lambda request:
+        stream(MESSAGES_STREAM) if json.loads(request.content)["stream"] else httpx.Response(200, json=MESSAGES))
+    response = await client.post(f"/api/channels/{channel.id}/test", headers=auth_header(admin_token))
+    data = response.json()
+    assert data["success"] is False
+    assert data["checks"][0]["status"] == "failed" and data["checks"][0]["skip_reason"] is None
+    assert data["checks"][0]["status_code"] == list_status
+    assert all(check["status"] == "passed" for check in data["checks"][1:])
+
+
+@respx.mock
+@pytest.mark.parametrize("provider", ["openai", "anthropic"])
+async def test_skipped_discovery_does_not_hide_generation_failures_or_skip_openai(client, admin_token, provider):
+    channel = await Channel.create(name="generation-failure", provider=provider, base_url="https://checks.test",
+                                   api_key="secret", models=["model"])
+    respx.get("https://checks.test/v1/models").respond(404)
+    respx.route(method="POST").respond(500, json={"error": {"message": "Generation is unavailable"}})
+    response = await client.post(f"/api/channels/{channel.id}/test", headers=auth_header(admin_token))
+    data = response.json()
+    assert data["success"] is False
+    assert data["checks"][0]["status"] == ("skipped" if provider == "anthropic" else "failed")
+    assert all(check["status"] == "failed" for check in data["checks"][1:])
+
+
+async def test_only_skipped_checks_cannot_report_success(client, admin_token, channel):
+    with patch("app.routers.channels.run_channel_checks", AsyncMock(return_value=[
+        channel_checks.ChannelCheckResult(kind="models", status="skipped", status_code=404,
+                                          skip_reason="models_endpoint_unavailable"),
+    ])):
+        response = await client.post(f"/api/channels/{channel.id}/test", headers=auth_header(admin_token))
+    assert response.json()["success"] is False
+
+
+@pytest.mark.parametrize("case", ["timeout", "invalid_json", "error_in_200"])
+async def test_anthropic_discovery_does_not_skip_transport_or_payload_errors(case):
+    def upstream(_):
+        if case == "timeout":
+            raise httpx.ReadTimeout("timed out")
+        if case == "invalid_json":
+            return httpx.Response(200, text="<html>Not a model list</html>")
+        return httpx.Response(200, json={"error": {"type": "not_found_error", "message": "Unknown resource"}})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(upstream), base_url="https://checks.test") as http:
+        provider = SimpleNamespace(channel=SimpleNamespace(provider="anthropic", timeout=1, base_url="https://checks.test"),
+                                   client=http, _anthropic_headers=lambda: {})
+        result = await channel_checks._check(provider, "model", "models")
+    assert result.status == ("timeout" if case == "timeout" else "failed")
+    assert result.skip_reason is None and result.error
 
 
 @pytest.mark.parametrize(("kind", "response", "error"), [

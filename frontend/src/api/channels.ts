@@ -4,11 +4,12 @@ export type ChannelCheckKind = 'models' | 'chat' | 'chat_stream' | 'responses' |
 
 export interface ChannelCheckResult {
   kind: ChannelCheckKind
-  status: 'passed' | 'failed' | 'timeout'
+  status: 'passed' | 'failed' | 'timeout' | 'skipped'
   status_code: number | null
   latency_ms: number
   first_text_ms: number | null
   error: string
+  skip_reason?: 'models_endpoint_unavailable' | null
 }
 
 export interface ChannelTestResult {

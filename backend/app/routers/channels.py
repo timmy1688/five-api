@@ -155,10 +155,13 @@ async def test_channel(channel_id: int, body: ChannelTestRequest | None = None,
             checks = await run_channel_checks(ch, model)
     except ConcurrencyExceeded:
         raise HTTPException(429, "Two model checks are already running", headers={"Retry-After": "10"})
-    failed = next((check for check in checks if check.status != "passed"), None)
+    evaluated = [check for check in checks if check.status != "skipped"]
+    failed = next((check for check in evaluated if check.status != "passed"), None)
+    success = bool(evaluated) and failed is None
     return ChannelTestResponse(
-        success=failed is None, model=model, actual_model=actual, checks=checks,
-        status_code=failed.status_code if failed else 200, error=failed.error if failed else "",
+        success=success, model=model, actual_model=actual, checks=checks,
+        status_code=failed.status_code if failed else 200 if success else None,
+        error=failed.error if failed else "" if success else "No checks completed",
     )
 
 
