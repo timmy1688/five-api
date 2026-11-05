@@ -68,6 +68,19 @@ Cursor 设置 → Models → API Keys，打开「OpenAI API Key」填入 `sk-...
 
 **未实测原因**：Cursor 的自定义地址由 Cursor 的服务器发起请求，而不是从你的电脑发起，所以网关必须有公网可访问的 HTTPS 地址，`localhost`、内网地址都不能用。我们的测试环境没有公网地址，因此未做端到端验证。Cursor 的 Agent、Tab 补全等功能是否会走自定义地址由 Cursor 决定，以 Cursor 官方说明为准。
 
+## 功能支持情况
+
+以下是 2026-11-05 用 Claude Code 2.1.197、Codex CLI 0.164.0 经 DeepSeek 渠道的实测结果。网关对这些工具都是原样透传，能不能用取决于上游。
+
+| 功能 | Claude Code（Anthropic 协议渠道） | Codex CLI（OpenAI 协议渠道） |
+| --- | --- | --- |
+| 多轮对话、写文件、执行命令 | 可用 | 可用 |
+| 联网搜索 | 可用：DeepSeek 的 Anthropic 端点在服务端执行 `web_search`，结果原样返回 | 不可用：`--search` 发出的 `web_search` 工具被网关转发，但 DeepSeek 的 OpenAI 端点不执行，模型会说没有搜索工具 |
+| 抓取网页（WebFetch） | 可用，由客户端本地执行 | 未测 |
+| 图片输入、MCP、子代理 | 未测 | 未测 |
+
+计费说明：联网搜索是上游在服务端执行的，**网关目前只按 token 计费，不对搜索次数计价**。每次请求里上游报告的搜索次数会记在请求日志的 `cost_detail.unpriced_server_tools.web_search_requests`，方便你核对未计价的用量。Anthropic 官方等按次收取搜索费的上游，这部分费用目前不会转嫁给客户；对外售卖时要留意。
+
 ## 常见问题
 
 | 现象 | 原因 |

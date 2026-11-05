@@ -298,6 +298,7 @@ async def _bill_and_log(
     session_id: str = "",
     usage_source: str = "upstream",
     uncertain: bool = False,
+    web_search_requests: int = 0,
 ):
     latency_ms = int((time.monotonic() - start_time) * 1000)
     payload = dict(
@@ -341,8 +342,11 @@ async def _bill_and_log(
         customer = quote_cost(selected["selling"], prompt_tokens, completion_tokens, cached_tokens,
                               cache_write_tokens, request_units)
         cost = customer["cost"]
-        payload.update(cost=str(cost), cache_savings=str(customer["cache_savings"]),
-                       cost_detail={**customer["detail"], "usage_source": usage_source})
+        detail = {**customer["detail"], "usage_source": usage_source}
+        if web_search_requests > 0:
+            # Recorded for the operator only: searches the upstream ran are not priced or charged.
+            detail["unpriced_server_tools"] = {"web_search_requests": web_search_requests}
+        payload.update(cost=str(cost), cache_savings=str(customer["cache_savings"]), cost_detail=detail)
     except Exception as exc:
         cost = None
         price_error = type(exc).__name__
@@ -494,6 +498,7 @@ async def execute_with_failover(
                     budget=budget,
                     session_id=session_id,
                     request_units=request_units, usage_source=provenance,
+                    web_search_requests=usage.get("web_search_requests", 0),
                 )
                 await _quiet(record_success(channel.id), "health reset")
                 await _quiet(bind_sticky_channel(session_key, channel.id), "sticky binding")
@@ -567,6 +572,7 @@ async def stream_with_failover(
     completion_tokens = 0
     cached_tokens = 0
     cache_write_tokens = 0
+    web_search_requests = 0
     status_code = 200
     error_msg = ""
     error_origin = ""
@@ -615,6 +621,7 @@ async def stream_with_failover(
                                     if upstream_headers is not None:
                                         upstream_headers.update(_provider_headers(prov))
                                 if usage:
+                                    web_search_requests = usage.get("web_search_requests", web_search_requests)
                                     reported_prompt = reported_prompt or usage.get("reported_prompt", "prompt_tokens" in usage)
                                     reported_output = reported_output or usage.get("reported_completion", "completion_tokens" in usage)
                                     if usage.get("reported_prompt", "prompt_tokens" in usage):
@@ -739,6 +746,7 @@ async def stream_with_failover(
                 session_id=session_id,
                 usage_source="upstream" if reported_prompt and reported_output else "mixed" if reported_prompt or reported_output else "estimated",
                 uncertain=uncertain,
+                web_search_requests=web_search_requests,
             )
             if budget is not None:
                 await _quiet(budget.release(), "budget release")

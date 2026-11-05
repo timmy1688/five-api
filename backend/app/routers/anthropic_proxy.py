@@ -36,17 +36,35 @@ from app.services.unbilled_limits import guard_unbilled
 router = APIRouter(tags=["anthropic-proxy"])
 
 
-def _billing_usage(input_tokens: int, output_tokens: int, cache_read: int, cache_creation: int) -> dict:
+def _web_search_requests(usage: dict) -> int:
+    """上游服务端执行的搜索次数（usage.server_tool_use.web_search_requests）。
+
+    只接受正整数；缺失或格式异常一律按 0 处理，不能影响 token 计费。
+    """
+    used = usage.get("server_tool_use") if isinstance(usage, dict) else None
+    count = used.get("web_search_requests") if isinstance(used, dict) else None
+    if isinstance(count, int) and not isinstance(count, bool) and count > 0:
+        return count
+    return 0
+
+
+def _billing_usage(input_tokens: int, output_tokens: int, cache_read: int, cache_creation: int,
+                   web_search_requests: int = 0) -> dict:
     """Anthropic 的 input_tokens 不含缓存 token，而计费按 OpenAI 口径（prompt_tokens
     含全部输入）。这里把 cache_read + cache_creation 补进 prompt_tokens，
     cached_tokens 只取 cache_read。cache_creation 单独按缓存写入价计。
+
+    web_search_requests 只用于记录，目前不参与计价；为 0 时不出现在结果里。
     """
-    return {
+    usage = {
         "prompt_tokens": input_tokens + cache_read + cache_creation,
         "completion_tokens": output_tokens,
         "cached_tokens": cache_read,
         "cache_write_tokens": cache_creation,
     }
+    if web_search_requests:
+        usage["web_search_requests"] = web_search_requests
+    return usage
 
 
 def _extract_anthropic_usage(resp: dict) -> dict:
@@ -56,6 +74,7 @@ def _extract_anthropic_usage(resp: dict) -> dict:
         usage.get("output_tokens", 0) or 0,
         usage.get("cache_read_input_tokens", 0) or 0,
         usage.get("cache_creation_input_tokens", 0) or 0,
+        _web_search_requests(usage),
     )
 
 
@@ -80,6 +99,7 @@ async def _passthrough_stream_with_usage(
     output_tokens = 0
     cache_read = 0
     cache_creation = 0
+    web_searches = 0
     reported_prompt = reported_completion = False
 
     async with aclosing(provider.stream_anthropic_passthrough(body, extra_headers)) as events:
@@ -95,14 +115,16 @@ async def _passthrough_stream_with_usage(
                         input_tokens = u.get("input_tokens", input_tokens)
                         cache_read = u.get("cache_read_input_tokens", cache_read)
                         cache_creation = u.get("cache_creation_input_tokens", cache_creation)
+                        web_searches = _web_search_requests(u) or web_searches
                     delta_usage = data.get("usage", {})
                     if delta_usage:
                         reported_completion = reported_completion or "output_tokens" in delta_usage
                         output_tokens = delta_usage.get("output_tokens", output_tokens)
+                        web_searches = _web_search_requests(delta_usage) or web_searches
                 except (json.JSONDecodeError, ValueError):
                     pass
 
-            yield line, {**_billing_usage(input_tokens, output_tokens, cache_read, cache_creation),
+            yield line, {**_billing_usage(input_tokens, output_tokens, cache_read, cache_creation, web_searches),
                          "reported_prompt": reported_prompt, "reported_completion": reported_completion}
 
 
