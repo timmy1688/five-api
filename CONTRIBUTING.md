@@ -46,3 +46,7 @@ Preserve tenant scope on every query and separate management credentials from in
 A release requires passing CI, a matching version/tag, changelog and upgrade notes. Tag publishing builds amd64/arm64 images only after quality checks. Maintainers create release tags; ordinary pushes do not publish a release.
 
 Describe the concrete behavior, validation and migration impact in PRs. Do not report security issues publicly; open a non-sensitive issue to request a private channel, with secrets removed.
+
+## For maintainers: reviewing PRs
+
+[`docs/maintainers/handle-pr/`](docs/maintainers/handle-pr/README.md) (written in Chinese) is the workflow for handling external PRs: triage, a risk checklist for this codebase, local verification with disposable services, comment templates, and the post-merge/release steps. Read it as a plain checklist, or point your coding agent at it. Entry points exist for Claude Code (`CLAUDE.md`) and for tools that read `AGENTS.md` (Cursor, Codex and others).
