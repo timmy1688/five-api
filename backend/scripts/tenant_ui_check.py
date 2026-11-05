@@ -37,15 +37,21 @@ async def verify_ui(username: str, password: str, tenant_token: str, tenant_ids:
             dialog = page.get_by_role("dialog", name="Create tenant", exact=True)
             fields = dialog.locator(".el-form-item")
             customer = username + "-ui"
-            await fields.nth(0).locator("input").fill(customer)
-            await fields.nth(2).locator("input").fill(customer)
-            await fields.nth(3).locator("input").fill(password)
+            await fields.nth(0).locator("input").fill(customer)  # username; it is also the tenant name
             async with page.expect_response(lambda r: r.url.endswith("/api/tenants") and r.request.method == "POST") as pending:
                 await dialog.get_by_role("button", name="Save", exact=True).click()
             response = await pending.value
             assert response.status == 201, "tenant form submission"
-            tenant_ids.append((await response.json())["id"])
+            created = await response.json()
+            tenant_ids.append(created["id"])
             await expect(dialog).not_to_be_visible()
+            # The generated login password is shown once, then dropped with the dialog.
+            issued = page.get_by_role("dialog", name="Account created", exact=True)
+            await expect(issued).to_be_visible()
+            assert await issued.locator("input").input_value() == created["temporary_password"], "one-time password display"
+            await issued.get_by_role("button", name="I have copied it", exact=True).click()
+            await expect(issued).not_to_be_visible()
+            await expect(issued.locator("input")).to_have_value("")
             await expect(page.get_by_text(customer, exact=True).first).to_be_visible()
 
             from scripts.settings_ui_check import verify_settings

@@ -24,7 +24,7 @@ async def customer(name="customer", models=None):
 
 async def test_atomic_provisioning_defaults_and_temporary_password(client, admin_token):
     headers = auth_header(admin_token)
-    body = {"name": "alpha", "username": "alpha", "password": "temporary-pass"}
+    body = {"name": "alpha", "username": "alpha", "password": "Temporary-Pass-1"}
     created = await client.post("/api/tenants", json=body, headers=headers)
     assert created.status_code == 201
     assert Decimal(created.json()["quota_total"]) == 0
@@ -35,13 +35,13 @@ async def test_atomic_provisioning_defaults_and_temporary_password(client, admin
     duplicate = await client.post("/api/tenants", json={**body, "name": "other"}, headers=headers)
     assert duplicate.status_code == 409
     assert not await Tenant.exists(name="other")
-    login = await client.post("/api/login", json={"username": "alpha", "password": "temporary-pass"})
+    login = await client.post("/api/login", json={"username": "alpha", "password": "Temporary-Pass-1"})
     assert login.json()["expires_in"] == settings.JWT_EXPIRE_MINUTES * 60
     old_headers = auth_header(login.json()["access_token"])
     assert (await client.get("/api/me", headers=old_headers)).status_code == 200
     assert (await client.get("/api/keys", headers=old_headers)).status_code == 403
     changed = await client.put("/api/password", headers=old_headers,
-                               json={"old_password": "temporary-pass", "new_password": "customer-new-pass"})
+                               json={"old_password": "Temporary-Pass-1", "new_password": "Customer-New-Pass-1"})
     assert changed.status_code == 200
     assert (await client.get("/api/me", headers=old_headers)).status_code == 401
     fresh = auth_header(changed.json()["access_token"])
@@ -154,6 +154,41 @@ async def test_quota_change_idempotence_and_occupied_balance(client, admin_token
     assert (await client.put(path, headers=headers, json=body)).status_code == 403
 
 
+async def test_tenant_name_defaults_to_the_username(client, admin_token):
+    platform = auth_header(admin_token)
+    created = await client.post("/api/tenants", json={"username": "acme-corp"}, headers=platform)
+    assert created.status_code == 201
+    assert created.json()["name"] == "acme-corp" and created.json()["username"] == "acme-corp"
+    assert (await Tenant.get(id=created.json()["id"])).name == "acme-corp"
+    # An explicit name is still honoured for API clients.
+    named = await client.post("/api/tenants", json={"username": "globex", "name": "Globex Inc."}, headers=platform)
+    assert named.json()["name"] == "Globex Inc." and named.json()["username"] == "globex"
+    # The internal platform space owns its name; a customer cannot take it.
+    await Tenant.create(name="__platform_internal__", is_system=True)
+    clash = await client.post("/api/tenants", json={"username": "__platform_internal__"}, headers=platform)
+    assert clash.status_code == 409
+
+
+async def test_quota_reason_is_optional_and_replay_stays_idempotent(client, admin_token):
+    tenant, _, _ = await customer()
+    platform = auth_header(admin_token)
+    path = f"/api/tenants/{tenant.id}/quota"
+    op = str(uuid4())
+    first = await client.put(path, headers=platform, json={"quota_total": 30, "operation_id": op})
+    assert first.status_code == 200 and Decimal(first.json()["quota_total"]) == 30
+    event = await ManagementEvent.get(operation_id=op)
+    assert event.detail["reason"] == "" and event.detail["after"] == "30.000000"
+    assert "E" not in event.detail["before"] and Decimal(event.detail["before"]) == 20
+    replay = await client.put(path, headers=platform, json={"quota_total": 30, "operation_id": op})
+    assert replay.status_code == 200 and await ManagementEvent.filter(operation_id=op).count() == 1
+    # The same operation id with a different outcome is still refused.
+    other = await client.put(path, headers=platform, json={"quota_total": 31, "operation_id": op})
+    assert other.status_code == 409
+    noted = await client.put(path, headers=platform,
+                             json={"quota_total": 30, "reason": "renewal", "operation_id": op})
+    assert noted.status_code == 409
+
+
 async def test_key_replacement_preserves_history_and_revocation_is_permanent(client):
     tenant, _, headers = await customer()
     first = (await client.post("/api/keys", headers=headers, json={"name": "old"})).json()
@@ -177,10 +212,10 @@ async def test_tenant_disable_and_manual_password_reset(client, admin_token):
     assert (await client.get("/v1/models", headers=auth_header(key["key"]))).status_code == 403
     await client.put(f"/api/tenants/{tenant.id}", headers=platform, json={"is_enabled": True})
     reset = await client.put(f"/api/tenants/{tenant.id}/password", headers=platform,
-                             json={"password": "another-temporary-pass"})
+                             json={"password": "Another-Temp-Pass-1"})
     assert reset.status_code == 200
     assert (await client.get("/api/me", headers=headers)).status_code == 401
-    login = await client.post("/api/login", json={"username": "customer", "password": "another-temporary-pass"})
+    login = await client.post("/api/login", json={"username": "customer", "password": "Another-Temp-Pass-1"})
     assert login.json()["must_change_password"] is True
     assert (await client.get("/v1/models", headers=auth_header(key["key"]))).status_code == 200
 

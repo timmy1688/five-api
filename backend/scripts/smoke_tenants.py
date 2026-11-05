@@ -7,7 +7,6 @@ import asyncio
 import json
 import os
 import re
-import secrets
 import sys
 import threading
 from decimal import Decimal
@@ -20,6 +19,7 @@ from tortoise import Tortoise
 from app.config import TORTOISE_ORM
 from app.models import APIKey, Channel, ManagementEvent, ModelPrice, RequestLog, Settlement, Tenant, UsageDaily, User, ModelProbe
 from app.services.auth import hash_password
+from app.services.passwords import generate_temporary_password
 
 BASE = os.environ.get("FIVE_SMOKE_BASE_URL", "http://127.0.0.1:5002")
 
@@ -59,7 +59,7 @@ class Upstream(BaseHTTPRequestHandler):
 async def run():
     await Tortoise.init(config=TORTOISE_ORM)
     suffix = uuid4().hex[:12]
-    password = secrets.token_urlsafe(24)
+    password = generate_temporary_password()  # satisfies the password policy for sure
     model = "five-smoke-" + suffix
     operator = None
     tenant_ids = []
@@ -78,17 +78,22 @@ async def run():
             tenants = []
             for label in ("a", "b"):
                 username = f"smoke-{label}-{suffix}"
+                # No password is sent: the server generates a one-time password and returns it once.
                 created = await client.post("/api/tenants", headers=platform, json={
-                    "name": username, "username": username, "password": password,
+                    "username": username,
                     "quota_total": 20, "allowed_models": [model],
                 })
                 assert created.status_code == 201, "provision"
+                assert created.json()["name"] == username, "the username doubles as the tenant name"
+                assert created.headers["cache-control"] == "no-store"
+                temporary = created.json()["temporary_password"]
                 tenant_ids.append(created.json()["id"])
-                login = await client.post("/api/login", json={"username": username, "password": password})
+                login = await client.post("/api/login", json={"username": username, "password": temporary})
+                assert login.status_code == 200, "generated password login"
                 headers = {"Authorization": "Bearer " + login.json()["access_token"]}
                 assert (await client.get("/api/keys", headers=headers)).status_code == 403, "temporary password"
                 changed = await client.put("/api/password", headers=headers, json={
-                    "old_password": password, "new_password": password + "-new",
+                    "old_password": temporary, "new_password": password + "-new",
                 })
                 assert changed.status_code == 200, "password change"
                 assert (await client.get("/api/me", headers=headers)).status_code == 401, "token revocation"

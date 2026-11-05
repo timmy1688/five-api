@@ -39,6 +39,7 @@ import { ElMessage } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
 import { useI18n } from '@/i18n'
 import LangSwitch from '@/components/LangSwitch.vue'
+import { passwordProblem } from '@/utils/password'
 
 const { t } = useI18n()
 const router = useRouter()
@@ -47,8 +48,9 @@ const loading = ref(false)
 const form = ref({ oldPassword: '', newPassword: '', confirm: '' })
 
 async function handleSubmit() {
-  if (form.value.newPassword.length < 8) {
-    ElMessage.error(t('password.rule'))
+  const problem = passwordProblem(form.value.newPassword)
+  if (problem) {
+    ElMessage.error(t(`password.${problem}`))
     return
   }
   if (form.value.newPassword !== form.value.confirm) {

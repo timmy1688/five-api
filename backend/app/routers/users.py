@@ -1,12 +1,13 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from tortoise.exceptions import IntegrityError
 from tortoise.expressions import F
 from tortoise.transactions import in_transaction
 
 from app.models import User
-from app.schemas.user import UserCreate, UserInfo, UserUpdate
+from app.schemas.user import PasswordReset, UserCreate, UserCreated, UserInfo, UserUpdate
 from app.services.auth import PLATFORM_ADMIN, hash_password, require_platform_admin
 from app.services.management_events import record_event
+from app.services.passwords import resolve_new_password
 
 router = APIRouter(prefix="/api/users", tags=["platform accounts"])
 
@@ -23,16 +24,41 @@ async def list_admins(page: int = Query(1, ge=1), size: int = Query(20, ge=1, le
     return {"total": await query.count(), "items": [user_info(u) for u in users]}
 
 
-@router.post("", response_model=UserInfo, status_code=201)
-async def create_admin(body: UserCreate, actor: User = Depends(require_platform_admin)):
+@router.post("", response_model=UserCreated, status_code=201)
+async def create_admin(body: UserCreate, response: Response, actor: User = Depends(require_platform_admin)):
+    password, generated = resolve_new_password(body.password)
     try:
         async with in_transaction():
-            user = await User.create(username=body.username, hashed_password=hash_password(body.password),
+            user = await User.create(username=body.username, hashed_password=hash_password(password),
                                      role=PLATFORM_ADMIN, must_change_password=True)
-            await record_event(actor, "admin.create", user.id)
+            await record_event(actor, "admin.create", user.id, detail={"password_generated": generated})
     except IntegrityError:
         raise HTTPException(409, "Username already exists")
-    return user_info(user)
+    result = UserCreated.model_validate(user, from_attributes=True)
+    if generated:
+        response.headers["Cache-Control"] = "no-store"
+        result.temporary_password = password
+    return result
+
+
+@router.put("/{admin_id}/password")
+async def reset_admin_password(admin_id: int, body: PasswordReset, response: Response,
+                               actor: User = Depends(require_platform_admin)):
+    password, generated = resolve_new_password(body.password)
+    async with in_transaction():
+        count = await User.filter(id=admin_id, role=PLATFORM_ADMIN).update(
+            hashed_password=hash_password(password), must_change_password=True,
+            token_version=F("token_version") + 1,
+        )
+        if not count:
+            raise HTTPException(404, "Platform account not found")
+        await record_event(actor, "admin.update", admin_id,
+                           detail={"password_reset": True, "password_generated": generated})
+    result = {"message": "Temporary password set; password change required at next login"}
+    if generated:
+        response.headers["Cache-Control"] = "no-store"
+        result["temporary_password"] = password
+    return result
 
 
 @router.put("/{admin_id}", response_model=UserInfo)

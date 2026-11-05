@@ -51,7 +51,7 @@ async def test_change_password(client):
     token = create_access_token({"sub": str(admin.id)})
     resp = await client.put(
         "/api/password",
-        json={"old_password": "old123", "new_password": "new45678"},
+        json={"old_password": "old123", "new_password": "New-Password-45678"},
         headers=auth_header(token),
     )
     assert resp.status_code == 200
@@ -63,7 +63,7 @@ async def test_change_password_wrong_old(client):
     token = create_access_token({"sub": str(admin.id)})
     resp = await client.put(
         "/api/password",
-        json={"old_password": "wrong", "new_password": "new45678"},
+        json={"old_password": "wrong", "new_password": "New-Password-45678"},
         headers=auth_header(token),
     )
     assert resp.status_code == 400
@@ -86,10 +86,11 @@ async def test_default_password_must_be_changed_before_admin_apis(client):
         json={"old_password": "admin123", "new_password": "admin123"},
         headers=auth_header(token),
     )
-    assert same.status_code == 400
+    # The default password is far below the policy, so it is refused before the reuse check.
+    assert same.status_code == 422
     changed = await client.put(
         "/api/password",
-        json={"old_password": "admin123", "new_password": "a-better-secret"},
+        json={"old_password": "admin123", "new_password": "A-Better-Secret-9"},
         headers=auth_header(token),
     )
     assert changed.status_code == 200

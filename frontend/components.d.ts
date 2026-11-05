@@ -69,6 +69,7 @@ declare module 'vue' {
     RouterView: typeof import('vue-router')['RouterView']
     SettlementNotice: typeof import('./src/components/SettlementNotice.vue')['default']
     SettlementStatus: typeof import('./src/components/SettlementStatus.vue')['default']
+    TemporaryPasswordDialog: typeof import('./src/components/TemporaryPasswordDialog.vue')['default']
     WindowLimitsInput: typeof import('./src/components/WindowLimitsInput.vue')['default']
     WindowUsage: typeof import('./src/components/WindowUsage.vue')['default']
   }

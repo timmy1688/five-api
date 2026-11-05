@@ -243,12 +243,12 @@ async def test_team_budget_blocks_and_accumulates(client):
 async def test_team_crud_and_stats(client):
     admin = await create_admin("teamadmin", "pw")
     headers = auth_header(create_access_token({"sub": str(admin.id)}))
-    created = await client.post("/api/tenants", json={"name": "ops", "username": "ops", "password": "temporary-pass", "quota_total": 50}, headers=headers)
+    created = await client.post("/api/tenants", json={"name": "ops", "username": "ops", "password": "Temporary-Pass-1", "quota_total": 50}, headers=headers)
     assert created.status_code == 201
     tenant_id = created.json()["id"]
 
-    login = await client.post("/api/login", json={"username": "ops", "password": "temporary-pass"})
-    changed = await client.put("/api/password", json={"old_password": "temporary-pass", "new_password": "permanent-pass"},
+    login = await client.post("/api/login", json={"username": "ops", "password": "Temporary-Pass-1"})
+    changed = await client.put("/api/password", json={"old_password": "Temporary-Pass-1", "new_password": "Permanent-Pass-1"},
                                headers=auth_header(login.json()["access_token"]))
     key = await client.post("/api/keys", json={"name": "ops-key"}, headers=auth_header(changed.json()["access_token"]))
     assert key.status_code == 201

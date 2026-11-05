@@ -4,7 +4,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator
 
-from app.schemas.user import StrictModel, UserCreate
+from app.schemas.user import PasswordReset, StrictModel, UserCreate
 
 
 class TenantLimits(StrictModel):
@@ -17,7 +17,8 @@ class TenantLimits(StrictModel):
 
 
 class TenantCreate(UserCreate, TenantLimits):
-    name: str = Field(min_length=1, max_length=128)
+    # Optional: the login username doubles as the tenant name unless a name is sent explicitly.
+    name: str | None = Field(None, min_length=1, max_length=128)
     description: str = Field("", max_length=256)
     quota_total: Decimal = Field(Decimal("0"), ge=0, max_digits=16, decimal_places=6)
     allowed_models: list[str] = Field(default_factory=list)
@@ -40,12 +41,12 @@ class TenantUpdate(TenantLimits):
 
 class TenantQuotaUpdate(StrictModel):
     quota_total: Decimal = Field(ge=0, max_digits=16, decimal_places=6)
-    reason: str = Field(min_length=1, max_length=256)
+    # Optional note kept in the management event; before and after totals are always recorded.
+    reason: str = Field("", max_length=256)
     operation_id: UUID
 
 
-class TenantPasswordReset(StrictModel):
-    password: str = Field(min_length=8, max_length=128)
+TenantPasswordReset = PasswordReset
 
 
 class TenantResponse(BaseModel):
@@ -70,3 +71,8 @@ class TenantResponse(BaseModel):
     key_count: int = 0
     created_at: datetime
     updated_at: datetime
+
+
+class TenantCreated(TenantResponse):
+    # Set only when the server generated the login password; shown once.
+    temporary_password: str | None = None

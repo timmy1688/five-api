@@ -44,7 +44,7 @@ git clone https://github.com/timmy1688/five-api.git && cd five-api
 ./service.sh deploy   # 拉取 ghcr.io/timmy1688/five-api，启动网关、MySQL、Redis
 ```
 
-打开 `http://服务器IP:8080`，用 `admin` / `admin123` 登录（首次登录强制改密码）。添加渠道、配置模型售价、给租户开户，租户创建 Key 后：
+打开 `http://服务器IP:8080`，用 `admin` / `admin123` 登录（首次登录强制改密码，新密码至少 12 位，并混用大小写字母、数字、符号中的三类）。添加渠道、配置模型售价、给租户开户，租户创建 Key 后：
 
 ```bash
 curl http://localhost:8080/v1/chat/completions \

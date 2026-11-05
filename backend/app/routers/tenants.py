@@ -1,16 +1,17 @@
 from decimal import Decimal
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from tortoise.exceptions import IntegrityError
 from tortoise.expressions import F
 from tortoise.transactions import in_transaction
 
 from app.models import APIKey, ManagementEvent, Tenant, User
 from app.schemas.tenant import (
-    TenantCreate, TenantPasswordReset, TenantQuotaUpdate, TenantResponse, TenantUpdate,
+    TenantCreate, TenantCreated, TenantPasswordReset, TenantQuotaUpdate, TenantResponse, TenantUpdate,
 )
 from app.services.auth import hash_password, require_platform_admin
 from app.services.management_events import record_event
+from app.services.passwords import resolve_new_password
 from app.services.quota import occupied_quota
 from app.services.spend_windows import normalize_limits, window_spend
 
@@ -55,18 +56,27 @@ async def list_all_tenants(_: User = Depends(require_platform_admin)):
     return await Tenant.filter(is_system=False).order_by("name").values("id", "name", "is_enabled")
 
 
-@router.post("", response_model=TenantResponse, status_code=201)
-async def create_tenant(body: TenantCreate, actor: User = Depends(require_platform_admin)):
+@router.post("", response_model=TenantCreated, status_code=201)
+async def create_tenant(body: TenantCreate, response: Response,
+                        actor: User = Depends(require_platform_admin)):
+    password, generated = resolve_new_password(body.password)
     try:
         async with in_transaction():
-            tenant = await Tenant.create(**body.model_dump(exclude={"username", "password"}))
-            account = await User.create(username=body.username, hashed_password=hash_password(body.password),
+            fields = body.model_dump(exclude={"username", "password"})
+            fields["name"] = body.name or body.username
+            tenant = await Tenant.create(**fields)
+            account = await User.create(username=body.username, hashed_password=hash_password(password),
                                         role="tenant", tenant_id=tenant.id, must_change_password=True)
             await record_event(actor, "tenant.create", tenant.id, tenant.id,
-                               {"account_id": account.id, "quota_total": str(tenant.quota_total)})
+                               {"account_id": account.id, "quota_total": str(tenant.quota_total),
+                                "password_generated": generated})
     except IntegrityError:
         raise HTTPException(409, "Tenant name or username already exists")
-    return await tenant_response(tenant)
+    result = TenantCreated(**(await tenant_response(tenant)).model_dump())
+    if generated:
+        response.headers["Cache-Control"] = "no-store"
+        result.temporary_password = password
+    return result
 
 
 @router.get("/{tenant_id}", response_model=TenantResponse)
@@ -112,7 +122,7 @@ async def adjust_quota(tenant_id: int, body: TenantQuotaUpdate,
             if amount < tenant.quota_used + occupied:
                 raise HTTPException(409, "Quota cannot be below used plus occupied; disable tenant to freeze")
             await record_event(actor, "tenant.quota", tenant_id, tenant_id,
-                               {"before": str(tenant.quota_total), "after": str(amount),
+                               {"before": format(tenant.quota_total, "f"), "after": str(amount),
                                 "reason": body.reason}, operation_id=operation_id)
             tenant.quota_total = amount
             await tenant.save(update_fields=["quota_total", "updated_at"])
@@ -120,15 +130,21 @@ async def adjust_quota(tenant_id: int, body: TenantQuotaUpdate,
 
 
 @router.put("/{tenant_id}/password")
-async def reset_password(tenant_id: int, body: TenantPasswordReset,
+async def reset_password(tenant_id: int, body: TenantPasswordReset, response: Response,
                          actor: User = Depends(require_platform_admin)):
+    password, generated = resolve_new_password(body.password)
     async with in_transaction():
         await find_tenant(tenant_id)
         count = await User.filter(tenant_id=tenant_id, role="tenant").update(
-            hashed_password=hash_password(body.password), must_change_password=True,
+            hashed_password=hash_password(password), must_change_password=True,
             token_version=F("token_version") + 1,
         )
         if not count:
             raise HTTPException(404, "Tenant has no login account")
-        await record_event(actor, "tenant.password_reset", tenant_id, tenant_id)
-    return {"message": "Temporary password set; password change required at next login"}
+        await record_event(actor, "tenant.password_reset", tenant_id, tenant_id,
+                           {"password_generated": generated})
+    result = {"message": "Temporary password set; password change required at next login"}
+    if generated:
+        response.headers["Cache-Control"] = "no-store"
+        result["temporary_password"] = password
+    return result

@@ -124,7 +124,7 @@ git clone https://github.com/timmy1688/five-api.git && cd five-api
 ./service.sh deploy   # pulls ghcr.io/timmy1688/five-api and starts the gateway, MySQL and Redis
 ```
 
-Open `http://SERVER_IP:8080` and sign in as `admin` / `admin123`; a password change is required on first login. Switch the console to English with the 中文 / EN toggle on the login page or in the header.
+Open `http://SERVER_IP:8080` and sign in as `admin` / `admin123`; a password change is required on first login, and the new password needs at least 12 characters mixing three of lowercase, uppercase, digits and symbols. Switch the console to English with the 中文 / EN toggle on the login page or in the header.
 
 ### First request
 
