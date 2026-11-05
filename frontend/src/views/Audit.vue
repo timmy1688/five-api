@@ -109,54 +109,59 @@
             <h4>{{ t('audit.reportConclusion') }}</h4>
             <p v-for="(line, index) in reportConclusions" :key="index" class="report-line">{{ line }}</p>
             <h4>{{ t('audit.reportDetails') }}</h4>
-            <div class="report-details">
-              <section v-for="(row, index) in reportRows" :key="row.request_id" class="report-item">
-                <div class="request-meta">
-                  <strong>{{ index + 1 }}.</strong>
-                  <span>{{ formatTime(row.created_at) }}</span>
-                  <span>{{ row.model_requested }}</span>
-                  <el-tag :type="row.status_code === 200 ? 'success' : 'danger'" size="small" round>{{ row.status_code }}</el-tag>
-                  <el-tag v-if="!reportVisible" size="small">{{ t('audit.reportSample') }}</el-tag>
-                  <el-tag v-if="row.keyword_hit" size="small" type="warning">{{ t('audit.reportKeyword') }}</el-tag>
-                  <el-tag :type="verdictTag(row.ai_review)" size="small">{{ verdictLabel(row.ai_review) || t('audit.reportUnreviewed') }}</el-tag>
-                </div>
-                <p class="verdict-line">{{ verdictDetail(row.ai_review) || t('audit.reportUnreviewed') }}</p>
-                <pre class="excerpt" :class="{ open: isOpen(row.request_id) }">{{ rowText(row) }}</pre>
-                <button v-if="canExpand(row)" type="button" class="expand" @click="toggleOpen(row.request_id)">
-                  {{ isOpen(row.request_id) ? t('audit.collapse') : t('audit.expand') }}
-                </button>
-              </section>
+            <p v-if="reportVisible" class="case-count report-scope">
+              {{ reportScopeText }}
+              <el-button v-if="canToggleScope" link type="primary" @click="showAllRows = !showAllRows">
+                {{ showAllRows ? t('audit.showConcernOnly') : t('audit.showAllRows', { count: requests.length }) }}
+              </el-button>
+            </p>
+            <div v-if="reportRows.length" class="report-details">
+              <AuditRequestRow
+                v-for="(row, index) in reportRows"
+                :key="row.request_id"
+                :row="row"
+                :index="index + 1"
+                :time="formatTime(row.created_at)"
+                :tag-text="verdictLabel(row.ai_review) || t('audit.reportUnreviewed')"
+                :tag-type="verdictTag(row.ai_review)"
+                :line="verdictDetail(row.ai_review) || t('audit.reportUnreviewed')"
+                :text="rowText(row)"
+                :preview="excerptPreview(row)"
+                :open="isOpen('report:' + row.request_id)"
+                :sample="!reportVisible"
+                @toggle="toggleOpen('report:' + row.request_id)"
+              />
             </div>
             <p v-if="!reportVisible && requests.length > 1" class="case-count sample-note">
               {{ t('audit.reportSampleNote', { count: requests.length - 1 }) }}
             </p>
           </article>
-          <section v-if="requests.length" ref="listBox" class="request-list">
-            <h4>{{ t('audit.requestsHeading') }}</h4>
-            <p class="case-count">{{ t('audit.savedHint') }}</p>
-            <section
-              v-for="(row, index) in requests"
-              :key="row.request_id"
-              :ref="(el) => setRowRef(row.request_id, el)"
-              class="report-item"
-              :class="{ current: row.request_id === reviewingId }"
-            >
-              <div class="request-meta">
-                <strong>{{ index + 1 }}.</strong>
-                <span>{{ formatTime(row.created_at) }}</span>
-                <span>{{ row.model_requested }}</span>
-                <el-tag :type="row.status_code === 200 ? 'success' : 'danger'" size="small" round>{{ row.status_code }}</el-tag>
-                <el-tag v-if="row.keyword_hit" size="small" type="warning">{{ t('audit.reportKeyword') }}</el-tag>
-                <el-tag v-if="row.request_id === reviewingId" type="primary" size="small">{{ t('audit.reviewingRow') }}</el-tag>
-                <el-tag v-else-if="reviewing && !isRunDone(row.request_id)" type="info" size="small">{{ t('audit.rowWaiting') }}</el-tag>
-                <el-tag v-else :type="verdictTag(row.ai_review)" size="small">{{ verdictLabel(row.ai_review) || t('audit.reportUnreviewed') }}</el-tag>
-              </div>
-              <p class="verdict-line">{{ rowVerdictLine(row) }}</p>
-              <pre class="excerpt" :class="{ open: isOpen(row.request_id) }">{{ rowText(row) }}</pre>
-              <button v-if="canExpand(row)" type="button" class="expand" @click="toggleOpen(row.request_id)">
-                {{ isOpen(row.request_id) ? t('audit.collapse') : t('audit.expand') }}
-              </button>
-            </section>
+          <section v-if="requests.length" class="request-list-box">
+            <button type="button" class="list-toggle" :aria-expanded="listOpen" @click="listOpen = !listOpen">
+              <span class="list-title">{{ t('audit.requestsHeading') }}</span>
+              <span class="list-count">{{ t('audit.requestsCount', { count: requests.length }) }}</span>
+              <span class="list-action">{{ listOpen ? t('audit.hideList') : t('audit.showList') }}</span>
+              <el-icon class="list-chevron" :class="{ flipped: listOpen }"><ArrowDown /></el-icon>
+            </button>
+            <div v-if="listOpen" ref="listBox" class="request-list">
+              <p class="case-count">{{ t('audit.savedHint') }}</p>
+              <AuditRequestRow
+                v-for="(row, index) in requests"
+                :key="row.request_id"
+                :ref="(el) => setRowRef(row.request_id, el)"
+                :row="row"
+                :index="index + 1"
+                :time="formatTime(row.created_at)"
+                :tag-text="listTag(row).text"
+                :tag-type="listTag(row).type"
+                :line="rowVerdictLine(row)"
+                :text="rowText(row)"
+                :preview="excerptPreview(row)"
+                :open="isOpen(row.request_id)"
+                :current="row.request_id === reviewingId"
+                @toggle="toggleOpen(row.request_id)"
+              />
+            </div>
           </section>
         </template>
       </el-card>
@@ -168,6 +173,8 @@
 import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import dayjs from 'dayjs'
+import { ArrowDown } from '@element-plus/icons-vue'
+import AuditRequestRow from '@/components/AuditRequestRow.vue'
 import { auditApi } from '@/api/audit'
 import { securityApi } from '@/api/security'
 import { useAuthStore } from '@/stores/auth'
@@ -203,10 +210,25 @@ const requests = ref<any[]>([])
 const savedTotal = ref(0)
 const selectedId = ref<number | null>(null)
 const openRows = ref<Record<string, boolean>>({})
+// Request details stay out of the way: the list is folded and the report lists only what needs a look.
+const listOpen = ref(false)
+const showAllRows = ref(false)
 
 const selectedPerson = computed(() => people.value.find(person => person.api_key_id === selectedId.value) || null)
 const shownRequests = computed(() => [...requests.value].sort((a, b) => concernRank(a.ai_review) - concernRank(b.ai_review)))
-const reportRows = computed(() => reportVisible.value ? shownRequests.value : shownRequests.value.slice(0, 1))
+const concernRows = computed(() => shownRequests.value.filter(row => concernRank(row.ai_review) < 2))
+const reportRows = computed(() => {
+  // Before the report is generated one sample row shows the format.
+  if (!reportVisible.value) return shownRequests.value.slice(0, 1)
+  return showAllRows.value ? shownRequests.value : concernRows.value
+})
+const canToggleScope = computed(() => showAllRows.value || concernRows.value.length < requests.value.length)
+const reportScopeText = computed(() => {
+  const total = requests.value.length
+  if (showAllRows.value) return t('audit.reportScopeAll', { count: total })
+  if (!concernRows.value.length) return t('audit.reportScopeNone', { total })
+  return t('audit.reportScopeConcern', { count: concernRows.value.length, rest: total - concernRows.value.length })
+})
 const reportCounts = computed(() => {
   const counts = countsOf(requests.value)
   return {
@@ -327,8 +349,16 @@ function rowVerdictLine(row: { request_id: string, ai_review: string }) {
   return verdictDetail(row.ai_review) || t('audit.reportUnreviewed')
 }
 
+function listTag(row: { request_id: string, ai_review: string }) {
+  if (row.request_id === reviewingId.value) return { text: t('audit.reviewingRow'), type: 'primary' as const }
+  if (reviewing.value && !isRunDone(row.request_id)) return { text: t('audit.rowWaiting'), type: 'info' as const }
+  return { text: verdictLabel(row.ai_review) || t('audit.reportUnreviewed'), type: verdictTag(row.ai_review) }
+}
+
 function setRowRef(id: string, el: unknown) {
-  if (el instanceof HTMLElement) rowEls.set(id, el)
+  // A component ref exposes its root element as $el.
+  const node = el instanceof HTMLElement ? el : (el as { $el?: unknown } | null)?.$el
+  if (node instanceof HTMLElement) rowEls.set(id, node)
   else rowEls.delete(id)
 }
 
@@ -343,7 +373,7 @@ async function focusRow(id: string) {
   box.scrollTo({ top: Math.max(0, box.scrollTop + delta), behavior: 'smooth' })
 }
 
-function verdictTag(value: string) {
+function verdictTag(value: string): 'success' | 'warning' | 'danger' | 'info' {
   if (!value) return 'info'
   if (value === 'clear') return 'success'
   if (String(value || '').startsWith('flagged:')) return 'danger'
@@ -409,10 +439,6 @@ function rowText(row: any) {
   return String(row?.saved || row?.excerpt || t('audit.noExcerpt'))
 }
 
-function canExpand(row: any) {
-  return rowText(row).length > 280
-}
-
 function isOpen(id: string) {
   return !!openRows.value[id]
 }
@@ -439,6 +465,9 @@ async function showReport() {
 async function selectPerson(id: number) {
   if (reviewing.value) return
   reportVisible.value = false
+  showAllRows.value = false
+  listOpen.value = false
+  openRows.value = {}
   reportGeneratedAt.value = ''
   reviewFinished.value = false
   reviewElapsedMs.value = 0
@@ -684,15 +713,69 @@ onMounted(async () => {
   line-height: 1.5;
 }
 
-.request-list {
-  max-height: 440px;
+.request-list-box {
   margin-top: 16px;
-  overflow: auto;
+  border: 1px solid #ededed;
+  border-radius: 8px;
 }
 
-.request-list h4,
-.report h4 {
-  margin: 16px 0 8px;
+.list-toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 14px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #1c1f23;
+  font-size: 14px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.list-toggle:hover {
+  background: #f7f8fa;
+}
+
+.list-toggle:focus-visible {
+  outline: 2px solid #3b5bfd;
+  outline-offset: -2px;
+}
+
+.list-title {
+  font-weight: 650;
+}
+
+.list-count {
+  flex: 1;
+  color: #86909c;
+  font-size: 13px;
+}
+
+.list-action {
+  color: #3b5bfd;
+  font-size: 13px;
+}
+
+.list-chevron {
+  color: #86909c;
+  transition: transform 0.15s;
+}
+
+.list-chevron.flipped {
+  transform: rotate(180deg);
+}
+
+.request-list {
+  max-height: 440px;
+  padding: 0 14px 8px;
+  overflow: auto;
+  border-top: 1px solid #ededed;
+}
+
+.request-list .case-count {
+  margin: 10px 0 6px;
 }
 
 .report-paper {
@@ -739,8 +822,12 @@ onMounted(async () => {
   font-size: 12px;
 }
 
+.report-scope {
+  margin-bottom: 8px;
+}
+
 .report-details {
-  max-height: 360px;
+  max-height: 420px;
   overflow: auto;
 }
 
@@ -757,13 +844,6 @@ onMounted(async () => {
 
 .paper-head h4 {
   margin-top: 0;
-}
-
-.report-item.current {
-  margin: 0 -8px;
-  padding: 12px 8px;
-  border-radius: 8px;
-  background: #f4f7ff;
 }
 
 .person:disabled {
@@ -787,11 +867,6 @@ onMounted(async () => {
   display: inline-block;
   min-width: 72px;
   color: #646a73;
-}
-
-.report-item {
-  padding: 12px 0;
-  border-top: 1px solid #ededed;
 }
 
 .audit-layout {
@@ -825,23 +900,6 @@ onMounted(async () => {
 .request-main {
   min-width: 0;
   flex: 1;
-}
-
-.request-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  align-items: center;
-  margin-bottom: 6px;
-  color: #646a73;
-  font-size: 13px;
-}
-
-.verdict-line {
-  margin-top: 6px;
-  color: #1c1f23;
-  font-size: 13px;
-  line-height: 1.5;
 }
 
 .card-title {
@@ -881,30 +939,6 @@ onMounted(async () => {
 .person-count {
   color: #646a73;
   font-variant-numeric: tabular-nums;
-}
-
-.excerpt {
-  margin: 0;
-  max-height: 220px;
-  overflow: auto;
-  white-space: pre-wrap;
-  font-size: 12px;
-  line-height: 1.5;
-  color: #1d2129;
-}
-
-.excerpt.open {
-  max-height: none;
-}
-
-.expand {
-  margin-top: 6px;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: #3b5bfd;
-  font-size: 12px;
-  cursor: pointer;
 }
 
 .review-result {

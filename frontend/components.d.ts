@@ -12,6 +12,7 @@ export {}
 declare module 'vue' {
   export interface GlobalComponents {
     AlertSettings: typeof import('./src/components/AlertSettings.vue')['default']
+    AuditRequestRow: typeof import('./src/components/AuditRequestRow.vue')['default']
     ChannelTestDialog: typeof import('./src/components/ChannelTestDialog.vue')['default']
     ElAlert: typeof import('element-plus/es')['ElAlert']
     ElAside: typeof import('element-plus/es')['ElAside']
