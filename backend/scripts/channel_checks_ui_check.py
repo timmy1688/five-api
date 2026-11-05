@@ -35,13 +35,21 @@ async def verify(base: str, executable: str | None, output: Path):
             if hold:
                 await release.wait()
             checks = []
-            for kind in ("models", "chat", "chat_stream", "responses", "responses_stream"):
+            kinds = ("models", "messages", "messages_stream") if channel["provider"] == "anthropic" else (
+                "models", "chat", "chat_stream", "responses", "responses_stream")
+            for kind in kinds:
+                if channel["provider"] == "anthropic" and kind == "models":
+                    checks.append({"kind": kind, "status": "skipped", "status_code": 404,
+                                   "latency_ms": 125, "first_text_ms": None, "error": "",
+                                   "skip_reason": "models_endpoint_unavailable"})
+                    continue
                 passed = not kind.startswith("responses")
                 checks.append({"kind": kind, "status": "passed" if passed else "failed",
                                "status_code": 200 if passed else 404, "latency_ms": 125,
                                "first_text_ms": 48 if kind == "chat_stream" else None,
                                "error": "" if passed else "Responses endpoint is not available"})
-            body = {"success": False, "model": model, "actual_model": model, "checks": checks}
+            body = {"success": all(check["status"] in {"passed", "skipped"} for check in checks),
+                    "model": model, "actual_model": model, "checks": checks}
         else:
             raise AssertionError(f"Unexpected API request: {path}")
         await route.fulfill(status=200, content_type="application/json", body=json.dumps(body))
@@ -94,8 +102,26 @@ async def verify(base: str, executable: str | None, output: Path):
             await expect(dialog.get_by_text("已完成 5 项检测，3 项通过。", exact=False)).to_be_visible()
             assert requested == ["model-a"], "Stopping must not start a second model"
             await expect(dialog.locator(".el-table__body .el-tag").filter(has_text="未检测")).to_have_count(5)
+            await dialog.get_by_role("button", name="关闭", exact=True).click()
+            channel["provider"] = "anthropic"
+            channel["name"] = "Anthropic-compatible demo"
+            hold = False
+            await page.reload()
+            dialog = page.get_by_role("dialog", name="接口检测 · Anthropic-compatible demo", exact=True)
+            await page.get_by_role("button", name="测试", exact=True).click()
+            await dialog.get_by_role("button", name="开始检测", exact=True).click()
+            await expect(dialog.get_by_text("已检测 2 项，2 项通过；另有 1 项可选检查已跳过。", exact=True)).to_be_visible()
+            await expect(dialog.locator(".el-table__body .el-tag").filter(has_text="跳过")).to_have_count(1)
+            await expect(dialog.locator(".el-table__body .el-tag").filter(has_text="通过")).to_have_count(2)
+            await expect(dialog.locator(".el-table__body .el-tag").filter(has_text="失败")).to_have_count(0)
+            await expect(dialog.locator(".check-table").get_by_text("模型列表返回 HTTP 404", exact=False)).to_be_visible()
+            await page.wait_for_load_state("networkidle")
+            await page.screenshot(path=str(output / "anthropic-optional-models-desktop.png"), full_page=True, animations="disabled")
+            await page.set_viewport_size({"width": 390, "height": 844})
+            await expect(dialog.locator(".check-cards").get_by_text("模型列表返回 HTTP 404", exact=False)).to_be_visible()
+            await page.screenshot(path=str(output / "anthropic-optional-models-mobile.png"), full_page=True)
             assert not errors, errors
-            print("PASS: model selection, independent endpoint results, reopening, batch stop, mobile layout, no browser errors")
+            print("PASS: model selection, endpoint results, batch stop, optional discovery summary, desktop/mobile, no browser errors")
         except Exception:
             if "page" in locals():
                 await page.screenshot(path=str(output / "channel-checks-failure.png"), full_page=True)

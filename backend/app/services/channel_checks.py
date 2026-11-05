@@ -195,6 +195,7 @@ async def _check(provider, model: str, kind: str) -> ChannelCheckResult:
     first_text_ms = None
     status = "passed"
     error = ""
+    skip_reason = None
     try:
         async with asyncio.timeout(min(provider.channel.timeout, CHECK_TIMEOUT_SECONDS)):
             stream = kind.endswith("_stream")
@@ -209,8 +210,14 @@ async def _check(provider, model: str, kind: str) -> ChannelCheckResult:
                     raise CheckFailed("Expected JSON, received a non-JSON response") from None
                 _validate_json(data, kind)
     except Exception as exc:
-        status = "timeout" if isinstance(exc, (TimeoutError, httpx.TimeoutException)) else "failed"
-        error = _failure(exc)
+        if (isinstance(exc, httpx.HTTPStatusError)
+                and kind == "models" and provider.channel.provider == "anthropic"
+                and response is not None and response.status_code in {404, 405}):
+            status = "skipped"
+            skip_reason = "models_endpoint_unavailable"
+        else:
+            status = "timeout" if isinstance(exc, (TimeoutError, httpx.TimeoutException)) else "failed"
+            error = _failure(exc)
     finally:
         if response is not None:
             with anyio.move_on_after(1, shield=True):
@@ -218,6 +225,7 @@ async def _check(provider, model: str, kind: str) -> ChannelCheckResult:
     return ChannelCheckResult(
         kind=kind, status=status, status_code=response.status_code if response is not None else None,
         latency_ms=round((time.monotonic() - started) * 1000), first_text_ms=first_text_ms, error=error,
+        skip_reason=skip_reason,
     )
 
 

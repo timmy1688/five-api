@@ -55,7 +55,9 @@
 | `GET /api/keys/{id}/usage` | 最近 50 条请求元数据，不含正文和凭据 |
 | `POST /api/channels/{id}/test` | 仅平台；传 `{"model":"渠道内模型名"}`，分别检测模型列表、原生生成和流式接口；不传请求体时检测第一个配置模型 |
 
-渠道检测返回 `model`、`actual_model` 和 `checks`：每项含 `kind`、`status`（passed / failed / timeout）、`status_code`、`latency_ms`、`first_text_ms`、脱敏 `error`。OpenAI 渠道检测 models、chat、chat_stream、responses、responses_stream；Anthropic 渠道检测 models、messages、messages_stream。顶层 `success` 仅在所有项目通过时为 true，某一接口失败不代表其他接口不可用。
+渠道检测返回 `model`、`actual_model` 和 `checks`：每项含 `kind`、`status`（passed / failed / timeout / skipped）、`status_code`、`latency_ms`、`first_text_ms`、脱敏 `error`、可选 `skip_reason`。OpenAI 渠道检测 models、chat、chat_stream、responses、responses_stream；Anthropic 渠道检测 models、messages、messages_stream。顶层 `success` 在至少有一项非跳过检查且所有非跳过项目通过时为 true，某一接口失败不代表其他接口不可用。
+
+Anthropic 兼容渠道可能只提供 Messages 接口，模型列表返回 HTTP 404 / 405 时将该项标为 `skipped`、`skip_reason=models_endpoint_unavailable`，保留原始 HTTP 状态，并从整体判定和通过率分母中排除。401 / 403、429、5xx、超时及格式错误仍为失败；OpenAI 渠道不使用此跳过规则。
 
 检测使用渠道内一个可用上游 Key，发起少量真实文本请求，会产生上游费用；不做跨渠道重试，不计入客户账单，也不修改熔断状态。每项最多 15 秒，共享巡检的全局两个并发、管理员每分钟 6 次限制；同一渠道模型的连接检测不能重复运行（409）。暂不检测图片、音频、视频和向量模型。
 
