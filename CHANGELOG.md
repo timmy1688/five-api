@@ -28,6 +28,11 @@
 
 - Anthropic 渠道的模型列表检查返回 HTTP 404 / 405 时标为“跳过”，保留状态码和说明，不计入整体成功判定和通过率分母。Messages 及流式仍独立验证；鉴权、限流、服务端错误、超时和 OpenAI 渠道的列表错误仍记录为失败。无需数据库迁移。
 
+### 文档
+
+- 整理文档位置：根目录只放 README（中英文）、CHANGELOG、CONTRIBUTING 和 AI 助手入口，其余都在 `docs/`。英文 README 移到根目录 `README.en.md`；路线图移到 `docs/ROADMAP.md`；对外发表的文章统一放在 `docs/articles/`。
+- 删除 `docs/COMPATIBILITY.md`：SDK 与客户端实测版本并入 [接入教程](docs/CLIENTS.md)，流式结束与巡检规则并入 [设计文档](docs/DESIGN.md)，接口列表以 README 为准。删除未被引用的截图。
+
 ## [0.4.1] - 2026-11-04
 
 ### 修复

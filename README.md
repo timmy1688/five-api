@@ -6,14 +6,14 @@
 
 开户、分额度、租户自管 Key，Claude Code 和 Codex 直接接入。一条命令部署，MIT 许可，没有企业版。
 
-<strong>简体中文</strong> | <a href="docs/README.en.md">English</a>
+<strong>简体中文</strong> | <a href="README.en.md">English</a>
 
 [![CI](https://github.com/timmy1688/five-api/actions/workflows/ci.yml/badge.svg)](https://github.com/timmy1688/five-api/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/timmy1688/five-api?color=brightgreen)](https://github.com/timmy1688/five-api/releases/latest)
 [![License](https://img.shields.io/github/license/timmy1688/five-api?color=brightgreen)](LICENSE)
 [![Image](https://img.shields.io/badge/image-ghcr.io-blue)](https://github.com/timmy1688/five-api/pkgs/container/five-api)
 
-[快速开始](#quick-start) · [接入客户端](docs/CLIENTS.md) · [运维与升级](docs/OPERATIONS.md) · [压测报告](docs/BENCHMARK.md) · [路线图](ROADMAP.md) · [更新记录](CHANGELOG.md)
+[快速开始](#quick-start) · [接入客户端](docs/CLIENTS.md) · [运维与升级](docs/OPERATIONS.md) · [压测报告](docs/BENCHMARK.md) · [路线图](docs/ROADMAP.md) · [更新记录](CHANGELOG.md)
 
 ![Five API 控制台](docs/images/dashboard.png)
 
@@ -195,7 +195,7 @@ Cursor 需要公网 HTTPS 网关，尚未实测。完整说明和常见问题见
 | OpenAI 兼容 | OpenAI、Gemini、DeepSeek、通义千问，以及 vLLM 等自部署服务 | `/v1/chat/completions`、`/v1/responses`、`/v1/embeddings`、`/v1/images/*`、`/v1/audio/*`、`/v1/rerank`、`/v1/videos` |
 | Anthropic | Anthropic、DeepSeek 等提供 Anthropic 协议的上游 | `/v1/messages`、`/v1/messages/count_tokens` |
 
-`GET /v1/models` 只返回这个 Key 能用的模型。已实测的 SDK 和客户端版本见 [兼容矩阵](docs/COMPATIBILITY.md)。
+`GET /v1/models` 只返回这个 Key 能用的模型。已实测的 SDK 和客户端版本见 [接入教程](docs/CLIENTS.md)。
 
 ## 和 new-api、LiteLLM 对比
 
@@ -272,13 +272,13 @@ cd backend && ../.venv/bin/pytest -q
 | `backend/tests/` | 快测与连真实 MySQL、Redis 的集成测试 |
 | `frontend/src/` | 管理控制台 |
 
-新贡献者可以从 [good first issue](https://github.com/timmy1688/five-api/labels/good%20first%20issue) 或 [路线图](ROADMAP.md) 里的任务开始，测试环境与约定见 [贡献指南](CONTRIBUTING.md)。
+新贡献者可以从 [good first issue](https://github.com/timmy1688/five-api/labels/good%20first%20issue) 或 [路线图](docs/ROADMAP.md) 里的任务开始，测试环境与约定见 [贡献指南](CONTRIBUTING.md)。
 
 ## 社区与支持
 
 | 资源 | 入口 |
 | --- | --- |
-| 文档 | [接入客户端](docs/CLIENTS.md) · [运维与升级](docs/OPERATIONS.md) · [设计说明](docs/DESIGN.md) · [兼容矩阵](docs/COMPATIBILITY.md) · [压测报告](docs/BENCHMARK.md) |
+| 文档 | [接入客户端](docs/CLIENTS.md) · [运维与升级](docs/OPERATIONS.md) · [设计说明](docs/DESIGN.md) · [压测报告](docs/BENCHMARK.md) |
 | 使用问题与想法 | [Discussions](https://github.com/timmy1688/five-api/discussions) |
 | 缺陷与功能建议 | [GitHub Issues](https://github.com/timmy1688/five-api/issues)，请附上版本、部署方式、复现步骤和脱敏日志 |
 | 安全问题 | 不要公开提交 Issue，也不要附带密钥、提示词或数据库内容；先开一个不含敏感信息的 Issue 申请私下沟通 |

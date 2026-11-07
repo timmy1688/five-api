@@ -11,7 +11,7 @@
 ```
 - [ ] 1 获取 PR 信息并分诊（scripts/pr_info.py）
 - [ ] 2 按风险读完整个 diff（checklist.md）
-- [ ] 3 验证（scripts/verify_pr.sh；必要时 real-channel.md）
+- [ ] 3 验证（scripts/verify_pr.sh；必要时按「真实渠道验证」）
 - [ ] 4 给结论、合并顺序和回滚方案
 - [ ] 5 起草评论（templates.md）
 - [ ] 6 合并后：拉取、CI、测试、清理、CHANGELOG、发版
@@ -24,7 +24,6 @@
 | `scripts/pr_info.py` | 一条命令列出未合并 PR，或汇总某个 PR：大小、是否最新、CI、改动文件、风险区、模板是否填写 |
 | `scripts/verify_pr.sh` | 在独立 worktree 里跑快测、发版检查、前端构建，并自动清理 |
 | `checklist.md` | 本仓库的风险清单 |
-| `real-channel.md` | 集成测试、用 PR 版本的后端测真实渠道 |
 | `templates.md` | 评论模板和给维护者的合并步骤 |
 
 ## 1. 获取与分诊
@@ -39,7 +38,7 @@ git fetch origin pull/N/head:pr-N                           # 取代码
 
 读代码之前，根据汇总先判断：
 
-- 是否符合 `docs/DESIGN.md` 的范围，是否落在 `ROADMAP.md`「不做」一节里？一个 PR 只做一件事。
+- 是否符合 `docs/DESIGN.md` 的范围，是否落在 `docs/ROADMAP.md`「不做」一节里？一个 PR 只做一件事。
 - 改动体量。无关文件很多时，请作者拆分。
 - 是否与其他未合并 PR 改了同一批文件。最常见的冲突是 `CHANGELOG.md`。
 - PR 模板（改了什么 / 验证 / 升级）是否有实质内容；作者自己写明「没做」的验证，要在自己的验证里补上。
@@ -75,7 +74,36 @@ docs/maintainers/handle-pr/scripts/verify_pr.sh N
 - 快测数量和 `main` 上的基线对比，新增数量要和 PR 新增的用例对得上（参数化用例按组合数算），跳过数应不变。基线要在干净的 worktree 里取：主工作区如果构建过前端（`backend/static` 存在），会多一条 `GET /{full_path:path}` 的路由守卫用例，数量对不上时先排除这个因素。可以用 `pytest --collect-only -q` 在两边各收集一次再 `diff`。
 - 脚本提示模型或迁移有改动时，另外用一次性库测全新安装和旧版升级。
 - 有多个 PR：按计划的合并顺序，在临时分支上合在一起测，在那里解决冲突，让维护者提前知道会发生什么。
-- PR 改了流式、渠道检测、计费等依赖真实上游的行为时，按 [real-channel.md](real-channel.md) 再验证一次，并如实写出哪些路径没法在真实上游复现。
+- PR 改了流式、渠道检测、计费等依赖真实上游的行为时，按下面的「真实渠道验证」再验证一次，并如实写出哪些路径没法在真实上游复现。
+
+### 真实渠道验证
+
+只在 PR 改了和真实上游行为有关的代码、且单元测试用的是模拟上游时才做。真实上游测试会花钱，先征得维护者同意（之前同意过同类低成本测试的可以直接做，汇报时写明花费量级）；只在读完整个 diff 且没发现可疑内容后做，因为这会让 PR 的代码接触真实密钥。开始前记录 `./service.sh status`，结束后恢复。
+
+集成测试用一次性库 `five_api_test_*` 和 Redis 15 号库。应用账号没有建库权限，用容器里的 root 建库，不要打印 root 密码，测完删掉：
+
+```bash
+docker compose exec -T mysql sh -c 'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysql -uroot -e "CREATE DATABASE five_api_test_pr CHARACTER SET utf8mb4; GRANT ALL ON five_api_test_pr.* TO \"five\"@\"%\";"'
+cd /tmp/five-prN/backend   # 用 verify_pr.sh N --keep 保留 worktree
+FIVE_TEST_MYSQL_DB=five_api_test_pr FIVE_TEST_REDIS_URL=redis://127.0.0.1:6379/15 \
+FIVE_TEST_MYSQL_CONTAINER=five-api-mysql-1 <主仓库>/.venv/bin/pytest -q tests/integration
+docker compose exec -T mysql sh -c 'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysql -uroot -e "DROP DATABASE five_api_test_pr;"'
+```
+
+用 PR 版本的后端测真实渠道时，在 worktree 里用 5003 端口，不要覆盖主仓库的 5002。worktree 里没有 `.env` 和 `data/secrets.json`，在子 shell 里加载主仓库的，不要打印内容：
+
+```bash
+cd /tmp/five-prN/backend && ( set -a; . <主仓库>/.env; set +a
+  export SECRETS_FILE=<主仓库>/data/secrets.json NO_PROXY=127.0.0.1,localhost
+  nohup setsid <主仓库>/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 5003 </dev/null >/tmp/prN.log 2>&1 &
+  echo $! > /tmp/prN.pid )
+```
+
+- 只调用管理接口（例如渠道「测试」）时，不需要新建 Key。要走推理接口时，新建额度极小、限定模型的临时 Key，测完立即吊销；已有 Key 只存前缀，拿不到明文。
+- 管理接口需要管理员登录。不要猜密码；不知道时问维护者，或仅在本地用应用自己的 `create_access_token` 签发短期 token，用完删除。
+- 用 Claude Code、Codex 端到端验证时，`~/.claude/settings.json` 里的 `env` 会覆盖 shell 环境变量，可能用到已有的 Key；先确认日志记在哪个 Key 名下，并如实告诉维护者花费。
+- 停进程用记下的 PID：`kill $(cat /tmp/prN.pid)`。不要用 `pkill -f`，匹配串出现在自己的命令行里会把自己的 shell 杀掉。
+- 结束后清理 worktree、分支、一次性库、临时 Key、token 文件和 5003 的进程。
 
 ## 4. 结论
 
@@ -139,3 +167,4 @@ docs/maintainers/handle-pr/scripts/verify_pr.sh N
 - 2026-11-05，PR #3：补充「是否是对之前评论的跟进」「先读测试再读实现」「基线数量对账」「新增状态值」清单；记录 worktree 里没有 `.env` 和 `node_modules` 时的做法、在 5003 端口起 PR 版后端对真实渠道验证、按 PID 停进程。
 - 2026-11-05，客户端实测后补测试：实测中发现的行为（例如联网搜索透传）要补成回归测试再改代码，先让测试失败再让它通过；测试数量对账时要考虑本地已构建前端会多一条路由守卫用例。
 - 2026-11-05，结构整理：新增 `scripts/pr_info.py` 和 `scripts/verify_pr.sh`，把重复的手工命令固化；真实渠道验证拆到 `real-channel.md`；`pr_info.py` 对已合并的 PR 不再提示「需要 Update branch」；`verify_pr.sh` 在判断不出改动文件时全部步骤都跑。
+- 2026-11-07，文档整理：`real-channel.md` 并回本文「真实渠道验证」一节，`ROADMAP.md` 移到 `docs/`。

@@ -21,7 +21,7 @@ def main():
     assert f"## [{version}]" in changelog
     if args.tag:
         assert args.tag == "v" + version, "Tag must match package versions"
-    for name in ("README.md", "docs/README.en.md", "docs/OPERATIONS.md", "docs/COMPATIBILITY.md",
+    for name in ("README.md", "README.en.md", "docs/OPERATIONS.md", "docs/CLIENTS.md",
                  "CONTRIBUTING.md"):
         assert (ROOT / name).is_file(), name
     requirements = sorted((ROOT / "backend").glob("requirements*"))

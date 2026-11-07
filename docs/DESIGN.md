@@ -34,6 +34,13 @@
 - 租户经 `GET /api/keys/channels` 只看到可用渠道的名称、倍率、模型价格和健康状态，不含上游地址与密钥。
 - 日志、错误、告警中的已知凭据都会脱敏；审计内容存库前把扫描命中的密钥替换为 `[REDACTED:类型]`。转发给租户的上游错误另外隐去平台的上游组织、项目编号和限流额度，管理员日志保留原文。只记录必要的管理事件：开户、额度、Key、价格、渠道、设置和异常处理。
 
+## 流式与模型巡检
+
+- 只在流式首包前切换渠道；首包后断流不重放已发出的回答。显式零用量与缺失用量分开处理，缺失字段估算并标明 `usage_source`，不承诺与厂商账单完全一致。
+- 有效结束信号：Chat 的 `[DONE]` 或所有 choice 的 `finish_reason`，Responses 的 `response.completed` / `response.incomplete`，Anthropic 的 `message_stop`。缺少结束信号的 EOF 记为 `stream_incomplete`，有输出的按已知用量或估算结算，不跨渠道重放；完全没有事件的未知结果继续占用额度供核对。
+- Responses `response.failed`、Chat / Anthropic 流内 `error` 记为渠道失败。SSE 已建立时客户端 HTTP 状态可能仍是 200，日志的 `status_code` 表示实际结果，`upstream_status_code` 保留上游的 200；原生错误事件脱敏后只转发一次。
+- 健康巡检调用实际文本推理接口，默认 900 秒；GPT/Claude 降智参考默认 86400 秒，用指令遵循、合成计算和强制工具参数检查，带随机标记减少缓存影响，保留每次证据和套件版本。全局最多两个并发。它只是小规模回归信号，不能鉴定真实型号，也不替代业务评测；非文本模型不参与。
+
 ## 管理 API
 
 开发环境后端 `http://127.0.0.1:5002`。登录后用 `Authorization: Bearer <access_token>` 调用。

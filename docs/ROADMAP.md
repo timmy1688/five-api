@@ -6,14 +6,14 @@ Five API 的方向是：**给别人分 AI 额度、每一笔都要算清楚的�
 
 ## 发版节奏
 
-- 每月一个小版本（0.5、0.6……），在 [更新记录](CHANGELOG.md) 写明用户可见变化、迁移和升级步骤。
+- 每月一个小版本（0.5、0.6……），在 [更新记录](../CHANGELOG.md) 写明用户可见变化、迁移和升级步骤。
 - 安全和计费问题随时发补丁版本（如 0.4.1）。
 - 打 `v*` 标签后 CI 自动构建 amd64/arm64 镜像推送到 `ghcr.io/timmy1688/five-api`，并生成 GitHub Release。
 - 1.0 之前可能有不兼容的改动，都会在更新记录里给出迁移方式。
 
 ## 近期（0.5）
 
-- **客户端**：在公网 HTTPS 部署上实测 Cursor；Claude Code、Codex 新版本回归，结果更新到 [接入教程](docs/CLIENTS.md)。
+- **客户端**：在公网 HTTPS 部署上实测 Cursor；Claude Code、Codex 新版本回归，结果更新到 [接入教程](CLIENTS.md)。
 - **国内部署**：发布镜像同步到国内镜像仓库，解决 ghcr.io 拉取慢的问题。
 - **多台机器部署**：验证并写清楚多台网关共用 MySQL、Redis 的部署方式（目前已验证的是单机多进程）。
 
@@ -32,9 +32,9 @@ Five API 的方向是：**给别人分 AI 额度、每一笔都要算清楚的�
 
 带 [good first issue](https://github.com/timmy1688/five-api/labels/good%20first%20issue) 标签的 Issue 是改动小、边界清楚的任务。目前适合认领的方向：
 
-- 实测一个新客户端（Cline、Continue、Cherry Studio 等），按 [接入教程](docs/CLIENTS.md) 的格式补充配置和实测版本。
-- 把 [运维文档](docs/OPERATIONS.md) 或 [设计文档](docs/DESIGN.md) 翻译成英文。
-- 用自己的渠道跑一遍 `scripts.real_benchmark`，把结果补充到 [压测报告](docs/BENCHMARK.md)。
+- 实测一个新客户端（Cline、Continue、Cherry Studio 等），按 [接入教程](CLIENTS.md) 的格式补充配置和实测版本。
+- 把 [运维文档](OPERATIONS.md) 或 [设计文档](DESIGN.md) 翻译成英文。
+- 用自己的渠道跑一遍 `scripts.real_benchmark`，把结果补充到 [压测报告](BENCHMARK.md)。
 - 给错误信息、界面文案提改进。
 
-开发环境和测试方法见 [贡献指南](CONTRIBUTING.md)。
+开发环境和测试方法见 [贡献指南](../CONTRIBUTING.md)。

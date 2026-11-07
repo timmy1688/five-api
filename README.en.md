@@ -4,14 +4,14 @@
 
 **A self-hosted AI gateway for handing out AI budgets to others and accounting for every charge**
 
-<a href="../README.md">简体中文</a> | <strong>English</strong>
+<a href="README.md">简体中文</a> | <strong>English</strong>
 
 [![CI](https://github.com/timmy1688/five-api/actions/workflows/ci.yml/badge.svg)](https://github.com/timmy1688/five-api/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/timmy1688/five-api?color=brightgreen)](https://github.com/timmy1688/five-api/releases/latest)
-[![License](https://img.shields.io/github/license/timmy1688/five-api?color=brightgreen)](../LICENSE)
+[![License](https://img.shields.io/github/license/timmy1688/five-api?color=brightgreen)](LICENSE)
 [![Image](https://img.shields.io/badge/image-ghcr.io-blue)](https://github.com/timmy1688/five-api/pkgs/container/five-api)
 
-[Clients](CLIENTS.md) · [Operations](OPERATIONS.md) · [Compatibility](COMPATIBILITY.md) · [Benchmarks](BENCHMARK.md) · [Roadmap](../ROADMAP.md) · [Changelog](../CHANGELOG.md) (linked documents are in Chinese)
+[Clients](docs/CLIENTS.md) · [Operations](docs/OPERATIONS.md) · [Benchmarks](docs/BENCHMARK.md) · [Roadmap](docs/ROADMAP.md) · [Changelog](CHANGELOG.md) (linked documents are in Chinese)
 
 </div>
 
@@ -28,7 +28,7 @@ Five API connects OpenAI, Claude, Gemini, DeepSeek, Qwen and other upstreams. Th
 
 It is not a public relay: there is no self sign-up or online top-up, and accounts are opened by the platform. Nor does it aim to support the most providers; getting the money right comes first.
 
-![Dashboard](images/dashboard.png)
+![Dashboard](docs/images/dashboard.png)
 
 ## Why the money does not leak
 
@@ -57,7 +57,7 @@ Usage above the estimate is still charged in full, never under-billed, so a bala
 cd backend && ../.venv/bin/pytest -q tests/test_billing_invariants.py tests/test_billing_reliability.py
 ```
 
-The benchmarks recompute every charge from the logged tokens and the price and reconcile it with the charge, key usage and tenant usage. All 8 simulated rounds pass, and 320 requests through a real DeepSeek channel show 0 mismatches. Raw data and commands are in the [benchmark report](BENCHMARK.md).
+The benchmarks recompute every charge from the logged tokens and the price and reconcile it with the charge, key usage and tenant usage. All 8 simulated rounds pass, and 320 requests through a real DeepSeek channel show 0 mismatches. Raw data and commands are in the [benchmark report](docs/BENCHMARK.md).
 
 </details>
 
@@ -107,11 +107,11 @@ Requests pass through natively without protocol translation, so usage matches th
 
 | Cost insights | Model hub |
 |---|---|
-| ![Cost insights](images/insights.png) | ![Model hub](images/models.png) |
+| ![Cost insights](docs/images/insights.png) | ![Model hub](docs/images/models.png) |
 | **Channels** | **Tenants** |
-| ![Channels](images/channels.png) | ![Tenants](images/tenants.png) |
+| ![Channels](docs/images/channels.png) | ![Tenants](docs/images/tenants.png) |
 | **Request logs** | **Audit report** |
-| ![Request logs](images/logs.png) | ![Audit](images/audit.png) |
+| ![Request logs](docs/images/logs.png) | ![Audit](docs/images/audit.png) |
 
 ## Quick start
 
@@ -171,7 +171,7 @@ env_key = "FIVE_API_KEY"
 wire_api = "responses"
 ```
 
-**Cursor** calls a custom base URL from Cursor's servers, so the gateway needs a public HTTPS address; it has not been tested end to end. See the [client guide](CLIENTS.md) for troubleshooting.
+**Cursor** calls a custom base URL from Cursor's servers, so the gateway needs a public HTTPS address; it has not been tested end to end. See the [client guide](docs/CLIENTS.md) for troubleshooting.
 
 ## Deployment and operations
 
@@ -190,7 +190,7 @@ For production:
 
 - Put an HTTPS reverse proxy in front with response buffering off and a read timeout of at least 600 seconds, and list the proxy in `FORWARDED_ALLOW_IPS`; otherwise forged source addresses can bypass IP allowlists.
 - Back up the database and the encryption key separately. With your own `ENCRYPTION_KEY`, a database backup alone cannot decrypt channel keys.
-- To upgrade, change the image version in `docker-compose.yml` and deploy again; **read the [operations guide](OPERATIONS.md) before upgrading from an older release**, since migrations may be required.
+- To upgrade, change the image version in `docker-compose.yml` and deploy again; **read the [operations guide](docs/OPERATIONS.md) before upgrading from an older release**, since migrations may be required.
 
 ## Performance
 
@@ -201,7 +201,7 @@ On one 8-core, 16 GB machine, with every charge reconciled in each run:
 | Simulated upstream capacity | About 26,000 requests per minute across many tenants (8 workers); about 9,000 for a single tenant |
 | Real DeepSeek channel, 10–50 concurrent streams | All succeeded; first token only 6–19 ms slower than calling DeepSeek directly |
 
-A single tenant's requests pass through one row lock, the price of an exact balance. Full data is in the [benchmark report](BENCHMARK.md).
+A single tenant's requests pass through one row lock, the price of an exact balance. Full data is in the [benchmark report](docs/BENCHMARK.md).
 
 ## Limits
 
@@ -229,14 +229,14 @@ cd backend && ../.venv/bin/pytest -q
 | `backend/scripts/` | Benchmarks, release checks, smoke tests |
 | `frontend/src/` | Admin console |
 
-See the [contribution guide](../CONTRIBUTING.md) for test setup, dependencies and migrations.
+See the [contribution guide](CONTRIBUTING.md) for test setup, dependencies and migrations.
 
 ## Docs and community
 
 | Resource | Link |
 | --- | --- |
-| Docs (Chinese) | [Clients](CLIENTS.md) · [Operations](OPERATIONS.md) · [Design](DESIGN.md) · [Compatibility](COMPATIBILITY.md) · [Benchmarks](BENCHMARK.md) |
-| Plans | [Roadmap](../ROADMAP.md) · [Changelog](../CHANGELOG.md) |
+| Docs (Chinese) | [Clients](docs/CLIENTS.md) · [Operations](docs/OPERATIONS.md) · [Design](docs/DESIGN.md) · [Benchmarks](docs/BENCHMARK.md) |
+| Plans | [Roadmap](docs/ROADMAP.md) · [Changelog](CHANGELOG.md) |
 | Questions and ideas | [Discussions](https://github.com/timmy1688/five-api/discussions) |
 | Bugs and feature requests | [GitHub Issues](https://github.com/timmy1688/five-api/issues); newcomers can start with [good first issue](https://github.com/timmy1688/five-api/labels/good%20first%20issue) |
 | Security | Do not open public issues or attach keys, prompts or database contents; open a non-sensitive issue to request a private channel |
@@ -258,4 +258,4 @@ Include the version, deployment method, reproduction steps and redacted logs whe
 
 ## License
 
-[MIT](../LICENSE), free for commercial use.
+[MIT](LICENSE), free for commercial use.

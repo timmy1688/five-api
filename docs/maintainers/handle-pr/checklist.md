@@ -44,7 +44,7 @@
 - [ ] 新行为有测试；修 bug 有回归测试，且去掉修复后会失败。
 - [ ] 测试数量和 `main` 基线对比；跳过的用例要说明原因（没有 `FIVE_TEST_*` 时集成测试会跳过）。
 - [ ] 用户可见的变化或迁移，在 `CHANGELOG.md` 的 `[Unreleased]` 下有条目。
-- [ ] 文档与代码一致：`docs/COMPATIBILITY.md`、`docs/DESIGN.md`、README 的说法。没有数据支撑的“优于某某”类对比不接受；保留免责声明。
+- [ ] 文档与代码一致：`docs/CLIENTS.md`、`docs/DESIGN.md`、README 的说法。没有数据支撑的“优于某某”类对比不接受；保留免责声明。
 - [ ] 前端：文案同时加在 `i18n/messages.ts` 的 `en` 和 `zh` 里（`zh` 的类型由 `en` 的键约束，漏写会在 `npm run build` 时报错）；菜单只改 `config/navigation.ts`；新增组件后重新生成 `components.d.ts`。
 
 ## 接口新增状态值或字段时
