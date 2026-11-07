@@ -45,6 +45,10 @@ model_checks 为合成检查，model_monitor 每个 worker 都运行定时循环
 
 Python 依赖只有 backend/requirements.txt 一个文件，全部 == 固定版本并审计；Docker 与本地安装均走阿里云源。记录用户可见变化、迁移和兼容边界，更新 CHANGELOG；发布标签需匹配 0.4.0 等实际版本。测试不得清理其他数据库或 Redis 全库，不记录秘密。详情见 CONTRIBUTING.md。
 
+## 推送前检查
+
+推送代码或打 tag 前，照 [docs/maintainers/pre-push-check/README.md](docs/maintainers/pre-push-check/README.md) 跑 `leak_check.py` 并查看新增图片；有 BLOCK 不推送。
+
 ## 处理 PR
 
 用户让你审查、验证、合并外部 PR，或问合并后怎么办时，完整阅读并照做 [docs/maintainers/handle-pr/README.md](docs/maintainers/handle-pr/README.md)，风险清单和评论模板在同目录的 `checklist.md`、`templates.md`。

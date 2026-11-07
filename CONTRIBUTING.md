@@ -47,6 +47,10 @@ A release requires passing CI, a matching version/tag, changelog and upgrade not
 
 Describe the concrete behavior, validation and migration impact in PRs. Do not report security issues publicly; open a non-sensitive issue to request a private channel, with secrets removed.
 
+## Before you push
+
+Run `python docs/maintainers/pre-push-check/scripts/leak_check.py` (add `--worktree` before committing). It scans the commits you are about to push for secrets, local secret values, sensitive files, personal data and commit emails, and lists changed images to check by eye. Details: [`docs/maintainers/pre-push-check/`](docs/maintainers/pre-push-check/README.md) (Chinese).
+
 ## For maintainers: reviewing PRs
 
 [`docs/maintainers/handle-pr/`](docs/maintainers/handle-pr/README.md) (written in Chinese) is the workflow for handling external PRs: triage, a risk checklist for this codebase, local verification with disposable services, comment templates, and the post-merge/release steps. Read it as a plain checklist, or point your coding agent at it. Entry points exist for Claude Code (`CLAUDE.md`) and for tools that read `AGENTS.md` (Cursor, Codex and others).
