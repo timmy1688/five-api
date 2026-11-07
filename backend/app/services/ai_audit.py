@@ -33,7 +33,8 @@ _SYSTEM_PROMPT = (
     "credentials, or private personal data that must not be sent to a model. "
     'Reply with one JSON object only: {"block":true,"category":"credential"} '
     'or {"block":false}. category is credential, personal, or confidential. '
-    "Do not repeat the excerpt."
+    "A [REDACTED] or [REDACTED:...] marker is a secret the gateway removed before storage; "
+    "treat it as a credential. Do not repeat the excerpt."
 )
 
 

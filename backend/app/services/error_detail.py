@@ -6,7 +6,7 @@ import httpx
 
 from app.providers.base import ERROR_IN_OK
 from app.services.failover import NoReadyUpstreamKey, is_credential_error
-from app.services.redaction import redact
+from app.services.redaction import redact, redact_upstream_error
 from app.services.stream_outcomes import UpstreamStreamError
 
 MAX_ERROR_CHARS = 8_000
@@ -91,7 +91,7 @@ def upstream_json_error(exc: Exception) -> tuple[int, dict] | None:
         return None
     if not isinstance(data, dict):
         return None
-    return status, redact(data)
+    return status, redact_upstream_error(data)
 
 
 def client_status(exc: Exception) -> int:

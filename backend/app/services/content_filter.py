@@ -5,21 +5,14 @@
 """
 
 import json
-import re
 import time
 from typing import Any
 
 from app.models import SecurityKeyword
 from app.services.audit import response_visible_text, sse_visible_text
+from app.services.redaction import SECRET_RULES as _SECRET_RULES
 from app.services.settings_service import keyword_filter_enabled, secret_scan_enabled
 
-# 固定模式，没有嵌套量词。日志里只记名字，不记命中的密钥本身。
-_SECRET_RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
-    ("private_key", re.compile(r"-----BEGIN [A-Z0-9 ]{0,48}PRIVATE KEY-----")),
-    ("aws_access_key", re.compile(r"AKIA[0-9A-Z]{16}")),
-    ("github_token", re.compile(r"gh[pousr]_[A-Za-z0-9]{20,}")),
-    ("slack_token", re.compile(r"xox[baprs]-[A-Za-z0-9-]{10,}")),
-)
 _SECRET_TAIL = 180
 _CACHE_TTL = 2.0
 _cache: tuple[float, "FilterRules"] | None = None

@@ -121,7 +121,7 @@ cd backend && ../.venv/bin/pytest -q tests/test_billing_invariants.py tests/test
 
 <br>
 
-- 按 Key 保存请求内容（不保存回复），自动扫描私钥、AWS、GitHub、Slack 等密钥，不阻断调用。
+- 按 Key 保存请求内容（不保存回复），自动扫描私钥、AWS、GitHub、Slack 等密钥，不阻断调用；命中的密钥存库前打码，只留类型。
 - 员工离职或怀疑泄密时，在审计页选中 Key，让便宜模型逐条审查最近的请求，生成可下载的审计报告；审过的不重复送审。
 
 ![审计报告](docs/images/audit.png)

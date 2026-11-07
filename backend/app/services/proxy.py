@@ -49,7 +49,7 @@ from app.services.pricing import count_text_tokens
 from app.services.quota import RequestLease
 from app.services import settlements
 from app.services.billing_quotes import quote_cost, selling_quote
-from app.services.redaction import redact
+from app.services.redaction import redact, redact_upstream_error
 from app.services.request_context import client_request_id
 from app.services.sticky_session import bind_sticky_channel
 from app.services.stream_outcomes import StreamOutcome, UpstreamStreamError
@@ -710,7 +710,7 @@ async def stream_with_failover(
             raise HTTPException(status_code=status_code, detail=detail,
                                 headers=forwardable_headers(e.response) if isinstance(e, httpx.HTTPStatusError) else {})
         if isinstance(e, UpstreamStreamError) and e.event and not is_credential_error(e):
-            yield redact(e.event)
+            yield redact_upstream_error(e.event)
         else:
             yield format_error_event(e)
     finally:

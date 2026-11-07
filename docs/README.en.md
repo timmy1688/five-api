@@ -84,7 +84,7 @@ Based on public documentation and issues as of October 2026. For new-api's reser
 | Tenants | Two fixed roles, platform administrator and tenant. Tenants manage their own keys, IP allowlists, RPM/TPM/concurrency and budgets; every query is scoped on the server |
 | Routing | Priority tiers, then weight, least in-flight or lowest latency; multi-key pools, sticky sessions, model fallback chains; keys can be bound to chosen channels |
 | Failover | 5xx, timeouts, 429 and revoked upstream keys switch channels; streams switch only before the first byte; circuit breaker; non-idempotent requests such as images and videos are never resubmitted |
-| Audit | Request excerpts saved per key and scanned for private keys and AWS, GitHub and Slack tokens; a cheap model can review a key's requests and produce a downloadable report |
+| Audit | Request excerpts saved per key and scanned for private keys and AWS, GitHub and Slack tokens, which are masked before storage; a cheap model can review a key's requests and produce a downloadable report |
 | Model quality | Periodic health checks, plus a daily synthetic suite for GPT/Claude channels covering instruction following, reasoning and tool use |
 | Cost | Daily cache hit and savings insights; automatic Anthropic cache markers; automatic downgrade to a cheaper model near the budget |
 | Security | Upstream keys encrypted at rest with an optional master key kept apart from the JWT key and outside the database; API keys shown once |
